@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members  = [
+    "crates/cddlc-parser",
+    "crates/cddlc-ir",
+    "crates/cddlc-codegen",
+    "crates/backend-rust",
+    "crates/cddlc-cli",
+]
+
+[workspace.package]
+version  = "0.1.0"
+edition  = "2021"
+license  = "MIT OR Apache-2.0"
+authors  = ["cddlc contributors"]
+
+[workspace.dependencies]
+winnow         = "0.6"
+indexmap       = "2"
+thiserror      = "1"
+smol_str       = "0.2"
+clap           = { version = "4", features = ["derive"] }
+insta          = { version = "1", features = ["ron"] }
+pretty_assertions = "1"

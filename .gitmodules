@@ -1,0 +1,15 @@
+[submodule "crates/backend-rust"]
+	path = crates/backend-rust
+	url = git@github.com:dgtlrift/backend-rust.git
+[submodule "crates/cddlc-cli"]
+	path = crates/cddlc-cli
+	url = git@github.com:dgtlrift/cddlc-cli.git
+[submodule "crates/cddlc-codegen"]
+	path = crates/cddlc-codegen
+	url = git@github.com:dgtlrift/cddlc-codegen.git
+[submodule "crates/cddlc-ir"]
+	path = crates/cddlc-ir
+	url = git@github.com:dgtlrift/cddlc-ir.git
+[submodule "crates/cddlc-parser"]
+	path = crates/cddlc-parser
+	url = git@github.com:dgtlrift/cddlc-parser.git
