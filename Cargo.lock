@@ -93,7 +93,9 @@ dependencies = [
 name = "cddlc-codegen"
 version = "0.1.0"
 dependencies = [
+ "backend-rust",
  "cddlc-ir",
+ "cddlc-parser",
  "smol_str",
 ]
 
