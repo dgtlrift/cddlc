@@ -25,3 +25,6 @@
 [submodule "crates/backend-nodejs"]
 	path = crates/backend-nodejs
 	url = git@github.com:dgtlrift/backend-nodejs
+[submodule "crates/backend-python"]
+	path = crates/backend-python
+	url = git@github.com:dgtlrift/backend-python

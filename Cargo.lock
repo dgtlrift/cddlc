@@ -104,6 +104,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "backend-python"
+version = "0.1.0"
+dependencies = [
+ "cddlc-codegen",
+ "cddlc-ir",
+ "cddlc-parser",
+ "pretty_assertions",
+ "smol_str",
+]
+
+[[package]]
 name = "backend-rust"
 version = "0.1.0"
 dependencies = [
@@ -131,6 +142,7 @@ dependencies = [
  "backend-cpp",
  "backend-csharp",
  "backend-nodejs",
+ "backend-python",
  "backend-rust",
  "cddlc-codegen",
  "cddlc-ir",
