@@ -8,6 +8,7 @@ members  = [
     "crates/backend-c",
     "crates/backend-cpp",
     "crates/backend-csharp",
+    "crates/backend-nodejs",
     "crates/cddlc-cli",
 ]
 

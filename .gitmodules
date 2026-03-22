@@ -19,3 +19,9 @@
 [submodule "crates/backend-cpp"]
 	path = crates/backend-cpp
 	url = git@github.com:dgtlrift/backend-cpp
+[submodule "crates/backend-csharp"]
+	path = crates/backend-csharp
+	url = git@github.com:dgtlrift/backend-csharp
+[submodule "crates/backend-nodejs"]
+	path = crates/backend-nodejs
+	url = git@github.com:dgtlrift/backend-nodejs

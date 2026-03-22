@@ -82,6 +82,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "backend-csharp"
+version = "0.1.0"
+dependencies = [
+ "cddlc-codegen",
+ "cddlc-ir",
+ "cddlc-parser",
+ "pretty_assertions",
+ "smol_str",
+]
+
+[[package]]
+name = "backend-nodejs"
+version = "0.1.0"
+dependencies = [
+ "cddlc-codegen",
+ "cddlc-ir",
+ "cddlc-parser",
+ "pretty_assertions",
+ "smol_str",
+]
+
+[[package]]
 name = "backend-rust"
 version = "0.1.0"
 dependencies = [
@@ -107,6 +129,8 @@ version = "0.1.0"
 dependencies = [
  "backend-c",
  "backend-cpp",
+ "backend-csharp",
+ "backend-nodejs",
  "backend-rust",
  "cddlc-codegen",
  "cddlc-ir",
