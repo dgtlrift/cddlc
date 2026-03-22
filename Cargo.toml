@@ -5,6 +5,8 @@ members  = [
     "crates/cddlc-ir",
     "crates/cddlc-codegen",
     "crates/backend-rust",
+    "crates/backend-c",
+    "crates/backend-cpp",
     "crates/cddlc-cli",
 ]
 
