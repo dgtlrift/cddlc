@@ -28,3 +28,6 @@
 [submodule "crates/backend-python"]
 	path = crates/backend-python
 	url = git@github.com:dgtlrift/backend-python
+[submodule "crates/backend-interop"]
+	path = crates/backend-interop
+	url = git@github.com:dgtlrift/backend-interop
