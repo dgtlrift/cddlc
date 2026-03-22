@@ -13,3 +13,9 @@
 [submodule "crates/cddlc-parser"]
 	path = crates/cddlc-parser
 	url = git@github.com:dgtlrift/cddlc-parser.git
+[submodule "crates/backend-c"]
+	path = crates/backend-c
+	url = git@github.com:dgtlrift/backend-c
+[submodule "crates/backend-cpp"]
+	path = crates/backend-cpp
+	url = git@github.com:dgtlrift/backend-cpp
