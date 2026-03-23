@@ -11,6 +11,7 @@ members  = [
     "crates/backend-nodejs",
     "crates/backend-python",
     "crates/backend-interop",
+    "crates/backend-buildtest",
     "crates/cddlc-cli",
 ]
 
@@ -28,3 +29,4 @@ smol_str       = "0.2"
 clap           = { version = "4", features = ["derive"] }
 insta          = { version = "1", features = ["ron"] }
 pretty_assertions = "1"
+tempfile          = "3"

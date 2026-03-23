@@ -31,3 +31,6 @@
 [submodule "crates/backend-interop"]
 	path = crates/backend-interop
 	url = git@github.com:dgtlrift/backend-interop
+[submodule "crates/backend-buildtest"]
+	path = crates/backend-buildtest
+	url = git@github.com:dgtlrift/backend-buildtest
