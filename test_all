@@ -1,0 +1,80 @@
+#!/bin/env bash
+
+#echo "Update CDDLC tool submodules"
+#for sm in crates/* ; do
+	#(
+		#echo updating ${sm}
+		#cd ${sm}
+		#git branch
+		#git checkout main
+		#git pull
+	#)
+#done
+#
+#echo "Update CDDLC tool"
+#git checkout main
+#git pull
+#
+#
+#echo "Build & test CDDLC tool"
+#cargo test
+
+genpath="${genpath:-../generated}"
+
+#cddlfiles+=crates/backend-buildtest/schemas/aliases.cddl
+#cddlfiles+=crates/backend-buildtest/schemas/arrays.cddl
+#cddlfiles+=crates/backend-buildtest/schemas/enums.cddl
+#cddlfiles+=crates/backend-buildtest/schemas/inline-enum-in-group-after-comment.cddl
+#cddlfiles+=crates/backend-buildtest/schemas/iot_sensor.cddl
+#cddlfiles+=crates/backend-buildtest/schemas/primitives.cddl
+#cddlfiles+=crates/backend-buildtest/schemas/structs.cddl
+#cddlfiles+=crates/backend-buildtest/schemas/tagged.cddl
+
+echo ${cddlfiles}
+
+for file in ${cddlfiles} ; do
+	for lang in rust c cpp csharp nodejs python  ; do
+		for form in cbor json ; do
+			(
+				echo          ./target/debug/cddlc --format ${form} -v ${file} --lang ${lang} --interop -o ${genpath}
+				CDDLC_TRACE=1 ./target/debug/cddlc --format ${form} -v ${file} --lang ${lang} --interop -o ${genpath}
+
+				if [ ${lang} == "cpp" ]; then
+					cd ${genpath}/$(basename ${file} .cddl)-${form}-cpp
+				else
+					cd ${genpath}/$(basename ${file} .cddl)-${form}
+				fi
+
+				echo "building ${lang} for ${form} encoding of ${file}"
+
+				case ${lang} in
+					"rust")
+						echo cargo build --manifest-path ./Cargo.toml
+						cargo build
+						cargo test 
+						;;
+					"c")
+						;& # Fallthrough
+					"cpp")
+						cmake .
+						make
+						make test
+						;;
+					"csharp")
+						dotnet test
+						;;
+					"nodejs")
+						npm test
+						;;
+					"python")
+						python -m build
+						pytest
+						;;
+					*)
+						echo "unknown language ${lang}."
+						;;
+				esac
+			)
+		done
+	done
+done
