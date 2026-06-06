@@ -109,6 +109,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "backend-dart"
+version = "0.1.0"
+dependencies = [
+ "cddlc-codegen",
+ "cddlc-ir",
+ "cddlc-parser",
+ "pretty_assertions",
+ "smol_str",
+]
+
+[[package]]
 name = "backend-interop"
 version = "0.1.0"
 dependencies = [
@@ -169,6 +180,7 @@ dependencies = [
  "backend-c",
  "backend-cpp",
  "backend-csharp",
+ "backend-dart",
  "backend-interop",
  "backend-nodejs",
  "backend-python",

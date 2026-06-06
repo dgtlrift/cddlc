@@ -34,3 +34,9 @@
 [submodule "crates/backend-buildtest"]
 	path = crates/backend-buildtest
 	url = git@github.com:dgtlrift/backend-buildtest
+[submodule "backend-dart"]
+	path = backend-dart
+	url = git@github.com:dgtlrift/backend-dart.git
+[submodule "crates/backend-dart"]
+	path = crates/backend-dart
+	url = git@github.com:dgtlrift/backend-dart.git
