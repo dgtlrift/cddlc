@@ -77,32 +77,60 @@ cargo build --release
 ### Generate a Rust library
 
 ```bash
-cddlc my_schema.cddl --lang rust --output generated/
+cddlc generate my_schema.cddl --lang rust --output generated/
 ```
 
 ### Generate for other languages
 
 ```bash
-cddlc my_schema.cddl --lang c        --output generated/
-cddlc my_schema.cddl --lang cpp      --output generated/
-cddlc my_schema.cddl --lang csharp   --output generated/
-cddlc my_schema.cddl --lang nodejs   --output generated/
-cddlc my_schema.cddl --lang python   --output generated/
-cddlc my_schema.cddl --lang dart     --output generated/
+cddlc generate my_schema.cddl --lang c        --output generated/
+cddlc generate my_schema.cddl --lang cpp      --output generated/
+cddlc generate my_schema.cddl --lang csharp   --output generated/
+cddlc generate my_schema.cddl --lang nodejs   --output generated/
+cddlc generate my_schema.cddl --lang python   --output generated/
+cddlc generate my_schema.cddl --lang dart     --output generated/
 ```
 
 ### JSON instead of CBOR
 
 ```bash
-cddlc my_schema.cddl --lang python --format json --output generated/
+cddlc generate my_schema.cddl --lang python --format json --output generated/
 ```
+
+### Validate JSON or CBOR data against a schema
+
+```bash
+cddlc validate --cddl my_schema.cddl --json instance.json
+cddlc validate --cddl my_schema.cddl --cbor instance.cbor
+cddlc validate --cddl my_schema.cddl --type sensor-reading --json a.json --json b.json
+```
+
+Prints `OK`/`FAIL` per input file, with per-field diagnostics on failure
+(`readings[3].value: expected float32, found text`), and exits non-zero if
+any file fails to validate. `--type` selects which schema rule to validate
+against; it defaults to the schema's root type (the first rule declared in
+the file, per RFC 8610). See [Known Gaps](#known-gaps-and-future-enhancements)
+for current validator limitations.
 
 ---
 
 ## CLI Reference
 
+`cddlc` has two subcommands: `generate` (compile a schema to target-language
+code) and `validate` (check JSON/CBOR data against a schema).
+
 ```
-cddlc [OPTIONS] <INPUT>...
+cddlc <COMMAND>
+
+Commands:
+  generate    Generate serialization/deserialization code for a target language
+  validate    Validate JSON/CBOR documents against a CDDL schema
+```
+
+### `cddlc generate`
+
+```
+cddlc generate [OPTIONS] <INPUT>...
 
 Arguments:
   <INPUT>...    One or more .cddl source files (entry points)
@@ -131,8 +159,21 @@ Options:
       --dry-run                   Parse and analyse only; do not write files
       --debug-parse               Print rich parse diagnostics (also: CDDLC_TRACE=1)
   -v, --verbose                   Print resolved types, warnings, file paths
-  -h, --help                      Print help
-  -V, --version                   Print version
+```
+
+### `cddlc validate`
+
+```
+cddlc validate [OPTIONS] --cddl <FILE>
+
+Options:
+      --cddl <FILE>          CDDL schema entry point
+      --type <NAME>          Type to validate against [default: schema's root rule]
+      --json <FILE>          JSON document to validate (repeatable)
+      --cbor <FILE>          CBOR document to validate (repeatable)
+      --include-dir <DIR>    Additional search path for @import (repeatable)
+      --debug-parse          Print rich parse diagnostics (also: CDDLC_TRACE=1)
+  -v, --verbose               Verbose output
 ```
 
 ---
@@ -170,7 +211,7 @@ readings = [* sensor-reading]
 | Named structs | `foo = { field: type, ? opt: type }` | Optional fields, integer map keys |
 | Type choices (enums) | `status = "ok" / "warn" / "error"` | String, integer, or mixed variants |
 | Arrays | `readings = [* float32]`, `[+ T]`, `[n*m T]` | Capacity from pragma or `--max-array` |
-| Open maps | `props = { * tstr => any }` | Typed key/value maps |
+| Open maps | `props = { * tstr => any }` | Parses, but not yet correctly lowered to IR — see [Known Gaps](#known-gaps-and-future-enhancements) |
 | Type aliases | `device-id = tstr .size 16` | With optional constraints |
 | CBOR tags | `#6.1(uint)` | Tag verification on decode, emission on encode |
 | Generics | `pair<T> = [T, T]` | Monomorphised at use sites |
@@ -270,11 +311,27 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 - **Unwrapped groups** (`~group`) are not fully handled.
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
 - **Socket/plug rules** (`$socket /= T`) are not supported.
+- **CDDL tables** (`{* K => V}`) are not constructed as a distinct IR node — `cddlc-ir`'s
+  lowering pass never emits a `MapDef`, so table entries currently get mangled into a
+  struct field. This affects both codegen and `cddlc validate` (which detects the case
+  and reports it explicitly rather than mis-validating). Fixing it properly requires
+  changes across the parser/IR and all seven codegen backends.
+
+### Validator gaps (`cddlc validate`)
+
+- **Tagged prelude types** (`tdate`, `time`, `uri`, `b64url`, `biguint`, `bigint`,
+  `encoded-cbor`, `regexp`, `mime-message`, `cbor-any`, ...) validate permissively
+  (any value passes) rather than against their RFC 8949 §6.1 JSON mapping — `cddlc-ir`
+  collapses these prelude names to `Primitive::Any` during lowering, before the name
+  reaches the validator. Explicit tags written directly in a schema (`#6.0(tstr)`) are
+  unaffected. See `crates/cddlc-validate/src/lib.rs` for detail.
+- **CDDL tables** are rejected with an explicit "not yet supported" error (see above)
+  rather than validated.
+- No **CSV** validation (JSON and CBOR only).
 
 ### Tooling gaps
 
 - No **watch mode** — regeneration requires re-running the CLI manually.
-- No **schema validation** against actual CBOR/JSON data (separate from code generation).
 - No **schema diff / migration** tooling to detect breaking changes between schema versions.
 - No **JSON Schema** or **Protobuf** import — `cddlc` is CDDL-only.
 - The `--dry-run` flag reports type counts but does not emit a machine-readable IR dump.

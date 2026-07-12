@@ -4,6 +4,9 @@
 [submodule "crates/cddlc-cli"]
 	path = crates/cddlc-cli
 	url = git@github.com:dgtlrift/cddlc-cli.git
+[submodule "crates/cddlc-validate"]
+	path = crates/cddlc-validate
+	url = git@github.com:dgtlrift/cddlc-validate.git
 [submodule "crates/cddlc-codegen"]
 	path = crates/cddlc-codegen
 	url = git@github.com:dgtlrift/cddlc-codegen.git

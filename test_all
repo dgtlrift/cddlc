@@ -36,8 +36,8 @@ for file in ${cddlfiles} ; do
 	for lang in rust c cpp csharp nodejs python  ; do
 		for form in cbor json ; do
 			(
-				echo          ./target/debug/cddlc --format ${form} -v ${file} --lang ${lang} --interop -o ${genpath}
-				CDDLC_TRACE=1 ./target/debug/cddlc --format ${form} -v ${file} --lang ${lang} --interop -o ${genpath}
+				echo          ./target/debug/cddlc generate --format ${form} -v ${file} --lang ${lang} --interop -o ${genpath}
+				CDDLC_TRACE=1 ./target/debug/cddlc generate --format ${form} -v ${file} --lang ${lang} --interop -o ${genpath}
 
 				if [ ${lang} == "cpp" ]; then
 					cd ${genpath}/$(basename ${file} .cddl)-${form}-cpp
