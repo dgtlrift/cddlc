@@ -47,19 +47,19 @@ flowchart TD
 
 | Crate | Role |
 |---|---|
-| [`cddlc-parser`](crates/cddlc-parser) | RFC 8610 grammar → AST; pragma extraction |
-| [`cddlc-ir`](crates/cddlc-ir) | Name resolution, generic monomorphisation, constraint lowering, topo-sort → typed IR |
-| [`cddlc-codegen`](crates/cddlc-codegen) | `Backend` trait + shared emit utilities used by all backends |
-| [`cddlc-cli`](crates/cddlc-cli) | CLI argument parsing, `@import` resolution with cycle detection |
-| [`backend-rust`](crates/backend-rust) | Rust + minicbor / ciborium (with `#![no_std]` support) |
-| [`backend-c`](crates/backend-c) | ANSI C + nanocbor / tinycbor / zcbor |
-| [`backend-cpp`](crates/backend-cpp) | C++17 + nanocbor (wraps the C runtime) |
-| [`backend-csharp`](crates/backend-csharp) | C# / .NET 8 + `System.Formats.Cbor` |
-| [`backend-nodejs`](crates/backend-nodejs) | TypeScript 5 ESM + cborg (CBOR) or `node:buffer` (JSON) |
-| [`backend-python`](crates/backend-python) | Python 3 dataclasses + cbor2 / json |
-| [`backend-dart`](crates/backend-dart) | Dart 3 / Flutter + cbor ^6 (CBOR) or `dart:convert` (JSON) |
-| [`backend-interop`](crates/backend-interop) | Canonical CBOR test vectors + per-language decode/roundtrip harnesses |
-| [`backend-buildtest`](crates/backend-buildtest) | Reference schemas; build validation tests (invoke real toolchains) |
+| [`cddlc-parser`](https://github.com/dgtlrift/cddlc-parser) | RFC 8610 grammar → AST; pragma extraction |
+| [`cddlc-ir`](https://github.com/dgtlrift/cddlc-ir) | Name resolution, generic monomorphisation, constraint lowering, topo-sort → typed IR |
+| [`cddlc-codegen`](https://github.com/dgtlrift/cddlc-codegen) | `Backend` trait + shared emit utilities used by all backends |
+| [`cddlc-cli`](https://github.com/dgtlrift/cddlc-cli) | CLI argument parsing, `@import` resolution with cycle detection |
+| [`backend-rust`](https://github.com/dgtlrift/backend-rust) | Rust + minicbor / ciborium (with `#![no_std]` support) |
+| [`backend-c`](https://github.com/dgtlrift/backend-c) | ANSI C + nanocbor / tinycbor / zcbor |
+| [`backend-cpp`](https://github.com/dgtlrift/backend-cpp) | C++17 + nanocbor (wraps the C runtime) |
+| [`backend-csharp`](https://github.com/dgtlrift/backend-csharp) | C# / .NET 8 + `System.Formats.Cbor` |
+| [`backend-nodejs`](https://github.com/dgtlrift/backend-nodejs) | TypeScript 5 ESM + cborg (CBOR) or `node:buffer` (JSON) |
+| [`backend-python`](https://github.com/dgtlrift/backend-python) | Python 3 dataclasses + cbor2 / json |
+| [`backend-dart`](https://github.com/dgtlrift/backend-dart) | Dart 3 / Flutter + cbor ^6 (CBOR) or `dart:convert` (JSON) |
+| [`backend-interop`](https://github.com/dgtlrift/backend-interop) | Canonical CBOR test vectors + per-language decode/roundtrip harnesses |
+| [`backend-buildtest`](https://github.com/dgtlrift/backend-buildtest) | Reference schemas; build validation tests (invoke real toolchains) |
 
 ---
 
