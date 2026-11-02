@@ -1,0 +1,67 @@
+# release-plz on every push to main: a release PR with the next version and its changelog,
+# and, once that PR is merged, the tag, the GitHub release and its static musl binary.
+# Nothing goes to crates.io (release-plz.toml). Without Actions, scripts/release.sh does
+# the same.
+name: Release-plz
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-plz-release:
+    name: Release-plz release
+    if: ${{ github.repository_owner == 'dgtlrift' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - &checkout
+        name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - &install-rust
+        name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz
+        id: release-plz
+        # v0.5.141, with release-plz 0.3.171: the musl builds of 0.3.172 to 0.4.2 fail on
+        # any changelog (release-plz/release-plz#3299).
+        uses: release-plz/action@f393a7b38aca9d9b4c58447b291dbac963901df6
+        with:
+          command: release
+          version: 0.3.171
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Attach the static binary
+        if: ${{ steps.release-plz.outputs.releases_created == 'true' }}
+        run: |
+          git checkout "$(git describe --tags --abbrev=0)"
+          GIT_TOKEN="$GITHUB_TOKEN" scripts/release.sh binary
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    if: ${{ github.repository_owner == 'dgtlrift' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - *checkout
+      - *install-rust
+      - name: Run release-plz
+        uses: release-plz/action@f393a7b38aca9d9b4c58447b291dbac963901df6
+        with:
+          command: release-pr
+          version: 0.3.171
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

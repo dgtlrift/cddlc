@@ -1,0 +1,36 @@
+# release-plz makes cddlc's GitHub releases: one release for the project, the root `cddlc`
+# package, tagged `v<version>`, its CHANGELOG.md taking every crate's commits. The crates
+# share the workspace version and are not released on their own. Nothing goes to
+# crates.io; versions come from git tags. scripts/release.sh attaches the static musl
+# binary to each release.
+
+[workspace]
+git_only = true
+release = false
+semver_check = false
+dependencies_update = false
+pr_branch_prefix = "release-plz-"
+pr_labels = ["release"]
+
+[[package]]
+name = "cddlc"
+release = true
+changelog_path = "CHANGELOG.md"
+changelog_include = [
+    "cddlc-parser",
+    "cddlc-ir",
+    "cddlc-codegen",
+    "backend-rust",
+    "backend-c",
+    "backend-cpp",
+    "backend-csharp",
+    "backend-nodejs",
+    "backend-python",
+    "backend-dart",
+    "backend-interop",
+    "backend-buildtest",
+    "cddlc-cli",
+    "cddlc-validate",
+]
+git_tag_name = "v{{ version }}"
+git_release_name = "cddlc v{{ version }}"

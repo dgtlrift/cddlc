@@ -45,21 +45,23 @@ flowchart TD
 
 ### Crate responsibilities
 
+Every crate is in this repository under `crates/`. Until 1.1.0 each was a submodule in its own repository; those repositories keep their history but are no longer developed.
+
 | Crate | Role |
 |---|---|
-| [`cddlc-parser`](https://github.com/dgtlrift/cddlc-parser) | RFC 8610 grammar → AST; pragma extraction |
-| [`cddlc-ir`](https://github.com/dgtlrift/cddlc-ir) | Name resolution, generic monomorphisation, constraint lowering, topo-sort → typed IR |
-| [`cddlc-codegen`](https://github.com/dgtlrift/cddlc-codegen) | `Backend` trait + shared emit utilities used by all backends |
-| [`cddlc-cli`](https://github.com/dgtlrift/cddlc-cli) | CLI argument parsing, `@import` resolution with cycle detection |
-| [`backend-rust`](https://github.com/dgtlrift/backend-rust) | Rust + minicbor / ciborium (with `#![no_std]` support) |
-| [`backend-c`](https://github.com/dgtlrift/backend-c) | ANSI C + nanocbor / tinycbor / zcbor |
-| [`backend-cpp`](https://github.com/dgtlrift/backend-cpp) | C++17 + nanocbor (wraps the C runtime) |
-| [`backend-csharp`](https://github.com/dgtlrift/backend-csharp) | C# / .NET 8 + `System.Formats.Cbor` |
-| [`backend-nodejs`](https://github.com/dgtlrift/backend-nodejs) | TypeScript 5 ESM + cborg (CBOR) or `node:buffer` (JSON) |
-| [`backend-python`](https://github.com/dgtlrift/backend-python) | Python 3 dataclasses + cbor2 / json |
-| [`backend-dart`](https://github.com/dgtlrift/backend-dart) | Dart 3 / Flutter + cbor ^6 (CBOR) or `dart:convert` (JSON) |
-| [`backend-interop`](https://github.com/dgtlrift/backend-interop) | Canonical CBOR test vectors + per-language decode/roundtrip harnesses |
-| [`backend-buildtest`](https://github.com/dgtlrift/backend-buildtest) | Reference schemas; build validation tests (invoke real toolchains) |
+| [`cddlc-parser`](crates/cddlc-parser) | RFC 8610 grammar → AST; pragma extraction |
+| [`cddlc-ir`](crates/cddlc-ir) | Name resolution, generic monomorphisation, constraint lowering, topo-sort → typed IR |
+| [`cddlc-codegen`](crates/cddlc-codegen) | `Backend` trait + shared emit utilities used by all backends |
+| [`cddlc-cli`](crates/cddlc-cli) | CLI argument parsing, `@import` resolution with cycle detection |
+| [`backend-rust`](crates/backend-rust) | Rust + minicbor / ciborium (with `#![no_std]` support) |
+| [`backend-c`](crates/backend-c) | ANSI C + nanocbor / tinycbor / zcbor |
+| [`backend-cpp`](crates/backend-cpp) | C++17 + nanocbor (wraps the C runtime) |
+| [`backend-csharp`](crates/backend-csharp) | C# / .NET 8 + `System.Formats.Cbor` |
+| [`backend-nodejs`](crates/backend-nodejs) | TypeScript 5 ESM + cborg (CBOR) or `node:buffer` (JSON) |
+| [`backend-python`](crates/backend-python) | Python 3 dataclasses + cbor2 / json |
+| [`backend-dart`](crates/backend-dart) | Dart 3 / Flutter + cbor ^6 (CBOR) or `dart:convert` (JSON) |
+| [`backend-interop`](crates/backend-interop) | Canonical CBOR test vectors + per-language decode/roundtrip harnesses |
+| [`backend-buildtest`](crates/backend-buildtest) | Reference schemas; build validation tests (invoke real toolchains) |
 
 ---
 
@@ -68,7 +70,7 @@ flowchart TD
 ### Build from source
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/dgtlrift/cddlc
 cd cddlc
 cargo build --release
 # binary at: ./target/release/cddlc
@@ -375,7 +377,10 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 
 ```
 cddlc/
-├── Cargo.toml                 Workspace manifest
+├── Cargo.toml                 Workspace manifest; the root `cddlc` package (the release)
+├── CHANGELOG.md               Written by release-plz
+├── release-plz.toml           Release settings
+├── scripts/release.sh         Release steps without GitHub Actions
 ├── crates/
 │   ├── cddlc-parser/          RFC 8610 parser
 │   ├── cddlc-ir/              IR lowering
@@ -389,10 +394,21 @@ cddlc/
 │   ├── backend-python/
 │   ├── backend-dart/
 │   ├── backend-interop/       Cross-language interop vectors
-│   └── backend-buildtest/     Build validation harness (submodule)
+│   └── backend-buildtest/     Build validation harness
 ├── docs/
 │   └── interop-testing.md
 └── test_all                   Shell script: run all backend smoke tests
+```
+
+## Releasing
+
+Releases are made with [release-plz](https://release-plz.dev): a release PR bumps the workspace version and writes `CHANGELOG.md` from the conventional commit messages (`feat(scope): …`, `fix(scope): …`), and merging it tags `v<version>` and makes the GitHub release, with a static x86-64 Linux binary attached. Nothing is published to crates.io. `.github/workflows/release-plz.yml` runs this on each push to `main`; without GitHub Actions, with release-plz, rustup and gh installed:
+
+```bash
+export GIT_TOKEN="$(gh auth token)"
+scripts/release.sh pr        # the release PR; review and merge it, then:
+scripts/release.sh release   # the tag and the GitHub release
+scripts/release.sh binary    # at the tag: the binary and its .sha256, attached
 ```
 
 ---
