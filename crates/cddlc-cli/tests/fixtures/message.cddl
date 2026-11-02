@@ -1,0 +1,10 @@
+; @import "primitives.cddl"
+
+; @doc "A complete sensor message"
+sensor-message = {
+    version:     uint,
+    device-id:   device-id,
+    timestamp:   timestamp,
+    sensor-type: sensor-type,
+    value:       float32,
+}

@@ -1,0 +1,13 @@
+; @doc "A simple sensor reading"
+sensor = {
+    id:    uint,
+    label: tstr,
+    value: float32,
+}
+
+device-id = tstr .size 16
+
+; @capacity 32
+readings = [* float32]
+
+status = "ok" / "warn" / "error"

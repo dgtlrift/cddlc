@@ -1,0 +1,5 @@
+; Common primitive type aliases
+
+device-id   = tstr .size 16
+timestamp   = #6.1(uint)
+sensor-type = "temperature" / "humidity" / "pressure"
