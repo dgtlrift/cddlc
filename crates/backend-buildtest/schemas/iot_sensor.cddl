@@ -1,0 +1,25 @@
+; Reference schema: realistic IoT sensor message
+; End-to-end test combining all major features
+
+; @capacity 16
+device-id = tstr .size 16
+
+sensor-type = "temperature" / "humidity" / "pressure"
+
+; @doc "A single sensor reading with optional unit"
+sensor-reading = {
+    sensor-type: sensor-type,
+    value:       float32,
+    ? unit:      tstr,
+}
+
+; @capacity 8
+readings = [* sensor-reading]
+
+; @doc "Top-level IoT sensor message"
+sensor-message = {
+    version:   uint .size 4,
+    device-id: device-id,
+    timestamp: #6.1(uint),
+    readings:  readings,
+}

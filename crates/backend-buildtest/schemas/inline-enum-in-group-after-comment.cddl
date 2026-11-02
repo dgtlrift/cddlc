@@ -1,0 +1,4 @@
+testGroup = (
+	thisMemberHasComment: float, ; This comment breaks the in-line enum
+	inlineEnum: ("inlineEnumZero" / "inlineEnumOne" /  "inlineEnumTwo" ), 
+)
