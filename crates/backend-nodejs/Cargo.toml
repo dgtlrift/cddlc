@@ -1,0 +1,19 @@
+[package]
+name        = "backend-nodejs"
+version     = "1.1.0"
+edition     = "2021"
+description = "Node.js / TypeScript code-generation backend for cddlc (cborg runtime)"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+name = "backend_nodejs"
+path = "src/lib.rs"
+
+[dependencies]
+cddlc-ir      = { path = "../cddlc-ir" }
+cddlc-codegen = { path = "../cddlc-codegen" }
+smol_str      = "0.2"
+
+[dev-dependencies]
+cddlc-parser  = { path = "../cddlc-parser" }
+pretty_assertions = "1"
