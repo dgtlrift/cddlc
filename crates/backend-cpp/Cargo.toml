@@ -1,0 +1,20 @@
+[package]
+name        = "backend-cpp"
+version     = "1.1.0"
+edition     = "2021"
+description = "C++ code-generation backend for cddlc (nanocbor runtime)"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+name = "backend_cpp"
+path = "src/lib.rs"
+
+[dependencies]
+cddlc-ir      = { path = "../cddlc-ir" }
+cddlc-codegen = { path = "../cddlc-codegen" }
+backend-c     = { path = "../backend-c" }
+smol_str      = "0.2"
+
+[dev-dependencies]
+cddlc-parser  = { path = "../cddlc-parser" }
+pretty_assertions = "1"
