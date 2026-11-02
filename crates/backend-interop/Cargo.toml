@@ -1,6 +1,6 @@
 [package]
 name        = "backend-interop"
-version     = "1.1.0"
+version     = { workspace = true }
 edition     = "2021"
 description = "Cross-language interoperability test generation for cddlc"
 license     = "MIT OR Apache-2.0"

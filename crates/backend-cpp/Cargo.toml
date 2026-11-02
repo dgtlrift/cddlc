@@ -1,6 +1,6 @@
 [package]
 name        = "backend-cpp"
-version     = "1.1.0"
+version     = { workspace = true }
 edition     = "2021"
 description = "C++ code-generation backend for cddlc (nanocbor runtime)"
 license     = "MIT OR Apache-2.0"

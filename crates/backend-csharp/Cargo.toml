@@ -1,6 +1,6 @@
 [package]
 name        = "backend-csharp"
-version     = "1.1.0"
+version     = { workspace = true }
 edition     = "2021"
 description = "C# / .NET Core code-generation backend for cddlc"
 license     = "MIT OR Apache-2.0"

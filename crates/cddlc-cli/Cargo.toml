@@ -1,6 +1,6 @@
 [package]
 name        = "cddlc-cli"
-version     = "1.1.0"
+version     = { workspace = true }
 edition     = "2021"
 description = "Command-line CDDL compiler"
 license     = "MIT OR Apache-2.0"

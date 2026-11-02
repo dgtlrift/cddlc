@@ -1,6 +1,6 @@
 [package]
 name        = "backend-dart"
-version     = "1.1.0"
+version     = { workspace = true }
 edition     = "2021"
 description = "Dart code-generation backend for cddlc"
 license     = "MIT OR Apache-2.0"

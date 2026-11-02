@@ -1,6 +1,6 @@
 [package]
 name        = "backend-buildtest"
-version     = "1.1.0"
+version     = { workspace = true }
 edition     = "2021"
 description = "Build validation tests — generates code from reference schemas and builds each language target"
 license     = "MIT OR Apache-2.0"

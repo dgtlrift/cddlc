@@ -1,6 +1,6 @@
 [package]
 name        = "backend-python"
-version     = "1.1.0"
+version     = { workspace = true }
 edition     = "2021"
 description = "Python code-generation backend for cddlc (cbor2 runtime)"
 license     = "MIT OR Apache-2.0"
