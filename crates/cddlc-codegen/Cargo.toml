@@ -1,0 +1,19 @@
+[package]
+name        = "cddlc-codegen"
+version     = "1.1.0"
+edition     = "2021"
+description = "Backend trait and shared code-generation utilities for cddlc"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+name = "cddlc_codegen"
+path = "src/lib.rs"
+
+[dependencies]
+cddlc-ir  = { path = "../cddlc-ir" }
+smol_str  = "0.2"
+
+[dev-dependencies]
+cddlc-parser = { path = "../cddlc-parser" }
+cddlc-ir     = { path = "../cddlc-ir" }
+backend-rust = { path = "../backend-rust" }
