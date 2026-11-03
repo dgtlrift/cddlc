@@ -39,10 +39,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Attach the static binary
         if: ${{ steps.release-plz.outputs.releases_created == 'true' }}
+        # The tag release-plz just pushed isn't in this checkout yet: fetch it by name.
         run: |
-          git checkout "$(git describe --tags --abbrev=0)"
+          tag="$(printf '%s' "$RELEASES" | jq -r '.[0].tag')"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          git checkout "$tag"
           GIT_TOKEN="$GITHUB_TOKEN" scripts/release.sh binary
         env:
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-plz-pr:
