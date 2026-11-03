@@ -1,0 +1,10 @@
+; @doc "Tagged CBOR types"
+timestamp   = #6.1(uint)
+date-string = #6.0(tstr)
+
+; @doc "A message with tagged fields"
+event = {
+    id:        uint,
+    created:   timestamp,
+    name:      tstr,
+}

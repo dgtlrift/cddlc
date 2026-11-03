@@ -1,0 +1,10 @@
+; Reference schema: CBOR tagged types
+
+; Tagged alias
+timestamp = #6.1(uint)
+
+; Tagged struct
+tagged-sensor = #6.100({
+    id:    uint,
+    value: float32,
+})

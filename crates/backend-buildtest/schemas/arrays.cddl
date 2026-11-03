@@ -1,0 +1,8 @@
+; Reference schema: array types
+
+; @capacity 16
+readings = [* float32]
+
+; @capacity 8
+; @doc "A list of sensor ids"
+sensor-ids = [* uint]

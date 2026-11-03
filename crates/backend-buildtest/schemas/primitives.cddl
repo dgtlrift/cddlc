@@ -1,0 +1,10 @@
+; Reference schema: primitive types
+; Tests all primitive CDDL types
+
+prim-uint    = uint
+prim-int     = int
+prim-float32 = float32
+prim-float64 = float64
+prim-bool    = bool
+prim-tstr    = tstr
+prim-bstr    = bstr

@@ -189,6 +189,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cddlc"
+version = "1.1.0"
+
+[[package]]
 name = "cddlc-cli"
 version = "1.1.0"
 dependencies = [

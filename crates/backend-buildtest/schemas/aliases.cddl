@@ -1,0 +1,13 @@
+; Reference schema: type aliases and constraints
+
+; Simple alias
+device-id = uint
+
+; Size-constrained string
+device-name = tstr .size 32
+
+; Range-constrained integer
+temperature = int .ge -40 .le 85
+
+; Byte string alias
+payload = bstr

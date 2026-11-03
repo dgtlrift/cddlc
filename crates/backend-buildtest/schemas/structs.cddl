@@ -1,0 +1,21 @@
+; Reference schema: struct (map) types
+
+; Simple flat struct
+sensor = {
+    id:    uint,
+    label: tstr,
+    value: float32,
+}
+
+; Struct with optional field
+reading = {
+    sensor-id: uint,
+    value:     float32,
+    ? unit:    tstr,
+}
+
+; Nested struct reference
+device = {
+    id:     uint,
+    sensor: sensor,
+}

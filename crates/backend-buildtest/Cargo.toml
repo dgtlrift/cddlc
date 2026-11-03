@@ -1,0 +1,24 @@
+[package]
+name        = "backend-buildtest"
+version     = { workspace = true }
+edition     = "2021"
+description = "Build validation tests — generates code from reference schemas and builds each language target"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+name = "backend_buildtest"
+path = "src/lib.rs"
+
+[dependencies]
+cddlc-parser  = { path = "../cddlc-parser" }
+cddlc-ir      = { path = "../cddlc-ir" }
+cddlc-codegen = { path = "../cddlc-codegen" }
+backend-rust   = { path = "../backend-rust" }
+backend-c      = { path = "../backend-c" }
+backend-cpp    = { path = "../backend-cpp" }
+backend-csharp = { path = "../backend-csharp" }
+backend-nodejs = { path = "../backend-nodejs" }
+backend-python = { path = "../backend-python" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,20 @@
+[package]
+name        = "backend-interop"
+version     = { workspace = true }
+edition     = "2021"
+description = "Cross-language interoperability test generation for cddlc"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+name = "backend_interop"
+path = "src/lib.rs"
+
+[dependencies]
+cddlc-ir      = { path = "../cddlc-ir" }
+cddlc-codegen = { path = "../cddlc-codegen" }
+minicbor      = { version = ">=0.19", features = ["derive", "alloc"] }
+smol_str      = "0.2"
+
+[dev-dependencies]
+cddlc-parser  = { path = "../cddlc-parser" }
+pretty_assertions = "1"

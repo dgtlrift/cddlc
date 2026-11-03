@@ -1,0 +1,7 @@
+; Reference schema: enum (choice) types
+
+; String enum
+status = "ok" / "warn" / "error"
+
+; Integer enum  
+priority = 1 / 2 / 3

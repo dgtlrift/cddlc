@@ -1,6 +1,39 @@
+# The cddlc project as a package, for release-plz: it carries the release version (the
+# workspace version, which every crate shares), tagged `v<version>`; `cddlc --version`
+# reports that tag. It has no code; the compiler is `cddlc-cli`.
+[package]
+name        = "cddlc"
+description = "A CDDL compiler"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+repository  = "https://github.com/dgtlrift/cddlc"
+readme      = "README.md"
+publish     = false
+
+[lib]
+path = "build-support/project.rs"
+
 [workspace]
 resolver = "2"
 members  = [
+    "crates/cddlc-parser",
+    "crates/cddlc-ir",
+    "crates/cddlc-codegen",
+    "crates/backend-rust",
+    "crates/backend-c",
+    "crates/backend-cpp",
+    "crates/backend-csharp",
+    "crates/backend-nodejs",
+    "crates/backend-python",
+    "crates/backend-dart",
+    "crates/backend-interop",
+    "crates/backend-buildtest",
+    "crates/cddlc-cli",
+    "crates/cddlc-validate",
+]
+# A bare `cargo build` or `cargo test` covers the crates, not just the root package.
+default-members = [
     "crates/cddlc-parser",
     "crates/cddlc-ir",
     "crates/cddlc-codegen",
