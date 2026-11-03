@@ -7,6 +7,9 @@
 [workspace]
 git_only = true
 release = false
+# Release only when a release PR (branch release-plz-*) is merged, never on other
+# pushes: with git_only, an untagged version is otherwise released at once.
+release_always = false
 semver_check = false
 dependencies_update = false
 pr_branch_prefix = "release-plz-"
