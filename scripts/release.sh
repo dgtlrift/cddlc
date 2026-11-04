@@ -7,7 +7,9 @@
 #   scripts/release.sh binary   builds the x86_64 musl binary of the tag at HEAD and
 #                               attaches it, with its .sha256, to that tag's release
 #   scripts/release.sh preview  writes the next version and changelog locally, to look at
-# .github/workflows/release-plz.yml does the same in GitHub Actions.
+# Release PRs come only from here (Actions may not open pull requests); once one is merged,
+# .github/workflows/release-plz.yml makes the release and attaches the binary, or
+# `release` and `binary` above do.
 set -eu
 cd "$(dirname "$0")/.."
 target=x86_64-unknown-linux-musl

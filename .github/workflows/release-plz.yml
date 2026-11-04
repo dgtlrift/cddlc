@@ -1,7 +1,8 @@
-# release-plz on every push to main: a release PR with the next version and its changelog,
-# and, once that PR is merged, the tag, the GitHub release and its static musl binary.
-# Nothing goes to crates.io (release-plz.toml). Without Actions, scripts/release.sh does
-# the same.
+# On every push to main, release-plz releases if the push is a merged release PR (a
+# release-plz-* branch; release_always = false): the tag, the GitHub release and its static
+# musl binary. Nothing goes to crates.io (release-plz.toml). Release PRs are opened with
+# `scripts/release.sh pr`, never from here: that would need the repository setting that
+# lets Actions create and approve pull requests, which this project leaves off.
 name: Release-plz
 
 on:
@@ -18,14 +19,12 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - &checkout
-        name: Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-      - &install-rust
-        name: Install Rust toolchain
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Run release-plz
         id: release-plz
@@ -47,25 +46,4 @@ jobs:
           GIT_TOKEN="$GITHUB_TOKEN" scripts/release.sh binary
         env:
           RELEASES: ${{ steps.release-plz.outputs.releases }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  release-plz-pr:
-    name: Release-plz PR
-    if: ${{ github.repository_owner == 'dgtlrift' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    concurrency:
-      group: release-plz-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - *checkout
-      - *install-rust
-      - name: Run release-plz
-        uses: release-plz/action@f393a7b38aca9d9b4c58447b291dbac963901df6
-        with:
-          command: release-pr
-          version: 0.3.171
-        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
