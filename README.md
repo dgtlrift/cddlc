@@ -380,7 +380,7 @@ cddlc/
 ├── Cargo.toml                 Workspace manifest; the root `cddlc` package (the release)
 ├── CHANGELOG.md               Written by release-plz
 ├── release-plz.toml           Release settings
-├── scripts/release.sh         Release steps without GitHub Actions
+├── scripts/release.sh         Release PRs, and the release steps by hand
 ├── crates/
 │   ├── cddlc-parser/          RFC 8610 parser
 │   ├── cddlc-ir/              IR lowering
@@ -402,11 +402,12 @@ cddlc/
 
 ## Releasing
 
-Releases are made with [release-plz](https://release-plz.dev): a release PR bumps the workspace version and writes `CHANGELOG.md` from the conventional commit messages (`feat(scope): …`, `fix(scope): …`), and merging it tags `v<version>` and makes the GitHub release, with a static x86-64 Linux binary attached. Nothing is published to crates.io. `.github/workflows/release-plz.yml` runs this on each push to `main`; without GitHub Actions, with release-plz, rustup and gh installed:
+Releases are made with [release-plz](https://release-plz.dev): a release PR bumps the workspace version and writes `CHANGELOG.md` from the conventional commit messages (`feat(scope): …`, `fix(scope): …`), and merging it tags `v<version>` and makes the GitHub release, with a static x86-64 Linux binary attached. Nothing is published to crates.io. Release PRs are opened with `scripts/release.sh pr` (with release-plz, rustup and gh installed). When one is merged, `.github/workflows/release-plz.yml` makes the release and attaches the binary; `release` and `binary` do the same by hand. The workflow never opens pull requests, as that needs the repository setting that lets Actions create and approve them, which stays off.
 
 ```bash
 export GIT_TOKEN="$(gh auth token)"
-scripts/release.sh pr        # the release PR; review and merge it, then:
+scripts/release.sh pr        # the release PR; review and merge it
+# The workflow then releases. Without GitHub Actions, by hand:
 scripts/release.sh release   # the tag and the GitHub release
 scripts/release.sh binary    # at the tag: the binary and its .sha256, attached
 ```
