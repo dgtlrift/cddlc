@@ -557,3 +557,16 @@ fn test_json_optional_null_keeps_present_null() {
     let plain = compile_with_opts("rec = { id: uint, ? gone: uint }", json_opts());
     assert!(!plain.lib_rs.contains("present_null"));
 }
+
+/// Issue #16: a choice value named `default` must not reuse the name of the
+/// `Default` derive's test, in either wire format.
+#[test]
+fn test_roundtrip_variant_named_default_gets_unique_test_name() {
+    let src = "record = { decided_by: \"tags\" / \"default\" }";
+    for out in [compile(src), compile_with_opts(src, json_opts())] {
+        let rt = &out.roundtrip_rs;
+        assert_eq!(rt.matches("fn roundtrip_record_decided_by_default()").count(), 1, "{rt}");
+        assert!(rt.contains("fn roundtrip_record_decided_by_variant_default()"), "{rt}");
+        assert!(rt.contains("fn roundtrip_record_decided_by_tags()"), "{rt}");
+    }
+}
