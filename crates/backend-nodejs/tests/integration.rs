@@ -667,3 +667,35 @@ fn test_bool_literal_helper_only_when_used() {
     let out = compile("rec = { ok: bool }");
     assert!(!out.source.contains("expectBoolLiteral"));
 }
+
+// ── Issue #19: generated package's test setup ─────────────────────────────────
+
+/// jest runs as real ESM (cborg exports only an `import` entry) and only
+/// collects `tests/`, not the compiled copies `tsc` writes to `dist/tests`.
+#[test]
+fn test_package_json_runs_jest_as_esm_on_tests_only() {
+    for out in [compile("x = uint"), compile_json("x = uint")] {
+        let pj = &out.package_json;
+        assert!(pj.contains(r#""test":  "node --experimental-vm-modules node_modules/jest/bin/jest.js""#), "{pj}");
+        assert!(pj.contains(r#""roots":         ["<rootDir>/tests"]"#), "{pj}");
+    }
+}
+
+/// A tagged alias without constraints still gets `validate<Name>`, which its
+/// test calls, so the test must import it.
+#[test]
+fn test_tagged_alias_test_imports_its_validator() {
+    let out = compile("timestamp = #6.1(uint)");
+    assert!(out.source.contains("export function validateTimestamp("), "{}", out.source);
+    assert!(out.tests.contains("validateTimestamp(0n)"), "{}", out.tests);
+    let import = out.tests.lines().find(|l| l.starts_with("import {")).unwrap();
+    assert!(import.contains("validateTimestamp"), "{import}");
+}
+
+/// A tagged struct member's test value is its inner type's, not `null`.
+#[test]
+fn test_tagged_member_test_value_uses_inner_type() {
+    let out = compile("msg = { timestamp: #6.1(uint) }");
+    assert!(out.tests.contains("timestamp: 0n,"), "{}", out.tests);
+    assert!(!out.tests.contains("timestamp: null,"), "{}", out.tests);
+}

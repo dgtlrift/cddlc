@@ -3,7 +3,7 @@
 /// The backend emits 5 files:
 ///   files[0] = CMakeLists.txt
 ///   files[1] = include/<module>.h
-///   files[2] = include/nanocbor_compat.h
+///   files[2] = compat/endian.h
 ///   files[3] = src/<module>.c
 ///   files[4] = test/test_roundtrip.c
 
@@ -34,7 +34,7 @@ fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
     GeneratedCrate {
         cmake:  out.files[0].content.clone(),
         header: out.files[1].content.clone(),
-        // files[2] = include/nanocbor_compat.h (platform shim, not tested here)
+        // files[2] = compat/endian.h (platform shim, not tested here)
         source: out.files[3].content.clone(),
         tests:  out.files[4].content.clone(),
     }
@@ -51,7 +51,7 @@ fn test_emits_four_files() {
     assert_eq!(out.files.len(), 5);
     assert!(out.files[0].path.ends_with("CMakeLists.txt"));
     assert!(out.files[1].path.ends_with(".h"));
-    assert!(out.files[2].path.ends_with("nanocbor_compat.h"));
+    assert!(out.files[2].path.ends_with("compat/endian.h"));
     assert!(out.files[3].path.ends_with(".c"));
     assert!(out.files[4].path.ends_with("test_roundtrip.c"));
 }
@@ -64,7 +64,7 @@ fn test_crate_dir_named_after_module() {
     let out    = CBackend.generate(&lowered.module, &opts).unwrap();
     assert!(out.files[0].path.starts_with("sensor-cbor/"));
     assert!(out.files[1].path.starts_with("sensor-cbor/include/"));
-    assert!(out.files[2].path.starts_with("sensor-cbor/include/"));
+    assert!(out.files[2].path.starts_with("sensor-cbor/compat/"));
     assert!(out.files[3].path.starts_with("sensor-cbor/src/"));
     assert!(out.files[4].path.starts_with("sensor-cbor/test/"));
 }
