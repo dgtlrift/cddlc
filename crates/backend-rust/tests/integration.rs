@@ -541,6 +541,14 @@ fn test_json_roundtrips_also_go_through_cbor() {
     assert!(out.cargo_toml.contains("ciborium = \"0.2\""));
 }
 
+/// Issue #21: `uint .size 4` is checked as a value range, not with `.len()`.
+#[test]
+fn test_size_on_uint_checks_value_not_len() {
+    let out = compile("rec = { version: uint .size 4 }");
+    assert!(out.lib_rs.contains("val <= 4294967295"), "{}", out.lib_rs);
+    assert!(!out.lib_rs.contains("val.len()"), "{}", out.lib_rs);
+}
+
 /// Issue #15: a member typed `true` is a bool that must be `true`, not bytes:
 /// CBOR checks it on decode, JSON uses a marker type that only (de)serializes `true`.
 #[test]
