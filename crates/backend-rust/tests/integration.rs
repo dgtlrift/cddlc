@@ -541,6 +541,23 @@ fn test_json_roundtrips_also_go_through_cbor() {
     assert!(out.cargo_toml.contains("ciborium = \"0.2\""));
 }
 
+/// Issue #22: in JSON, a present `null` for an optional `null` member must stay
+/// `Some(())`; serde's plain `Option` would read it as `None`.
+#[test]
+fn test_json_optional_null_keeps_present_null() {
+    let out = compile_with_opts("rec = { id: uint, ? gone: null }", json_opts());
+    let lib = &out.lib_rs;
+    assert!(
+        lib.contains("#[serde(default, deserialize_with = \"present_null\", skip_serializing_if = \"Option::is_none\")]\n    pub gone: Option<()>,"),
+        "{lib}"
+    );
+    assert!(lib.contains("fn present_null<'de"), "{lib}");
+
+    // Only emitted when some member needs it.
+    let plain = compile_with_opts("rec = { id: uint, ? gone: uint }", json_opts());
+    assert!(!plain.lib_rs.contains("present_null"));
+}
+
 /// Issue #21: `uint .size 4` is checked as a value range, not with `.len()`.
 #[test]
 fn test_size_on_uint_checks_value_not_len() {
