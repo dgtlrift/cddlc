@@ -139,6 +139,10 @@ fn emit_package_json(name: &str, opts: &CodegenOptions) -> String {
   }}"#
         )
     };
+    // `npm test` runs jest as real ESM (`--experimental-vm-modules`): cborg exports
+    // only an `import` entry, which jest's default CommonJS resolution can't load.
+    // `roots` keeps jest to `tests/`, since `tsc` also writes compiled copies of
+    // the tests to `dist/tests` (dgtlrift/cddlc#19).
     format!(
         r#"{{
   "name": "{name}-{fmt_tag}",
@@ -149,7 +153,7 @@ fn emit_package_json(name: &str, opts: &CodegenOptions) -> String {
   "types": "./dist/src/{name}.d.ts",
   "scripts": {{
     "build": "tsc",
-    "test":  "jest"
+    "test":  "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   }},
 {deps},
   "devDependencies": {{
@@ -161,6 +165,7 @@ fn emit_package_json(name: &str, opts: &CodegenOptions) -> String {
   "jest": {{
     "preset":        "ts-jest/presets/default-esm",
     "testEnvironment": "node",
+    "roots":         ["<rootDir>/tests"],
     "extensionsToTreatAsEsm": [".ts"],
     "moduleNameMapper": {{
       "^(\\.{{1,2}}/.+)\\.js$": "$1"
@@ -998,7 +1003,7 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     }
 
     // Type alias
-    if a.constraints.is_empty() && a.tagged.is_none() {
+    if !alias_has_validator(a) {
         w.line(&format!("export type {type_name} = {inner_ty};"));
         w.blank();
         w.line(&format!(
@@ -1411,6 +1416,14 @@ fn decode_fn_name(name: &str) -> String {
 
 // ── Test file ─────────────────────────────────────────────────────────────────
 
+/// Whether an alias is a branded type with a `validate<Name>` function: it has
+/// constraints or a tag. The alias emitter, its tests and the tests' imports
+/// must agree on this (dgtlrift/cddlc#19: a tagged alias's test called an
+/// unimported `validate<Name>`).
+fn alias_has_validator(a: &AliasDef) -> bool {
+    !a.constraints.is_empty() || a.tagged.is_some()
+}
+
 fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     let name = module.name.as_str();
     let mut w = IndentWriter::new(2);
@@ -1427,7 +1440,7 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
         imports.push(to_pascal_case(n));
         imports.push(encode_fn_name(n));
         imports.push(decode_fn_name(n));
-        if matches!(def, TypeDef::Alias(a) if !a.constraints.is_empty()) {
+        if matches!(def, TypeDef::Alias(a) if alias_has_validator(a)) {
             imports.push(format!("validate{}", to_pascal_case(n)));
         }
     }
@@ -1587,7 +1600,7 @@ fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     let valid_val = ts_valid_constrained_value(&a.constraints, &a.ty, opts);
     w.line("test('roundtrip valid value', () => {");
     w.indent();
-    if a.constraints.is_empty() && a.tagged.is_none() {
+    if !alias_has_validator(a) {
         w.line(&format!("const original = {valid_val};"));
         w.line(&format!("const decoded = {dname}({fname}(original));"));
         w.line("expect(decoded).toEqual(original);");
@@ -1663,6 +1676,8 @@ fn ts_default_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> St
             TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "new Uint8Array()".into(),
             TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "null".into(),
             TypeRef::Named(n) => format!("{{}} as {}", to_pascal_case(n)),
+            // A tagged member (`timestamp: #6.1(uint)`) holds its inner type's value.
+            TypeRef::Tagged(_, inner) => ts_default_value(inner, occ, opts),
             _ => "null".into(),
         },
     }
