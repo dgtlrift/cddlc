@@ -521,3 +521,20 @@ fn test_inline_field_type_name_clash() {
     assert!(matches!(m.get("r-names"), Some(TypeDef::Alias(_))));
     assert!(matches!(m.get("r-names-type"), Some(TypeDef::Array(_))));
 }
+
+/// Issue #21: `.size` on an integer bounds the value to N bytes; it is not a length.
+#[test]
+fn test_size_on_integer_is_a_value_range() {
+    let m = compile("rec = { a: uint .size 4, b: int .size 2, c: uint .size 8, d: tstr .size 4 }");
+    let Some(TypeDef::Struct(s)) = m.get("rec") else { panic!("expected struct") };
+    assert_eq!(
+        s.fields[0].constraints,
+        vec![Constraint::ValueRangeUint { min: None, max: Some(0xFFFF_FFFF), inclusive: true }]
+    );
+    assert_eq!(
+        s.fields[1].constraints,
+        vec![Constraint::ValueRangeInt { min: Some(-32768), max: Some(32767), inclusive: true }]
+    );
+    assert!(s.fields[2].constraints.is_empty(), "every u64 fits in 8 bytes");
+    assert_eq!(s.fields[3].constraints, vec![Constraint::SizeExact(4)]);
+}
