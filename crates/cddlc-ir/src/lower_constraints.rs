@@ -25,9 +25,60 @@ pub fn lower_type_op(
         }
 
         TypeOp::Control { op, operand } => {
+            if let (CtlOp::Size, Some(signed)) = (&op.node, integer_base(base)) {
+                if let Some(bytes) = size_literal(&operand.node) {
+                    return Ok(integer_size(bytes, signed));
+                }
+            }
             lower_control_op(&op.node, &operand.node, rule_name, regex_hook, warnings)
         }
     }
+}
+
+// ── .size on integers ─────────────────────────────────────────────────────────
+
+/// `Some(signed)` when `base` is the prelude `uint` (`false`) or `int` / `number`
+/// (`true`), whose `.size` bounds the value rather than a length.
+fn integer_base(base: &Type2) -> Option<bool> {
+    match base {
+        Type2::Typename { name, args } if args.is_empty() => match name.node.as_str() {
+            "uint" => Some(false),
+            "int" | "number" => Some(true),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The byte count of a literal `.size N` operand.
+fn size_literal(operand: &Type2) -> Option<u64> {
+    match operand {
+        Type2::Value(Value::Uint(n)) => Some(*n),
+        Type2::Value(Value::Int(n)) if *n >= 0 => Some(*n as u64),
+        _ => None,
+    }
+}
+
+/// `.size N` on an integer limits it to what fits in N bytes (RFC 8610 §3.8.1):
+/// `0 ..= 256^N - 1` for `uint`, the N-byte two's-complement range for `int`
+/// (dgtlrift/cddlc#21). As a value range, every backend checks it as one,
+/// instead of as a length (`val.len()` on a `u64`). 8 or more bytes admits
+/// every 64-bit value, so it needs no check.
+fn integer_size(bytes: u64, signed: bool) -> Vec<Constraint> {
+    if bytes >= 8 {
+        return vec![];
+    }
+    let bits = bytes as u32 * 8;
+    let c = match (signed, bits) {
+        (false, _) => Constraint::ValueRangeUint {
+            min: None, max: Some((1u64 << bits) - 1), inclusive: true,
+        },
+        (true, 0) => Constraint::ValueRangeInt { min: Some(0), max: Some(0), inclusive: true },
+        (true, _) => Constraint::ValueRangeInt {
+            min: Some(-(1i64 << (bits - 1))), max: Some((1i64 << (bits - 1)) - 1), inclusive: true,
+        },
+    };
+    vec![c]
 }
 
 /// Lower a range operator (`lo..hi` / `lo...hi`).
