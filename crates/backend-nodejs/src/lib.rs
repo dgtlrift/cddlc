@@ -757,6 +757,25 @@ fn variant_str(v: &EnumVariant) -> String {
         .unwrap_or_else(|| v.name.to_lowercase().replace('_', "-"))
 }
 
+/// The integer of an int-literal enum variant (the `2` in `priority = 1 / 2 / 3`),
+/// as TypeScript source digits.
+fn int_literal(v: &EnumVariant) -> Option<String> {
+    let lit = v.constraints.iter().find_map(|c| match c {
+        Constraint::Eq(LiteralValue::Uint(n)) => Some(n.to_string()),
+        Constraint::Eq(LiteralValue::Int(n)) => Some(n.to_string()),
+        _ => None,
+    });
+    match &v.ty {
+        TypeRef::Primitive(Primitive::Uint | Primitive::Int) => lit,
+        _ => None,
+    }
+}
+
+/// A variant that carries no value: a string or null literal, or an integer literal.
+fn is_unit_variant(v: &EnumVariant) -> bool {
+    matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)) || int_literal(v).is_some()
+}
+
 // ── Enum (discriminated union) ────────────────────────────────────────────────
 
 fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
@@ -776,7 +795,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         let vname = to_pascal_case(&v.name);
         let sep = if i < e.variants.len() - 1 { " |" } else { ";" };
         match &v.ty {
-            TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
+            _ if is_unit_variant(v) => {
                 w.line(&format!("{{ readonly kind: {:?} }}{sep}", vname));
             }
             TypeRef::Primitive(p) => {
@@ -815,6 +834,10 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
             w.line(&format!("case {:?}:", vname));
             w.indent();
             match &v.ty {
+                _ if int_literal(v).is_some() => {
+                    let n = int_literal(v).unwrap_or_default();
+                    w.line(&format!("return new TextEncoder().encode({n:?});"));
+                }
                 TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
                     w.line(&format!(
                         "return new TextEncoder().encode(JSON.stringify({cddl_str:?}));"
@@ -847,6 +870,10 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
             w.line(&format!("case {:?}:", vname));
             w.indent();
             match &v.ty {
+                _ if int_literal(v).is_some() => {
+                    let n = int_literal(v).unwrap_or_default();
+                    w.line(&format!("enc.int({n}n); break;"));
+                }
                 TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
                     let s = variant_str(v);
                     w.line(&format!("enc.text({s:?}); break;"));
@@ -896,8 +923,17 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         .variants
         .iter()
         .any(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)));
-    let is_int =
-        |v: &&EnumVariant| matches!(&v.ty, TypeRef::Primitive(Primitive::Uint | Primitive::Int));
+    // A plain `uint` / `int` variant, which takes any integer; int-literal
+    // variants are matched by value first.
+    let is_int = |v: &&EnumVariant| {
+        matches!(&v.ty, TypeRef::Primitive(Primitive::Uint | Primitive::Int))
+            && int_literal(v).is_none()
+    };
+    let int_lits: Vec<(String, String)> = e
+        .variants
+        .iter()
+        .filter_map(|v| int_literal(v).map(|n| (n, to_pascal_case(&v.name))))
+        .collect();
     let is_float = |v: &&EnumVariant| {
         matches!(
             &v.ty,
@@ -934,9 +970,18 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         // one, any other number to the float variant.
         let int_v = e.variants.iter().find(is_int);
         let float_v = e.variants.iter().find(is_float);
-        if int_v.is_some() || float_v.is_some() {
+        if int_v.is_some() || float_v.is_some() || !int_lits.is_empty() {
             w.line("if (typeof inner === 'number') {");
             w.indent();
+            if !int_lits.is_empty() {
+                w.line("switch (inner) {");
+                w.indent();
+                for (n, vname) in &int_lits {
+                    w.line(&format!("case {n}: return {{ kind: {vname:?} }};"));
+                }
+                w.dedent();
+                w.line("}");
+            }
             match (int_v, float_v) {
                 (Some(i), Some(f)) => {
                     let (iname, fname_) = (to_pascal_case(&i.name), to_pascal_case(&f.name));
@@ -949,17 +994,32 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                     let vname = to_pascal_case(&v.name);
                     w.line(&format!("return {{ kind: {vname:?}, value: inner }};"));
                 }
-                (None, None) => unreachable!(),
+                (None, None) => {}
             }
             w.dedent();
             w.line("}");
         }
-    } else if has_int {
-        w.line("if (typeof inner === 'bigint') {");
+    } else if has_int || !int_lits.is_empty() {
+        // cborg decodes small integers as `number` and large ones as `bigint`.
+        w.line("if (typeof inner === 'bigint' || (typeof inner === 'number' && Number.isInteger(inner))) {");
         w.indent();
+        w.line("const n = BigInt(inner);");
+        if !int_lits.is_empty() {
+            w.line("switch (n) {");
+            w.indent();
+            for (n, vname) in &int_lits {
+                w.line(&format!("case {n}n: return {{ kind: {vname:?} }};"));
+            }
+            w.dedent();
+            w.line("}");
+        }
         if let Some(v) = e.variants.iter().find(is_int) {
             let vname = to_pascal_case(&v.name);
-            w.line(&format!("return {{ kind: {vname:?}, value: inner }};"));
+            if matches!(&v.ty, TypeRef::Primitive(Primitive::Uint)) {
+                w.line(&format!("if (n >= 0n) return {{ kind: {vname:?}, value: n }};"));
+            } else {
+                w.line(&format!("return {{ kind: {vname:?}, value: n }};"));
+            }
         }
         w.dedent();
         w.line("}");
@@ -1595,24 +1655,24 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
 
     for (_, def) in &module.types {
-        emit_type_tests(&mut w, def, opts);
+        emit_type_tests(&mut w, def, module, opts);
         w.blank();
     }
 
     w.finish()
 }
 
-fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
-        TypeDef::Struct(s) => emit_struct_tests(w, s, opts),
+        TypeDef::Struct(s) => emit_struct_tests(w, s, module, opts),
         TypeDef::Enum(e) => emit_enum_tests(w, e, opts),
-        TypeDef::Alias(a) => emit_alias_tests(w, a, opts),
+        TypeDef::Alias(a) => emit_alias_tests(w, a, module, opts),
         TypeDef::Array(a) => emit_array_tests(w, a, opts),
         TypeDef::Map(_) => {}
     }
 }
 
-fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&s.name);
     let fname = encode_fn_name(&s.name);
     let dname = decode_fn_name(&s.name);
@@ -1626,7 +1686,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
     w.indent();
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
-        let val = bool_literal_value(f, false).unwrap_or_else(|| ts_default_value(&f.ty, &f.occurrence, opts));
+        let val = ts_field_value(f, module, opts, false, 0);
         w.line(&format!("{prop}: {val},"));
     }
     w.dedent();
@@ -1644,7 +1704,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
     w.indent();
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
-        let val = bool_literal_value(f, true).unwrap_or_else(|| ts_explicit_value(&f.ty, &f.occurrence, opts));
+        let val = ts_field_value(f, module, opts, true, 0);
         w.line(&format!("{prop}: {val},"));
     }
     w.dedent();
@@ -1663,7 +1723,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
         w.indent();
         for f in &s.fields {
             let prop = to_snake_case(&f.name);
-            let v = bool_literal_value(f, false).unwrap_or_else(|| ts_default_value(&f.ty, &f.occurrence, opts));
+            let v = ts_field_value(f, module, opts, false, 0);
             w.line(&format!("{prop}: {v},"));
         }
         w.dedent();
@@ -1685,6 +1745,26 @@ fn emit_ts_roundtrip_assert(w: &mut IndentWriter, s: &StructDef) {
     }
 }
 
+/// A test value for one enum variant.
+fn ts_enum_variant_value(e: &EnumDef, v: &EnumVariant, opts: &CodegenOptions) -> String {
+    let type_name = to_pascal_case(&e.name);
+    let vname = to_pascal_case(&v.name);
+    let n = if opts.is_json() { "" } else { "n" };
+    match &v.ty {
+        _ if is_unit_variant(v) => format!("{{ kind: {vname:?} }} as {type_name}"),
+        TypeRef::Primitive(Primitive::Uint) => {
+            format!("{{ kind: {vname:?}, value: 42{n} }} as {type_name}")
+        }
+        TypeRef::Primitive(Primitive::Int) => {
+            format!("{{ kind: {vname:?}, value: -1{n} }} as {type_name}")
+        }
+        TypeRef::Primitive(Primitive::Bool) => {
+            format!("{{ kind: {vname:?}, value: false }} as {type_name}")
+        }
+        _ => format!("{{ kind: {vname:?} }} as {type_name}"),
+    }
+}
+
 fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&e.name);
     let fname = encode_fn_name(&e.name);
@@ -1695,44 +1775,43 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
     for v in &e.variants {
         let vname = to_pascal_case(&v.name);
-        let construct = match &v.ty {
-            TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
-                format!("{{ kind: {vname:?} }} as {type_name}")
-            }
-            TypeRef::Primitive(Primitive::Uint) => {
-                if opts.is_json() {
-                    format!("{{ kind: {vname:?}, value: 42 }} as {type_name}")
-                } else {
-                    format!("{{ kind: {vname:?}, value: 42n }} as {type_name}")
-                }
-            }
-            TypeRef::Primitive(Primitive::Int) => {
-                if opts.is_json() {
-                    format!("{{ kind: {vname:?}, value: -1 }} as {type_name}")
-                } else {
-                    format!("{{ kind: {vname:?}, value: -1n }} as {type_name}")
-                }
-            }
-            TypeRef::Primitive(Primitive::Bool) => {
-                format!("{{ kind: {vname:?}, value: false }} as {type_name}")
-            }
-            _ => format!("{{ kind: {vname:?} }} as {type_name}"),
-        };
-
+        let construct = ts_enum_variant_value(e, v, opts);
         w.line(&format!("test('roundtrip {vname}', () => {{"));
         w.indent();
         w.line(&format!("const original: {type_name} = {construct};"));
         w.line(&format!("const decoded = {dname}({fname}(original));"));
-        w.line("expect(decoded.kind).toEqual(original.kind);");
+        w.line("expect(decoded).toEqual(original);");
         w.dedent();
         w.line("});");
+    }
+
+    // An integer none of the literals names must not decode, unless some
+    // variant takes any integer.
+    let lits: Vec<String> = e.variants.iter().filter_map(int_literal).collect();
+    let takes_any_int = e.variants.iter().any(|v| {
+        matches!(&v.ty, TypeRef::Primitive(Primitive::Uint | Primitive::Int)) && int_literal(v).is_none()
+    });
+    if !lits.is_empty() && !takes_any_int && e.tagged.is_none() {
+        if let Some(other) = (0u8..24).find(|k| !lits.contains(&k.to_string())) {
+            let bytes = if opts.is_json() {
+                format!("new TextEncoder().encode('{other}')")
+            } else {
+                // A CBOR unsigned integer below 24 is the one byte itself.
+                format!("new Uint8Array([{other}])")
+            };
+            w.line("test('rejects an integer no variant names', () => {");
+            w.indent();
+            w.line(&format!("expect(() => {dname}({bytes})).toThrow();"));
+            w.dedent();
+            w.line("});");
+        }
     }
 
     w.dedent();
     w.line("});");
 }
 
-fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
+fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&a.name);
     let fname = encode_fn_name(&a.name);
     let dname = decode_fn_name(&a.name);
@@ -1740,7 +1819,7 @@ fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     w.line(&format!("describe('{type_name}', () => {{"));
     w.indent();
 
-    let valid_val = ts_valid_constrained_value(&a.constraints, &a.ty, opts);
+    let valid_val = ts_valid_constrained_value(&a.constraints, &a.ty, module, opts, 0);
     w.line("test('roundtrip valid value', () => {");
     w.indent();
     if !alias_has_validator(a) {
@@ -1797,72 +1876,97 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
 
 // ── Test value helpers ────────────────────────────────────────────────────────
 
-fn ts_default_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
+/// Nesting depth past which a named type's test value falls back to `{} as T`,
+/// so a recursive schema can't recurse forever.
+const MAX_FIXTURE_DEPTH: usize = 4;
+
+/// A roundtrip-test value for a struct field.
+fn ts_field_value(f: &FieldDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> String {
+    bool_literal_value(f, explicit)
+        .unwrap_or_else(|| ts_test_value(&f.ty, &f.occurrence, module, opts, explicit, depth))
+}
+
+/// A roundtrip-test value of a type: zero-ish values, or (`explicit`) non-default ones.
+fn ts_test_value(
+    ty: &TypeRef,
+    occ: &Occurrence,
+    module: &IrModule,
+    opts: &CodegenOptions,
+    explicit: bool,
+    depth: usize,
+) -> String {
+    let n = if opts.is_json() { "" } else { "n" };
     match occ {
         Occurrence::Optional => "undefined".into(),
         Occurrence::ZeroOrMore { .. }
         | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => "[]".into(),
         Occurrence::Required => match ty {
-            TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
-                if opts.is_json() {
-                    "0".into()
-                } else {
-                    "0n".into()
-                }
-            }
-            TypeRef::Primitive(Primitive::Bool) => "false".into(),
+            TypeRef::Primitive(Primitive::Uint) if explicit => format!("42{n}"),
+            TypeRef::Primitive(Primitive::Int) if explicit => format!("-1{n}"),
+            TypeRef::Primitive(Primitive::Uint | Primitive::Int) => format!("0{n}"),
+            TypeRef::Primitive(Primitive::Bool) => explicit.to_string(),
+            // 1.5 is exact in every float width, so it roundtrips through a float32.
+            TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) if explicit => "1.5".into(),
+            TypeRef::Primitive(Primitive::Float64 | Primitive::Float) if explicit => "3.14".into(),
             TypeRef::Primitive(
                 Primitive::Float32 | Primitive::Float16 | Primitive::Float64 | Primitive::Float,
             ) => "0".into(),
+            TypeRef::Primitive(Primitive::Tstr) if explicit => "'hello'".into(),
             TypeRef::Primitive(Primitive::Tstr) => "''".into(),
+            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if explicit => {
+                "new Uint8Array([0x01, 0x02])".into()
+            }
             TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "new Uint8Array()".into(),
             TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "null".into(),
-            TypeRef::Named(n) => format!("{{}} as {}", to_pascal_case(n)),
+            TypeRef::Named(name) => ts_named_value(name, module, opts, explicit, depth),
             // A tagged member (`timestamp: #6.1(uint)`) holds its inner type's value.
-            TypeRef::Tagged(_, inner) => ts_default_value(inner, occ, opts),
+            TypeRef::Tagged(_, inner) => ts_test_value(inner, occ, module, opts, explicit, depth),
             _ => "null".into(),
         },
     }
 }
 
-fn ts_explicit_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
-    match occ {
-        Occurrence::Optional => "undefined".into(),
-        Occurrence::ZeroOrMore { .. }
-        | Occurrence::OneOrMore { .. }
-        | Occurrence::Bounded { .. } => "[]".into(),
-        Occurrence::Required => match ty {
-            TypeRef::Primitive(Primitive::Uint) => {
-                if opts.is_json() {
-                    "42".into()
-                } else {
-                    "42n".into()
-                }
+/// A test value of a named type, built from its definition.
+fn ts_named_value(name: &str, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> String {
+    let type_name = to_pascal_case(name);
+    let fallback = format!("{{}} as {type_name}");
+    if depth >= MAX_FIXTURE_DEPTH {
+        return fallback;
+    }
+    match module.get(name) {
+        Some(TypeDef::Struct(s)) => {
+            let fields: Vec<String> = s
+                .fields
+                .iter()
+                .map(|f| format!("{}: {}", to_snake_case(&f.name), ts_field_value(f, module, opts, explicit, depth + 1)))
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
+        }
+        Some(TypeDef::Enum(e)) => e
+            .variants
+            .first()
+            .map(|v| ts_enum_variant_value(e, v, opts))
+            .unwrap_or(fallback),
+        Some(TypeDef::Alias(a)) => {
+            let inner = ts_valid_constrained_value(&a.constraints, &a.ty, module, opts, depth + 1);
+            if alias_has_validator(a) {
+                format!("validate{type_name}({inner})")
+            } else {
+                inner
             }
-            TypeRef::Primitive(Primitive::Int) => {
-                if opts.is_json() {
-                    "-1".into()
-                } else {
-                    "-1n".into()
-                }
-            }
-            TypeRef::Primitive(Primitive::Bool) => "true".into(),
-            TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) => "3.14".into(),
-            TypeRef::Primitive(Primitive::Float64 | Primitive::Float) => "3.14".into(),
-            TypeRef::Primitive(Primitive::Tstr) => "'hello'".into(),
-            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
-                "new Uint8Array([0x01, 0x02])".into()
-            }
-            _ => ts_default_value(ty, occ, opts),
-        },
+        }
+        Some(TypeDef::Array(_)) => "[]".into(),
+        Some(TypeDef::Map(_)) | None => fallback,
     }
 }
 
 fn ts_valid_constrained_value(
     constraints: &[Constraint],
     ty: &TypeRef,
+    module: &IrModule,
     opts: &CodegenOptions,
+    depth: usize,
 ) -> String {
     for c in constraints {
         match c {
@@ -1892,7 +1996,7 @@ fn ts_valid_constrained_value(
             _ => {}
         }
     }
-    ts_default_value(ty, &Occurrence::Required, opts)
+    ts_test_value(ty, &Occurrence::Required, module, opts, false, depth)
 }
 
 fn ts_invalid_constrained_value(

@@ -737,3 +737,54 @@ fn test_cbor_array_encodes_elements_with_their_encoders() {
     );
     assert!(!src.contains("cborgEncode([200n"), "{src}");
 }
+
+/// Issue #28: an int-literal enum (`1 / 2 / 3`) carries no value; each variant
+/// encodes its own literal and decodes back by value, rejecting other integers.
+#[test]
+fn test_int_literal_enum_matches_by_value() {
+    let cbor = compile("priority = 1 / 2 / 3");
+    let src = &cbor.source;
+    assert!(src.contains("{ readonly kind: \"Variant2\" } |"), "{src}");
+    assert!(src.contains("enc.int(2n); break;"), "{src}");
+    assert!(src.contains("typeof inner === 'number' && Number.isInteger(inner)"), "{src}");
+    assert!(src.contains("case 3n: return { kind: \"Variant3\" };"), "{src}");
+    assert!(cbor.tests.contains("{ kind: \"Variant1\" } as Priority"), "{}", cbor.tests);
+    assert!(!cbor.tests.contains("value: 42n"), "{}", cbor.tests);
+    assert!(cbor.tests.contains("decodePriority(new Uint8Array([0]))).toThrow()"), "{}", cbor.tests);
+
+    let json = compile_json("priority = 1 / 2 / 3");
+    assert!(json.source.contains("return new TextEncoder().encode(\"2\");"), "{}", json.source);
+    assert!(json.source.contains("case 3: return { kind: \"Variant3\" };"), "{}", json.source);
+}
+
+/// Issue #28: the explicit float32 test value must be exact as a 32-bit float.
+#[test]
+fn test_float32_explicit_value_is_exact() {
+    let out = compile("s = { a: float32, b: float64 }");
+    assert!(out.tests.contains("a: 1.5,"), "{}", out.tests);
+    assert!(out.tests.contains("b: 3.14,"), "{}", out.tests);
+}
+
+/// Issue #28: a member of a named type gets a real value of that type, not `{} as T`.
+#[test]
+fn test_named_member_test_values_are_built_from_definitions() {
+    let out = compile(
+        "device = { id: uint, sensor: sensor, key: key, level: level }\n\
+         sensor = { name: tstr, ? note: tstr }\n\
+         key = bstr .size 4\n\
+         level = \"low\" / \"high\"",
+    );
+    let t = &out.tests;
+    assert!(t.contains("sensor: { name: '', note: undefined },"), "{t}");
+    assert!(t.contains("sensor: { name: 'hello', note: undefined },"), "{t}");
+    assert!(t.contains("key: validateKey(new Uint8Array(4)),"), "{t}");
+    assert!(t.contains("level: { kind: \"Low\" } as Level,"), "{t}");
+    assert!(!t.contains("{} as Sensor"), "{t}");
+}
+
+/// Issue #28: a recursive type stops nesting instead of recursing forever.
+#[test]
+fn test_recursive_named_test_value_terminates() {
+    let out = compile("node = { value: uint, next: node }");
+    assert!(out.tests.contains("{} as Node"), "{}", out.tests);
+}
