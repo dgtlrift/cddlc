@@ -12,6 +12,8 @@ use cddlc_codegen::{
     primitive_to_rust, to_pascal_case, to_snake_case, AllocStrategy,
     Backend, CodegenError, CodegenOptions, CodegenOutput, IndentWriter,
 };
+use std::collections::HashSet;
+
 use cddlc_ir::{
     AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
     FieldDef, IrModule, LiteralValue, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
@@ -1304,6 +1306,7 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
 fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions) {
     let type_name = to_pascal_case(&e.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&e.name));
+    let mut used_tests = HashSet::from([format!("{test_name}_default")]);
 
     w.line("#[test]");
     w.line(&format!("fn {test_name}_default() {{"));
@@ -1322,7 +1325,6 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions
     // Test each variant
     for v in &e.variants {
         let vname     = to_pascal_case(&v.name);
-        let var_test  = format!("roundtrip_{}_{}", to_snake_case(&e.name), v.name.to_lowercase().replace('-', "_"));
         let construct = match &v.ty {
             TypeRef::Primitive(Primitive::Tstr) => {
                 let s = variant_str(v);
@@ -1349,6 +1351,8 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions
             _ => continue,
         };
 
+        let var_test = variant_test_name(&test_name, &v.name, &mut used_tests);
+
         w.blank();
         w.line("#[test]");
         w.line(&format!("fn {var_test}() {{"));
@@ -1364,6 +1368,27 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions
         w.dedent();
         w.line("}");
     }
+}
+
+/// Names the roundtrip test for one enum variant: `{test_name}_{variant}`,
+/// unless that is already taken in this enum — by the `Default` derive's
+/// `{test_name}_default` test (a variant named `default`, issue #16) or by a
+/// variant whose name differs only in case or `-`/`_`. A taken name becomes
+/// `{test_name}_variant_{variant}`, then gets a numeric suffix if needed.
+fn variant_test_name(test_name: &str, variant: &str, used: &mut HashSet<String>) -> String {
+    let variant = variant.to_lowercase().replace('-', "_");
+    let mut name = format!("{test_name}_{variant}");
+    if used.contains(&name) {
+        let base = format!("{test_name}_variant_{variant}");
+        name = base.clone();
+        let mut n = 2;
+        while used.contains(&name) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+    }
+    used.insert(name.clone());
+    name
 }
 
 fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, _opts: &CodegenOptions) {
@@ -2196,6 +2221,7 @@ fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &Codege
 fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule) {
     let type_name = to_pascal_case(&e.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&e.name));
+    let mut used_tests = HashSet::from([format!("{test_name}_default")]);
 
     w.line("#[test]");
     w.line(&format!("fn {test_name}_default() {{"));
@@ -2213,7 +2239,6 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
     });
     for v in &e.variants {
         let vname    = to_pascal_case(&v.name);
-        let var_test = format!("roundtrip_{}_{}", to_snake_case(&e.name), v.name.to_lowercase().replace('-', "_"));
         let construct = match &v.ty {
             _ if text_literal(v).is_some() && all_unit => format!("{type_name}::{vname}"),
             _ if text_literal(v).is_some() => {
@@ -2228,6 +2253,8 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
             TypeRef::Primitive(Primitive::Null) => format!("{}::{}", type_name, vname),
             _ => continue,
         };
+
+        let var_test = variant_test_name(&test_name, &v.name, &mut used_tests);
 
         w.blank();
         w.line("#[test]");
