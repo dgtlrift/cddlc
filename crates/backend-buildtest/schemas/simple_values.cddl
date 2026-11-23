@@ -1,0 +1,13 @@
+; Reference schema: the prelude's simple-value types
+; `true` and `false` admit only that one boolean; `nil` is `null`
+; (RFC 8610 Appendix D, dgtlrift/cddlc#15)
+
+flag-map = {
+  id:        uint,
+  always:    true,
+  never:     false,
+  ? present: true,
+  ? absent:  false,
+  ? enabled: bool,
+  ? gone:    nil,
+}

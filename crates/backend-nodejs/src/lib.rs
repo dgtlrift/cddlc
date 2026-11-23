@@ -11,7 +11,7 @@ use cddlc_codegen::{
     GeneratedFile, IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, IrModule, LiteralValue, Occurrence,
+    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, FieldDef, IrModule, LiteralValue, Occurrence,
     Primitive, StructDef, TypeDef, TypeRef,
 };
 
@@ -258,6 +258,13 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.dedent();
     w.line("}");
 
+    if module_has_bool_literal(module) {
+        w.blank();
+        for line in BOOL_LITERAL_HELPER.lines() {
+            w.line(line);
+        }
+    }
+
     // JSON base64url helpers
     if opts.is_json() {
         w.blank();
@@ -324,7 +331,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         } else {
             ""
         };
-        let ty = ts_field_type(&f.ty, &f.occurrence, opts);
+        let ty = ts_struct_field_type(f, opts);
         let prop = to_snake_case(&f.name);
         w.line(&format!("readonly {prop}{opt}: {ty};"));
     }
@@ -451,14 +458,14 @@ fn emit_struct_decode_json(
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
         let key = f.name.as_str();
-        let ty = ts_field_type(&f.ty, &f.occurrence, opts);
+        let ty = ts_struct_field_type(f, opts);
         match &f.occurrence {
             Occurrence::Optional => {
                 w.line(&format!(
                     "const {local}: {ty} | undefined = m[{key:?}] != null"
                 ));
                 w.indent();
-                let conv = ts_json_decode_expr(&f.ty, &format!("m[{key:?}]"), key, opts);
+                let conv = pin_bool_literal(f, ts_json_decode_expr(&f.ty, &format!("m[{key:?}]"), key, opts));
                 w.line(&format!("? {conv}"));
                 w.line(": undefined;");
                 w.dedent();
@@ -467,7 +474,7 @@ fn emit_struct_decode_json(
                 w.line(&format!(
                     "if (m[{key:?}] == null) throw new Error('Missing field {key}');"
                 ));
-                let conv = ts_json_decode_expr(&f.ty, &format!("m[{key:?}]"), key, opts);
+                let conv = pin_bool_literal(f, ts_json_decode_expr(&f.ty, &format!("m[{key:?}]"), key, opts));
                 w.line(&format!("const {local}: {ty} = {conv};"));
                 emit_ts_validation(w, &f.constraints, &local, key, opts.is_json());
             }
@@ -524,7 +531,7 @@ fn emit_struct_decode_cbor(
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
         let key = f.name.as_str();
-        let ty = ts_field_type(&f.ty, &f.occurrence, opts);
+        let ty = ts_struct_field_type(f, opts);
         match &f.occurrence {
             Occurrence::Optional => {
                 // Encoder writes CBOR null for absent fields; treat both null and
@@ -534,7 +541,7 @@ fn emit_struct_decode_cbor(
                     key
                 ));
                 w.indent();
-                let conv = ts_convert_expr(&f.ty, &format!("m[{:?}]", key), opts);
+                let conv = pin_bool_literal(f, ts_convert_expr(&f.ty, &format!("m[{:?}]", key), opts));
                 w.line(&format!("? {conv}"));
                 w.line(": undefined;");
                 w.dedent();
@@ -544,7 +551,7 @@ fn emit_struct_decode_cbor(
                     "if (m[{:?}] == null) throw new Error('Missing field {key}');",
                     key
                 ));
-                let conv = ts_convert_expr(&f.ty, &format!("m[{:?}]", key), opts);
+                let conv = pin_bool_literal(f, ts_convert_expr(&f.ty, &format!("m[{:?}]", key), opts));
                 w.line(&format!("const {local}: {ty} = {conv};"));
                 emit_ts_validation(w, &f.constraints, &local, key, opts.is_json());
             }
@@ -1356,6 +1363,62 @@ fn ts_literal(v: &LiteralValue, json: bool) -> String {
     }
 }
 
+// ── `true` / `false` fields ───────────────────────────────────────────────────
+
+/// Checks a decoded boolean against the one value a `true` / `false` field admits.
+const BOOL_LITERAL_HELPER: &str = r#"/** A field typed `true` or `false` admits only that one value. */
+function expectBoolLiteral<T extends boolean>(v: boolean, want: T, at: string): T {
+  if (v !== want) throw new ValidationError(at, `must equal ${want}`);
+  return want;
+}"#;
+
+/// The value a field typed `true` or `false` must have (dgtlrift/cddlc#15).
+fn bool_literal(f: &FieldDef) -> Option<bool> {
+    let lit = f.constraints.iter().find_map(|c| match c {
+        Constraint::Eq(LiteralValue::Bool(b)) => Some(*b),
+        _ => None,
+    });
+    match (&f.ty, &f.occurrence) {
+        (TypeRef::Primitive(Primitive::Bool), Occurrence::Required | Occurrence::Optional) => lit,
+        _ => None,
+    }
+}
+
+fn module_has_bool_literal(module: &IrModule) -> bool {
+    module.types.values().any(|def| match def {
+        TypeDef::Struct(s) => s.fields.iter().any(|f| bool_literal(f).is_some()),
+        _ => false,
+    })
+}
+
+/// A struct field's TypeScript type: the literal `true` / `false` for a field
+/// that admits only that value, else the type of its `TypeRef`.
+fn ts_struct_field_type(f: &FieldDef, opts: &CodegenOptions) -> String {
+    match bool_literal(f) {
+        Some(b) => b.to_string(),
+        None => ts_field_type(&f.ty, &f.occurrence, opts),
+    }
+}
+
+/// Wraps a field's decode expression so a `true` / `false` field rejects the other value.
+fn pin_bool_literal(f: &FieldDef, conv: String) -> String {
+    match bool_literal(f) {
+        Some(b) => format!("expectBoolLiteral({conv}, {b}, {:?})", f.name.as_str()),
+        None => conv,
+    }
+}
+
+/// A roundtrip-test value for a `true` / `false` field: the literal when the
+/// field is required, or in the explicit-values test; else absent.
+fn bool_literal_value(f: &FieldDef, explicit: bool) -> Option<String> {
+    let b = bool_literal(f)?;
+    Some(if explicit || matches!(f.occurrence, Occurrence::Required) {
+        b.to_string()
+    } else {
+        "undefined".into()
+    })
+}
+
 // ── TypeScript type helpers ───────────────────────────────────────────────────
 
 fn ts_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
@@ -1483,7 +1546,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
     w.indent();
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
-        let val = ts_default_value(&f.ty, &f.occurrence, opts);
+        let val = bool_literal_value(f, false).unwrap_or_else(|| ts_default_value(&f.ty, &f.occurrence, opts));
         w.line(&format!("{prop}: {val},"));
     }
     w.dedent();
@@ -1501,7 +1564,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
     w.indent();
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
-        let val = ts_explicit_value(&f.ty, &f.occurrence, opts);
+        let val = bool_literal_value(f, true).unwrap_or_else(|| ts_explicit_value(&f.ty, &f.occurrence, opts));
         w.line(&format!("{prop}: {val},"));
     }
     w.dedent();
@@ -1520,7 +1583,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
         w.indent();
         for f in &s.fields {
             let prop = to_snake_case(&f.name);
-            let v = ts_default_value(&f.ty, &f.occurrence, opts);
+            let v = bool_literal_value(f, false).unwrap_or_else(|| ts_default_value(&f.ty, &f.occurrence, opts));
             w.line(&format!("{prop}: {v},"));
         }
         w.dedent();
