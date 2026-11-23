@@ -1666,6 +1666,13 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("    }");
     w.line("}");
 
+    if module_has_optional_null(module) {
+        w.blank();
+        for line in PRESENT_NULL_HELPER.lines() {
+            w.line(line);
+        }
+    }
+
     for (name, def) in &module.types {
         w.blank();
         match def {
@@ -1731,6 +1738,27 @@ fn bytes_with(shape: ByteShape, occ: &Occurrence) -> (&'static str, bool) {
     }
 }
 
+/// Decodes an optional `null` member (`? gone: null`) that is present as `Some(())`.
+/// Serde's own `Option` reads `null` as `None`, the same as an absent member;
+/// `#[serde(default)]` keeps absent members `None`.
+const PRESENT_NULL_HELPER: &str = r#"/// A present `null` member decodes as `Some(())`; an absent one stays `None`.
+fn present_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<()>, D::Error> {
+    <()>::deserialize(d).map(Some)
+}"#;
+
+/// Whether a member is optional and typed `null` / `undefined` (a Rust `Option<()>`).
+fn is_optional_null(ty: &TypeRef, occ: &Occurrence) -> bool {
+    matches!(occ, Occurrence::Optional)
+        && matches!(ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined))
+}
+
+fn module_has_optional_null(module: &IrModule) -> bool {
+    module.types.values().any(|def| match def {
+        TypeDef::Struct(s) => s.fields.iter().any(|f| is_optional_null(&f.ty, &f.occurrence)),
+        _ => false,
+    })
+}
+
 fn serde_field_attrs_json(
     fname_cddl: &str,
     fname_rust: &str,
@@ -1753,6 +1781,12 @@ fn serde_field_attrs_json(
             // would fail to decode without `default`.
             attrs.push("default".into());
         }
+    }
+    // An optional `null` member: serde reads a present `null` into `None` for any
+    // `Option`, so it would decode the same as an absent member (dgtlrift/cddlc#22).
+    if is_optional_null(ty, occ) {
+        attrs.push("default".into());
+        attrs.push("deserialize_with = \"present_null\"".into());
     }
     // Skip None for optional
     if matches!(occ, Occurrence::Optional) {
