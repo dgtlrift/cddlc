@@ -699,3 +699,41 @@ fn test_tagged_member_test_value_uses_inner_type() {
     assert!(out.tests.contains("timestamp: 0n,"), "{}", out.tests);
     assert!(!out.tests.contains("timestamp: null,"), "{}", out.tests);
 }
+
+/// Issue #27: cborg throws on tags it has no decoder for, so the module registers a
+/// `CborTagged` decoder for every tag it uses and decoders unwrap it with `expectTag`.
+#[test]
+fn test_cbor_tags_decode_through_cbor_tagged() {
+    let out = compile(
+        "outer = { stamp: #6.1(uint), inner: tagged-sensor, list: stamps }\n\
+         tagged-sensor = #6.100({ id: uint })\n\
+         stamps = #6.200([* uint])",
+    );
+    let src = &out.source;
+    assert!(src.contains("export class CborTagged {"), "{src}");
+    assert!(src.contains("const CBOR_DECODE_OPTIONS = { tags: cborTagDecoders([\n  1,\n  100,\n  200,\n]) };"), "{src}");
+    assert!(src.contains("return fromCborOuter(cborgDecode(data, CBOR_DECODE_OPTIONS));"), "{src}");
+
+    // A top-level tag, a tagged member, and a tagged array are each unwrapped.
+    assert!(src.contains("const map: unknown = expectTag(raw, 100, \"TaggedSensor\");"), "{src}");
+    assert!(src.contains("expectTag(m[\"stamp\"], 1, 'tagged value')"), "{src}");
+    assert!(src.contains("const arr: unknown = expectTag(raw, 200, \"Stamps\");"), "{src}");
+
+    // Nested named values are converted in place, never re-encoded.
+    assert!(src.contains("fromCborTaggedSensor(m[\"inner\"])"), "{src}");
+    assert!(!src.contains("(cborgEncode(m["), "{src}");
+    assert!(!src.contains("Expected CBOR tag'"), "{src}");
+}
+
+/// Issue #27: an array is encoded element by element, so named and tagged
+/// elements keep their own encoding; a tagged array writes a real tag.
+#[test]
+fn test_cbor_array_encodes_elements_with_their_encoders() {
+    let out = compile("stamps = #6.200([* timestamp])\ntimestamp = #6.1(uint)");
+    let src = &out.source;
+    assert!(
+        src.contains("enc.tag(200);\n  enc.startArray(val.length);\n  for (const item of val) {\n    enc.writeBytes(encodeTimestamp(item));"),
+        "{src}"
+    );
+    assert!(!src.contains("cborgEncode([200n"), "{src}");
+}

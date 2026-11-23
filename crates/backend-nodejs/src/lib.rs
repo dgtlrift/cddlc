@@ -206,6 +206,93 @@ fn emit_tsconfig() -> String {
     .to_owned()
 }
 
+// ── CBOR tags ─────────────────────────────────────────────────────────────────
+
+/// cborg throws on any tag it has no decoder for, so each tag the module uses gets
+/// one that wraps the tagged value in a `CborTagged`; decoders then unwrap it with
+/// `expectTag`. Nested values are converted from the decoded tree (`fromCborX`)
+/// and never re-encoded, so a `CborTagged` never has to be written back out.
+const CBOR_TAG_HELPERS: &str = r#"/** A CBOR tag (major type 6) and the value it wraps, as decoded. */
+export class CborTagged {
+  constructor(readonly tag: number, readonly value: unknown) {}
+}
+
+function cborTagDecoders(tags: number[]): ((inner: unknown) => unknown)[] {
+  const decoders: ((inner: unknown) => unknown)[] = [];
+  for (const tag of tags) decoders[tag] = (inner: unknown) => new CborTagged(tag, inner);
+  return decoders;
+}
+
+/** The value inside CBOR tag `tag`; throws if `v` is not that tag. */
+function expectTag(v: unknown, tag: number, at: string): unknown {
+  if (!(v instanceof CborTagged)) throw new Error(`${at}: expected CBOR tag ${tag}`);
+  if (v.tag !== tag) throw new Error(`${at}: expected CBOR tag ${tag}, got tag ${v.tag}`);
+  return v.value;
+}"#;
+
+/// Every CBOR tag number the module uses, on a type or inside a type reference.
+fn module_tags(module: &IrModule) -> Vec<u64> {
+    fn walk(ty: &TypeRef, out: &mut Vec<u64>) {
+        match ty {
+            TypeRef::Tagged(tag, inner) => {
+                out.push(tag.0);
+                walk(inner, out);
+            }
+            TypeRef::Choice(alts) => alts.iter().for_each(|t| walk(t, out)),
+            TypeRef::Primitive(_) | TypeRef::Named(_) => {}
+        }
+    }
+    let mut out = Vec::new();
+    for (_, def) in &module.types {
+        match def {
+            TypeDef::Struct(s) => {
+                out.extend(s.tagged.map(|t| t.0));
+                s.fields.iter().for_each(|f| walk(&f.ty, &mut out));
+            }
+            TypeDef::Enum(e) => {
+                out.extend(e.tagged.map(|t| t.0));
+                e.variants.iter().for_each(|v| walk(&v.ty, &mut out));
+            }
+            TypeDef::Alias(a) => {
+                out.extend(a.tagged.map(|t| t.0));
+                walk(&a.ty, &mut out);
+            }
+            TypeDef::Array(a) => {
+                out.extend(a.tagged.map(|t| t.0));
+                walk(&a.element, &mut out);
+            }
+            TypeDef::Map(_) => {}
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Opens a CBOR decoder: `decodeX(data)` decodes the bytes and hands the value to
+/// `fromCborX(raw)`, whose body the caller writes (and closes) next.
+fn open_cbor_decoder(w: &mut IndentWriter, name: &str, type_name: &str) {
+    let dname = decode_fn_name(name);
+    let from = from_cbor_fn_name(name);
+    w.line(&format!("export function {dname}(data: Uint8Array): {type_name} {{"));
+    w.indent();
+    w.line(&format!("return {from}(cborgDecode(data, CBOR_DECODE_OPTIONS));"));
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("/** Converts an already-decoded CBOR value to a `{type_name}`. */"));
+    w.line(&format!("export function {from}(raw: unknown): {type_name} {{"));
+    w.indent();
+}
+
+/// The CBOR value under a type's own tag, or the value itself if it has none.
+fn untag_expr(tag: Option<cddlc_ir::CborTag>, type_name: &str) -> String {
+    match tag {
+        Some(t) => format!("expectTag(raw, {}, {type_name:?})", t.0),
+        None => "raw".into(),
+    }
+}
+
 // ── Source file ───────────────────────────────────────────────────────────────
 
 fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
@@ -257,6 +344,23 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("}");
     w.dedent();
     w.line("}");
+
+    if !opts.is_json() {
+        w.blank();
+        for line in CBOR_TAG_HELPERS.lines() {
+            w.line(line);
+        }
+        w.blank();
+        let tags = module_tags(module);
+        w.line("/** cborg decode options: each CBOR tag this module uses decodes to a `CborTagged`. */");
+        w.line("const CBOR_DECODE_OPTIONS = { tags: cborTagDecoders([");
+        w.indent();
+        for t in &tags {
+            w.line(&format!("{t},"));
+        }
+        w.dedent();
+        w.line("]) };");
+    }
 
     if module_has_bool_literal(module) {
         w.blank();
@@ -346,7 +450,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     } else {
         emit_struct_encode_cbor(w, s, &iname, &fname, opts);
         w.blank();
-        emit_struct_decode_cbor(w, s, &iname, &dname, opts);
+        emit_struct_decode_cbor(w, s, &iname, opts);
     }
 }
 
@@ -499,25 +603,10 @@ fn emit_struct_decode_cbor(
     w: &mut IndentWriter,
     s: &StructDef,
     iname: &str,
-    dname: &str,
     opts: &CodegenOptions,
 ) {
-    w.line(&format!(
-        "export function {dname}(data: Uint8Array): {iname} {{"
-    ));
-    w.indent();
-
-    if let Some(tag) = s.tagged {
-        w.line("const decoded = cborgDecode(data);");
-        w.line("if (!Array.isArray(decoded) || decoded.length < 2) throw new Error('Expected CBOR tag');");
-        w.line(&format!(
-            "if (decoded[0] !== {}n) throw new Error('Unexpected CBOR tag');",
-            tag.0
-        ));
-        w.line("const map: unknown = decoded[1];");
-    } else {
-        w.line("const map: unknown = cborgDecode(data);");
-    }
+    open_cbor_decoder(w, &s.name, iname);
+    w.line(&format!("const map: unknown = {};", untag_expr(s.tagged, iname)));
 
     w.line("if (typeof map !== 'object' || map === null || Array.isArray(map)) {");
     w.indent();
@@ -792,24 +881,15 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     w.blank();
 
     // Decode function
-    w.line(&format!(
-        "export function {dname}(data: Uint8Array): {type_name} {{"
-    ));
-    w.indent();
     if opts.is_json() {
+        w.line(&format!(
+            "export function {dname}(data: Uint8Array): {type_name} {{"
+        ));
+        w.indent();
         w.line("const inner: unknown = JSON.parse(new TextDecoder().decode(data));");
     } else {
-        w.line("const val: unknown = cborgDecode(data);");
-        if let Some(tag) = e.tagged {
-            w.line("if (!Array.isArray(val)) throw new Error('Expected CBOR tag');");
-            w.line(&format!(
-                "if (val[0] !== {}n) throw new Error('Unexpected CBOR tag');",
-                tag.0
-            ));
-            w.line("const inner: unknown = val[1];");
-        } else {
-            w.line("const inner: unknown = val;");
-        }
+        open_cbor_decoder(w, &e.name, &type_name);
+        w.line(&format!("const inner: unknown = {};", untag_expr(e.tagged, &type_name)));
     }
 
     let has_str = e
@@ -957,21 +1037,32 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
                 "return new TextEncoder().encode(JSON.stringify(val.map(item => {conv})));"
             ));
         }
-    } else if let Some(tag) = a.tagged {
-        w.line(&format!("return cborgEncode([{}n, val]);", tag.0));
     } else {
-        w.line("return cborgEncode(val);");
+        // Element by element, so named and tagged elements go through their own
+        // encoders (a plain `cborgEncode(val)` would drop their tags).
+        w.line("const enc = new CborEncoder();");
+        if let Some(tag) = a.tagged {
+            w.line(&format!("enc.tag({});", tag.0));
+        }
+        w.line("enc.startArray(val.length);");
+        w.line("for (const item of val) {");
+        w.indent();
+        emit_ts_encode_primitive_or_named(w, &a.element, "item", opts);
+        w.dedent();
+        w.line("}");
+        w.line("enc.endArray();");
+        w.line("return enc.finish();");
     }
     w.dedent();
     w.line("}");
     w.blank();
 
     // Decode
-    w.line(&format!(
-        "export function {dname}(data: Uint8Array): {type_name} {{"
-    ));
-    w.indent();
     if opts.is_json() {
+        w.line(&format!(
+            "export function {dname}(data: Uint8Array): {type_name} {{"
+        ));
+        w.indent();
         w.line("const arr: unknown = JSON.parse(new TextDecoder().decode(data));");
         w.line("if (!Array.isArray(arr)) throw new Error('Expected JSON array');");
         let conv = ts_json_decode_expr(&a.element, "item", &format!("{type_name} item"), opts);
@@ -979,13 +1070,8 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
             "return (arr as unknown[]).map(item => {conv}) as {type_name};"
         ));
     } else {
-        if let Some(_tag) = a.tagged {
-            w.line("const decoded = cborgDecode(data);");
-            w.line("if (!Array.isArray(decoded) || decoded[0] !== {}n) throw new Error('Unexpected tag');", );
-            w.line("const arr: unknown = decoded[1];");
-        } else {
-            w.line("const arr: unknown = cborgDecode(data);");
-        }
+        open_cbor_decoder(w, &a.name, &type_name);
+        w.line(&format!("const arr: unknown = {};", untag_expr(a.tagged, &type_name)));
         w.line("if (!Array.isArray(arr)) throw new Error('Expected CBOR array');");
         let conv = ts_convert_expr(&a.element, "item", opts);
         w.line(&format!(
@@ -1030,16 +1116,16 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
         w.blank();
-        w.line(&format!(
-            "export function {dname}(data: Uint8Array): {type_name} {{"
-        ));
-        w.indent();
         if opts.is_json() {
+            w.line(&format!(
+                "export function {dname}(data: Uint8Array): {type_name} {{"
+            ));
+            w.indent();
             w.line("const raw: unknown = JSON.parse(new TextDecoder().decode(data));");
             let conv = ts_json_decode_expr(&a.ty, "raw", &type_name, opts);
             w.line(&format!("return {conv};"));
         } else {
-            w.line("const raw: unknown = cborgDecode(data);");
+            open_cbor_decoder(w, &a.name, &type_name);
             let conv = ts_convert_expr(&a.ty, "raw", opts);
             w.line(&format!("return {conv};"));
         }
@@ -1095,27 +1181,17 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     w.blank();
 
     // Decode with validation
-    w.line(&format!(
-        "export function {dname}(data: Uint8Array): {type_name} {{"
-    ));
-    w.indent();
     if opts.is_json() {
+        w.line(&format!(
+            "export function {dname}(data: Uint8Array): {type_name} {{"
+        ));
+        w.indent();
         w.line("const raw: unknown = JSON.parse(new TextDecoder().decode(data));");
         let conv = ts_json_decode_expr(&a.ty, "raw", &type_name, opts);
         w.line(&format!("const val = {conv};"));
-    } else if let Some(tag) = a.tagged {
-        w.line("const decoded = cborgDecode(data);");
-        w.line("if (!Array.isArray(decoded)) throw new Error('Expected CBOR tag');");
-        w.line(&format!(
-            "if (decoded[0] !== {}n) throw new Error('Unexpected CBOR tag');",
-            tag.0
-        ));
-        w.line("const raw: unknown = decoded[1];");
-        let conv = ts_convert_expr(&a.ty, "raw", opts);
-        w.line(&format!("const val = {conv};"));
     } else {
-        w.line("const raw: unknown = cborgDecode(data);");
-        let conv = ts_convert_expr(&a.ty, "raw", opts);
+        open_cbor_decoder(w, &a.name, &type_name);
+        let conv = ts_convert_expr(&a.ty, &untag_expr(a.tagged, &type_name), opts);
         w.line(&format!("const val = {conv};"));
     }
     w.line(&format!("return validate{type_name}(val);"));
@@ -1267,11 +1343,11 @@ fn emit_ts_validation(
 fn ts_convert_expr(ty: &TypeRef, raw_expr: &str, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(p) => ts_convert_primitive(p, raw_expr),
-        TypeRef::Named(n) => {
-            let df = decode_fn_name(n);
-            format!("{df}(cborgEncode({raw_expr}))")
+        TypeRef::Named(n) => format!("{}({raw_expr})", from_cbor_fn_name(n)),
+        TypeRef::Tagged(tag, inner) => {
+            let untagged = format!("expectTag({raw_expr}, {}, 'tagged value')", tag.0);
+            ts_convert_expr(inner, &untagged, opts)
         }
-        TypeRef::Tagged(_, inner) => ts_convert_expr(inner, raw_expr, opts),
         TypeRef::Choice(_) => format!("{raw_expr} as unknown"),
     }
 }
@@ -1471,6 +1547,10 @@ fn ts_primitive(p: &Primitive, opts: &CodegenOptions) -> &'static str {
 
 fn encode_fn_name(name: &str) -> String {
     format!("encode{}", to_pascal_case(name))
+}
+
+fn from_cbor_fn_name(name: &str) -> String {
+    format!("fromCbor{}", to_pascal_case(name))
 }
 
 fn decode_fn_name(name: &str) -> String {
