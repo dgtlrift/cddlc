@@ -1013,6 +1013,12 @@ impl<'m> LowerCtx<'m> {
                 constraints.push(Constraint::Eq(lower_value(v)));
             }
         }
+        // So are the prelude's `true` and `false` (dgtlrift/cddlc#15).
+        if let Some(b) = bool_value_name(&t1.base.node) {
+            if t1.ops.is_empty() {
+                constraints.push(Constraint::Eq(LiteralValue::Bool(b)));
+            }
+        }
         for op in &t1.ops {
             let cs = lower_type_op(op, &t1.base.node, rule_name, None, &mut self.warnings)?;
             constraints.extend(cs);
@@ -1292,5 +1298,18 @@ fn type_to_name(ty: &Type) -> String {
         }
     } else {
         "choice".into()
+    }
+}
+
+/// The value of a bare `true` or `false` prelude type name, which (RFC 8610
+/// Appendix D) admit only that one value.
+fn bool_value_name(t2: &Type2) -> Option<bool> {
+    match t2 {
+        Type2::Typename { name, args } if args.is_empty() => match name.node.as_str() {
+            "true"  => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
     }
 }
