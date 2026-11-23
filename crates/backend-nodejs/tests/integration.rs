@@ -642,6 +642,32 @@ fn test_fields_named_like_decoder_locals() {
     }
 }
 
+/// Issue #15: a member typed `true` is the TS literal type `true`, and decoding
+/// rejects `false` whether the member is required or optional.
+#[test]
+fn test_member_typed_true_is_literal_true() {
+    let src = "flag-map = { id: uint, always: true, ? present: true, ? off: false, ? enabled: bool }";
+    for out in [compile(src), compile_json(src)] {
+        let ts = &out.source;
+        assert!(ts.contains("readonly always: true;"), "{ts}");
+        assert!(ts.contains("readonly present?: true;"), "{ts}");
+        assert!(ts.contains("readonly off?: false;"), "{ts}");
+        assert!(ts.contains("readonly enabled?: boolean;"), "{ts}");
+        assert!(ts.contains("function expectBoolLiteral<T extends boolean>"), "{ts}");
+        assert!(ts.contains(", true, \"present\")"), "{ts}");
+        assert!(!ts.contains("Uint8Array;"), "{ts}");
+        // The roundtrip tests only ever build the allowed value.
+        assert!(out.tests.contains("always: true,"), "{}", out.tests);
+        assert!(!out.tests.contains("always: false,"), "{}", out.tests);
+    }
+}
+
+#[test]
+fn test_bool_literal_helper_only_when_used() {
+    let out = compile("rec = { ok: bool }");
+    assert!(!out.source.contains("expectBoolLiteral"));
+}
+
 // ── Issue #19: generated package's test setup ─────────────────────────────────
 
 /// jest runs as real ESM (cborg exports only an `import` entry) and only

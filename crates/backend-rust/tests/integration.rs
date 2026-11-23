@@ -549,6 +549,25 @@ fn test_size_on_uint_checks_value_not_len() {
     assert!(!out.lib_rs.contains("val.len()"), "{}", out.lib_rs);
 }
 
+/// Issue #15: a member typed `true` is a bool that must be `true`, not bytes:
+/// CBOR checks it on decode, JSON uses a marker type that only (de)serializes `true`.
+#[test]
+fn test_member_typed_true_is_a_bool() {
+    let src = "flag-map = { id: uint, ? present: true, ? enabled: bool }";
+
+    let cbor = compile(src).lib_rs;
+    assert!(cbor.contains("pub present: Option<bool>,"), "{cbor}");
+    assert!(cbor.contains("validation failed for field 'present'"), "{cbor}");
+    assert!(cbor.contains("pub enabled: Option<bool>,"), "{cbor}");
+    assert!(!cbor.contains("Vec<u8>"), "{cbor}");
+
+    let json = compile_with_opts(src, json_opts()).lib_rs;
+    assert!(json.contains("pub present: Option<FlagMapPresent>,"), "{json}");
+    assert!(json.contains("pub const VALUE: bool = true;"), "{json}");
+    assert!(json.contains("pub enabled: Option<bool>,"), "{json}");
+    assert!(!json.contains("base64url_serde::option"), "{json}");
+}
+
 /// Issue #16: a choice value named `default` must not reuse the name of the
 /// `Default` derive's test, in either wire format.
 #[test]
