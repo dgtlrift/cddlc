@@ -548,3 +548,16 @@ fn test_size_on_uint_checks_value_not_len() {
     assert!(out.lib_rs.contains("val <= 4294967295"), "{}", out.lib_rs);
     assert!(!out.lib_rs.contains("val.len()"), "{}", out.lib_rs);
 }
+
+/// Issue #16: a choice value named `default` must not reuse the name of the
+/// `Default` derive's test, in either wire format.
+#[test]
+fn test_roundtrip_variant_named_default_gets_unique_test_name() {
+    let src = "record = { decided_by: \"tags\" / \"default\" }";
+    for out in [compile(src), compile_with_opts(src, json_opts())] {
+        let rt = &out.roundtrip_rs;
+        assert_eq!(rt.matches("fn roundtrip_record_decided_by_default()").count(), 1, "{rt}");
+        assert!(rt.contains("fn roundtrip_record_decided_by_variant_default()"), "{rt}");
+        assert!(rt.contains("fn roundtrip_record_decided_by_tags()"), "{rt}");
+    }
+}
