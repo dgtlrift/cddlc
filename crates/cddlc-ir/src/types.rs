@@ -305,8 +305,10 @@ impl Primitive {
     /// Map a CDDL prelude name to a Primitive.
     pub fn from_prelude(name: &str) -> Option<Self> {
         match name {
-            "bool"      => Some(Primitive::Bool),
-            "null"      => Some(Primitive::Null),
+            // `true` / `false` (#7.21 / #7.20) are bools that admit one value; the
+            // lowering adds the `.eq` that pins it (dgtlrift/cddlc#15).
+            "bool" | "true" | "false" => Some(Primitive::Bool),
+            "null" | "nil" => Some(Primitive::Null),
             "undefined" => Some(Primitive::Undefined),
             "uint"      => Some(Primitive::Uint),
             "int"       => Some(Primitive::Int),

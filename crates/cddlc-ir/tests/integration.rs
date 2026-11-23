@@ -521,3 +521,20 @@ fn test_inline_field_type_name_clash() {
     assert!(matches!(m.get("r-names"), Some(TypeDef::Alias(_))));
     assert!(matches!(m.get("r-names-type"), Some(TypeDef::Array(_))));
 }
+
+/// Issue #15: the prelude's `true` / `false` are bools pinned to one value, and
+/// `nil` is `null`; none of them falls through to bytes.
+#[test]
+fn test_true_false_nil_members_lower_to_bool_and_null() {
+    let m = compile("rec = { ? present: true, off: false, ? gone: nil, ? enabled: bool }");
+    let Some(TypeDef::Struct(s)) = m.get("rec") else { panic!("expected struct") };
+    let bool_ty = TypeRef::Primitive(Primitive::Bool);
+    assert_eq!(s.fields[0].ty, bool_ty);
+    assert_eq!(s.fields[0].constraints, vec![Constraint::Eq(cddlc_ir::LiteralValue::Bool(true))]);
+    assert_eq!(s.fields[1].ty, bool_ty);
+    assert_eq!(s.fields[1].constraints, vec![Constraint::Eq(cddlc_ir::LiteralValue::Bool(false))]);
+    assert_eq!(s.fields[2].ty, TypeRef::Primitive(Primitive::Null));
+    assert!(s.fields[2].constraints.is_empty());
+    assert_eq!(s.fields[3].ty, bool_ty);
+    assert!(s.fields[3].constraints.is_empty());
+}
