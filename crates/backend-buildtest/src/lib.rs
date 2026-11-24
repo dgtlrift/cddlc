@@ -346,111 +346,65 @@ pub fn build_nodejs(
     build_result(schema_name, test, files.len(), ms)
 }
 
-// ── Python build (syntax check) ───────────────────────────────────────────────
+// ── Python build (compile + pytest) ──────────────────────────────────────────
 
 pub fn build_python(
     work_dir:    &Path,
     files:       &[GeneratedFile],
     schema_name: &str,
 ) -> BuildOutcome {
-    // Try python3 then python
-    let python = match find_tool("python3").or_else(|_| find_tool("python")) {
-        Ok(p) => p,
-        Err(_) => return BuildOutcome::Skipped { reason: "python3/python not found in PATH".into() },
+    // `CDDLC_PYTHON` picks the interpreter (e.g. a venv's python); otherwise
+    // python3, then python, from PATH.
+    let python = match std::env::var("CDDLC_PYTHON") {
+        Ok(p) if !p.is_empty() => p,
+        _ => match find_tool("python3").or_else(|_| find_tool("python")) {
+            Ok(p) => p,
+            Err(_) => return BuildOutcome::Skipped { reason: "python3/python not found in PATH".into() },
+        },
     };
+
+    // The generated code needs cbor2 >= 6.0 (`semantic_decoders`) and the
+    // tests need pytest. Without them nothing meaningful can run, so report
+    // a skip rather than a pass.
+    let deps = Command::new(&python)
+        .args(["-c", "import cbor2, pytest, importlib.metadata as m; \
+                      assert int(m.version('cbor2').split('.')[0]) >= 6"])
+        .output();
+    if !deps.map(|o| o.status.success()).unwrap_or(false) {
+        return BuildOutcome::Skipped {
+            reason: format!("{python} lacks cbor2>=6.0 or pytest (set CDDLC_PYTHON to an interpreter that has both)"),
+        };
+    }
 
     write_files(work_dir, files).expect("write files");
 
-    // Find all .py source files
-    let py_files: Vec<PathBuf> = files.iter()
-        .filter(|f| f.path.ends_with(".py") && f.path.contains("/src/"))
-        .map(|f| work_dir.join(&f.path))
-        .collect();
-
-    if py_files.is_empty() {
-        return BuildOutcome::Skipped { reason: "no .py source files generated".into() };
-    }
+    let pkg_dir = files.iter()
+        .find(|f| f.path.ends_with("pyproject.toml"))
+        .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
+        .unwrap_or_else(|| work_dir.to_path_buf());
+    let src_dir = pkg_dir.join("src");
 
     let t0 = std::time::Instant::now();
 
-    // Step 1: syntax check with py_compile
-    for py in &py_files {
+    // Compile every generated file, then run the generated tests.
+    let steps: [(&str, Vec<&str>); 2] = [
+        ("compileall", vec!["-m", "compileall", "-q", "src", "tests"]),
+        ("pytest", vec!["-m", "pytest", "tests/", "-q"]),
+    ];
+    for (label, args) in steps {
         let out = run_cmd(
             Command::new(&python)
-                .args(["-m", "py_compile"])
-                .arg(py)
+                .args(&args)
+                .current_dir(&pkg_dir)
+                .env("PYTHONPATH", &src_dir)
         );
         if !out.status.success() {
             let (stdout, stderr) = format_output(&out);
             return BuildOutcome::Failed {
                 schema:    schema_name.into(),
-                stdout:    format!("[py_compile {}]\n{stdout}", py.display()),
+                stdout:    format!("[{label}]\n{stdout}"),
                 stderr,
                 exit_code: out.status.code(),
-            };
-        }
-    }
-
-    // Step 2: try pip install -e . if cbor2 available, otherwise just type-check
-    let pkg_dir = files.iter()
-        .find(|f| f.path.ends_with("pyproject.toml"))
-        .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
-        .unwrap_or_else(|| work_dir.to_path_buf());
-
-    // Check if cbor2 is already installed
-    let cbor2_check = Command::new(&python)
-        .args(["-c", "import cbor2"])
-        .output();
-
-    if cbor2_check.map(|o| o.status.success()).unwrap_or(false) {
-        // cbor2 available — do a full import check
-        let src_dir = pkg_dir.join("src");
-        for py in &py_files {
-            let rel = py.strip_prefix(&src_dir).unwrap_or(py);
-            let module = rel.to_string_lossy()
-                .trim_end_matches(".py")
-                .replace(['/', '\\'], ".")
-                .to_string();
-            let out = run_cmd(
-                Command::new(&python)
-                    .args(["-c", &format!("import sys; sys.path.insert(0, 'src'); import {module}")])
-                    .current_dir(&pkg_dir)
-            );
-            if !out.status.success() {
-                let (stdout, stderr) = format_output(&out);
-                let _ms = t0.elapsed().as_millis() as u64;
-                return BuildOutcome::Failed {
-                    schema:    schema_name.into(),
-                    stdout:    format!("[import {module}]\n{stdout}"),
-                    stderr,
-                    exit_code: out.status.code(),
-                };
-            }
-        }
-    }
-
-    // Step 3: run pytest if available
-    let pytest_available = Command::new(&python)
-        .args(["-m", "pytest", "--version"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if pytest_available {
-        let src_dir = pkg_dir.join("src");
-        let test = run_cmd(
-            Command::new(&python)
-                .args(["-m", "pytest", "tests/", "-q"])
-                .current_dir(&pkg_dir)
-                .env("PYTHONPATH", &src_dir)
-        );
-        if !test.status.success() {
-            let (stdout, stderr) = format_output(&test);
-            return BuildOutcome::Failed {
-                schema:    schema_name.into(),
-                stdout:    format!("[pytest]\n{stdout}"),
-                stderr,
-                exit_code: test.status.code(),
             };
         }
     }

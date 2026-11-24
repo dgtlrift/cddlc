@@ -381,8 +381,9 @@ fn test_build_nodejs() {
     assert_all_ok(&outcomes);
 }
 
-/// Build and test all schemas using the Python backend (py_compile + pytest if available).
-/// Requires: python3 in PATH; pytest optional but used when present
+/// Build and test all schemas using the Python backend (compileall + pytest).
+/// Requires: a Python with cbor2>=6.0 and pytest — python3 from PATH, or the
+/// interpreter named by CDDLC_PYTHON (e.g. a venv's bin/python). Skips otherwise.
 /// Run: cargo test -p backend-buildtest --test build_validation test_build_python -- --ignored --nocapture
 #[test]
 #[ignore]
@@ -392,6 +393,20 @@ fn test_build_python() {
     eprintln!("\n=== Python build test ===");
     let outcomes = run_build_tests(&PythonBackend, |d, f, n| build_python(d, f, n), &opts, tmp.path());
     print_summary("Python", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
+/// Build and test all schemas using the Python backend's JSON output.
+/// Requires: as test_build_python.
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_python_json -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_python_json() {
+    let tmp  = work_dir("python-json");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    eprintln!("\n=== Python JSON build test ===");
+    let outcomes = run_build_tests(&PythonBackend, |d, f, n| build_python(d, f, n), &opts, tmp.path());
+    print_summary("Python JSON", &outcomes);
     assert_all_ok(&outcomes);
 }
 
