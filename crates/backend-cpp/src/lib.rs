@@ -514,7 +514,22 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             let opt_fields: Vec<_> = fields.iter()
                 .filter(|f| matches!(f.occurrence, Occurrence::Optional))
                 .collect();
-            if opt_fields.is_empty() {
+            // A record (RFC 8610 §3.4) is an array of the members' values, in
+            // order; optional members come last, so one present after an absent
+            // one can't be written.
+            let record = s.encoding == cddlc_ir::StructEncoding::Array;
+            if record {
+                for pair in opt_fields.windows(2) {
+                    w.line(&format!(
+                        "if (val.{}.has_value() && !val.{}.has_value()) return -1;",
+                        to_snake_case(&pair[1].name), to_snake_case(&pair[0].name)
+                    ));
+                }
+                let opt_sum: String = opt_fields.iter()
+                    .map(|f| format!(" + (val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
+                    .collect();
+                w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});"));
+            } else if opt_fields.is_empty() {
                 w.line(&format!("nanocbor_fmt_map(enc, {req_count}u);"));
             } else {
                 let opt_parts: Vec<String> = opt_fields.iter()
@@ -527,12 +542,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (val.{fname}.has_value()) {{"));
                     w.indent();
-                    w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str()));
+                    if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
                     emit_cpp_encode_field(w, &f.ty, &format!("(*val.{fname})"), &f.occurrence, opts);
                     w.dedent();
                     w.line("}");
                 } else {
-                    w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str()));
+                    if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
                     emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}"), &f.occurrence, opts);
                 }
             }
@@ -683,6 +698,32 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                 w.line("{ uint32_t tag;");
                 w.line("  if (nanocbor_get_tag(dec, &tag) < 0) return -1;");
                 w.line(&format!("  if (tag != {}) return -1; }}", tag.0));
+            }
+            if s.encoding == cddlc_ir::StructEncoding::Array {
+                // A record: the members' values in order; optional ones last.
+                w.line("nanocbor_value_t arr;");
+                w.line("if (nanocbor_enter_array(dec, &arr) < 0) return -1;");
+                for f in &s.fields {
+                    let fname = to_snake_case(&f.name);
+                    if matches!(f.occurrence, Occurrence::Optional) {
+                        w.line("if (!nanocbor_at_end(&arr)) {");
+                        w.indent();
+                        w.line(&format!("{} _v{{}};", cpp_typeref(&f.ty, opts)));
+                        emit_cpp_decode_field(w, &f.ty, "_v", &f.constraints, &f.name, "&arr", opts);
+                        w.line(&format!("out.{fname} = _v;"));
+                        w.dedent();
+                        w.line("}");
+                    } else {
+                        w.line("if (nanocbor_at_end(&arr)) return -1; /* missing item */");
+                        emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}"), &f.constraints, &f.name, "&arr", opts);
+                    }
+                }
+                w.line("if (!nanocbor_at_end(&arr)) return -1; /* too many items */");
+                w.line("nanocbor_leave_container(dec, &arr);");
+                w.line("return NANOCBOR_OK;");
+                w.dedent();
+                w.line("}");
+                return;
             }
             w.line("nanocbor_value_t map;");
             w.line("if (nanocbor_enter_map(dec, &map) < 0) return -1;");
@@ -1640,6 +1681,60 @@ fn cpp_json_from_val(ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: &I
 
 fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions, module: &IrModule) {
     match def {
+        TypeDef::Struct(s) if s.encoding == cddlc_ir::StructEncoding::Array => {
+            // A record (RFC 8610 §3.4): a JSON array of the members' values, in
+            // order; optional members come last, and one present after an absent
+            // one can't be written.
+            let ctype = to_pascal_case(&s.name);
+            let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+            w.line(&format!("std::vector<uint8_t> {ctype}::encode() const {{"));
+            w.indent();
+            for pair in optional.windows(2) {
+                w.line(&format!(
+                    "if (this->{}.has_value() && !this->{}.has_value()) throw std::runtime_error({:?});",
+                    to_snake_case(&pair[1].name), to_snake_case(&pair[0].name),
+                    format!("{ctype}.{}: set, but an optional member before it isn't", pair[1].name)
+                ));
+            }
+            w.line("nlohmann::json j = nlohmann::json::array();");
+            for f in &s.fields {
+                let fname = to_snake_case(&f.name);
+                if matches!(f.occurrence, Occurrence::Optional) {
+                    w.line(&format!(
+                        "if (this->{fname}.has_value()) j.push_back({});",
+                        cpp_json_to_val(&f.ty, &format!("this->{fname}.value()"), module)
+                    ));
+                } else {
+                    w.line(&format!("j.push_back({});", cpp_json_to_val(&f.ty, &format!("this->{fname}"), module)));
+                }
+            }
+            w.line("auto s = j.dump();");
+            w.line("return std::vector<uint8_t>(s.begin(), s.end());");
+            w.dedent();
+            w.line("}");
+            w.blank();
+
+            let required = s.fields.len() - optional.len();
+            w.line(&format!("{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"));
+            w.indent();
+            w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
+            w.line(&format!("if (!j.is_array() || j.size() < {required} || j.size() > {}) {{", s.fields.len()));
+            w.line(&format!("    throw std::runtime_error({:?});", format!("{ctype}: expected an array of {required} to {} items", s.fields.len())));
+            w.line("}");
+            w.line(&format!("{ctype} out{{}};"));
+            for (i, f) in s.fields.iter().enumerate() {
+                let fname = to_snake_case(&f.name);
+                let conv = cpp_json_from_val(&f.ty, &format!("j.at({i})"), opts, module);
+                if matches!(f.occurrence, Occurrence::Optional) {
+                    w.line(&format!("if (j.size() > {i}) out.{fname} = {conv};"));
+                } else {
+                    w.line(&format!("out.{fname} = {conv};"));
+                }
+            }
+            w.line("return out;");
+            w.dedent();
+            w.line("}");
+        }
         TypeDef::Struct(s) => {
             let ctype = to_pascal_case(&s.name);
             w.line(&format!("std::vector<uint8_t> {ctype}::encode() const {{"));

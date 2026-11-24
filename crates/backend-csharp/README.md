@@ -93,6 +93,9 @@ Requires .NET 8 SDK or later.
 
 ## Known gaps and future enhancements
 
+- **Record arrays** (`[a: uint, b: tstr]`, RFC 8610 §3.4) are still written as
+  maps, unlike the other backends (dgtlrift/cddlc#81); the fix is drafted and
+  awaits testing with the .NET SDK.
 - **Partial constraint validation**: `.size` and numeric range constraints emit
   `ArgumentException` guards; `.regexp` constraints reach the IR but are not emitted in
   the generated code.

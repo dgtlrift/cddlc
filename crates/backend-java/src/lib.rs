@@ -834,6 +834,25 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     w.line("}");
     w.blank();
 
+    if s.encoding == cddlc_ir::StructEncoding::Array {
+        emit_record_raw(w, s, &class);
+    } else {
+        emit_map_raw(w, cx, s, &class);
+    }
+    emit_encode_decode(w, cx, &class, false);
+
+    let byte_members: Vec<String> = s.fields.iter().map(|f| java_member_name(&f.name)).collect();
+    if s.fields.iter().any(|f| is_bytes(&f.ty)) {
+        emit_content_equality(w, &class, &byte_members);
+    }
+    emit_jsonb_codec(w, cx, &class);
+    w.dedent();
+    w.line("}");
+}
+
+/// A map struct's `toRaw` / `fromRaw`: its members by key, in schema order.
+fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
+    let class = class.to_owned();
     // toRaw
     w.line("/** This value in the format-neutral value model. */");
     w.line("public Object toRaw() {");
@@ -900,13 +919,71 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     w.line("return out;");
     w.dedent();
     w.line("}");
-    emit_encode_decode(w, cx, &class, false);
+}
 
-    let byte_members: Vec<String> = s.fields.iter().map(|f| java_member_name(&f.name)).collect();
-    if s.fields.iter().any(|f| is_bytes(&f.ty)) {
-        emit_content_equality(w, &class, &byte_members);
+/// A record's `toRaw` / `fromRaw` (RFC 8610 §3.4): a list of the members'
+/// values, in order. Optional members come last: those present are written up
+/// to the first absent one, and one set after an absent one is an error.
+fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class: &str) {
+    w.line("/** This value in the format-neutral value model: an array of its members. */");
+    w.line("public Object toRaw() {");
+    w.indent();
+    w.line("validate();");
+    w.line("List<Object> a = new ArrayList<>();");
+    let mut gap = false;
+    for f in &s.fields {
+        let member = format!("this.{}", java_member_name(&f.name));
+        if f.occurrence.is_required() {
+            w.line(&format!("a.add({});", to_raw(&f.ty, &member)));
+        } else {
+            if !gap {
+                w.line("boolean gap = false;");
+                gap = true;
+            }
+            w.line(&format!("if ({member} != null) {{"));
+            w.indent();
+            w.line(&format!(
+                "if (gap) throw Cddl.invalid({}, \"set, but an optional member before it isn't\");",
+                java_str(&format!("{class}.{}", f.name))
+            ));
+            w.line(&format!("a.add({});", to_raw(&f.ty, &member)));
+            w.dedent();
+            w.line("} else {");
+            w.line("    gap = true;");
+            w.line("}");
+        }
     }
-    emit_jsonb_codec(w, cx, &class);
+    let ret = match s.tagged { Some(t) => format!("Cddl.tag({}L, a)", t.0), None => "a".into() };
+    w.line(&format!("return {ret};"));
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let want = if required == s.fields.len() { required.to_string() } else { format!("{required} to {}", s.fields.len()) };
+    w.line(&format!("/** Reads a {class} from the value model, checking each member's type and constraints. */"));
+    w.line(&format!("public static {class} fromRaw(Object raw) {{"));
+    w.indent();
+    let raw = match s.tagged { Some(t) => format!("Cddl.untag(raw, {}L, {})", t.0, java_str(class)), None => "raw".into() };
+    w.line(&format!("List<Object> a = Cddl.asList({raw}, {});", java_str(class)));
+    w.line(&format!("if (a.size() < {required} || a.size() > {}) {{", s.fields.len()));
+    w.line(&format!("    throw Cddl.invalid({}, \"expected {want} items, got \" + a.size());", java_str(class)));
+    w.line("}");
+    let mut args = Vec::new();
+    for (i, f) in s.fields.iter().enumerate() {
+        let local = format!("f_{}", java_member_name(&f.name));
+        let at = format!("{class}.{}", f.name);
+        let conv = from_raw(&f.ty, &format!("a.get({i})"), &at, None);
+        if f.occurrence.is_required() {
+            w.line(&format!("{} {local} = {conv};", member_type(f)));
+        } else {
+            w.line(&format!("{} {local} = a.size() > {i} ? {conv} : null;", member_type(f)));
+        }
+        args.push(local);
+    }
+    w.line(&format!("{class} out = new {class}({});", args.join(", ")));
+    w.line("out.validate();");
+    w.line("return out;");
     w.dedent();
     w.line("}");
 }

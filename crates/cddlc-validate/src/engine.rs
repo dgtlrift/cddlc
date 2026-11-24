@@ -5,7 +5,7 @@ use base64::Engine as _;
 
 use cddlc_ir::{
     CborTag, Constraint, FieldDef, FieldKey, IrModule, LiteralValue, Occurrence,
-    Primitive, TypeDef, TypeRef,
+    Primitive, StructEncoding, TypeDef, TypeRef,
 };
 
 use crate::error::{PathSeg, ValidationError};
@@ -19,6 +19,7 @@ pub fn validate_named(
     module:    &IrModule,
     type_name: &str,
     value:     &Value,
+    require_tags: bool,
 ) -> Result<(), Vec<ValidationError>> {
     if type_name.is_empty() {
         return Err(vec![ValidationError::new(
@@ -33,7 +34,7 @@ pub fn validate_named(
         )]);
     };
 
-    let mut ctx = Ctx { module, errors: Vec::new(), depth: 0 };
+    let mut ctx = Ctx { module, errors: Vec::new(), depth: 0, require_tags };
     let mut path = Vec::new();
     ctx.check_def(def, value, &mut path);
     if ctx.errors.is_empty() { Ok(()) } else { Err(ctx.errors) }
@@ -43,6 +44,8 @@ struct Ctx<'m> {
     module:  &'m IrModule,
     errors:  Vec<ValidationError>,
     depth:   usize,
+    /// CBOR input: a tagged type requires its tag.
+    require_tags: bool,
 }
 
 impl<'m> Ctx<'m> {
@@ -54,7 +57,7 @@ impl<'m> Ctx<'m> {
     /// alternative of a type choice / enum variant without polluting the
     /// caller's error list on failure).
     fn try_check(&self, tr: &TypeRef, value: &Value, path: &[PathSeg]) -> Vec<ValidationError> {
-        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth };
+        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth, require_tags: self.require_tags };
         let mut p = path.to_vec();
         sub.check_typeref(tr, value, &mut p);
         sub.errors
@@ -64,7 +67,7 @@ impl<'m> Ctx<'m> {
     /// constraints (the literal value that discriminates it from sibling
     /// variants sharing the same underlying primitive — see [`cddlc_ir::EnumVariant`]).
     fn try_check_variant(&self, variant: &cddlc_ir::EnumVariant, value: &Value, path: &[PathSeg]) -> Vec<ValidationError> {
-        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth };
+        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth, require_tags: self.require_tags };
         let mut p = path.to_vec();
         sub.check_typeref(&variant.ty, value, &mut p);
         sub.check_constraints(&variant.constraints, &variant.ty, value, &mut p);
@@ -87,7 +90,10 @@ impl<'m> Ctx<'m> {
         match def {
             TypeDef::Struct(s) => {
                 if let Some(payload) = self.unwrap_tag(s.tagged, value, path) {
-                    self.check_struct(&s.fields, &s.name, payload, path);
+                    match s.encoding {
+                        StructEncoding::Map   => self.check_struct(&s.fields, &s.name, payload, path),
+                        StructEncoding::Array => self.check_record(&s.fields, &s.name, payload, path),
+                    }
                 }
             }
             TypeDef::Enum(e) => {
@@ -147,6 +153,27 @@ impl<'m> Ctx<'m> {
             if !fields.iter().any(|f| field_key_matches(&f.key, k)) {
                 self.err(path, format!("unknown field {}", describe_key(k)));
             }
+        }
+    }
+
+/// A record: a struct encoded as an array of its members' values, in order
+    /// (RFC 8610 §3.4). Optional members come last and may be left off.
+    fn check_record(&mut self, fields: &[FieldDef], name: &str, value: &Value, path: &mut Vec<PathSeg>) {
+        let Value::Array(items) = value else {
+            self.err(path, format!("expected an array for record '{name}', found {}", kind_name(value)));
+            return;
+        };
+        let required = fields.iter().filter(|f| f.occurrence.is_required()).count();
+        if items.len() < required || items.len() > fields.len() {
+            let want = if required == fields.len() { format!("{required}") } else { format!("{required} to {}", fields.len()) };
+            self.err(path, format!("record '{name}' needs {want} item(s), found {}", items.len()));
+            return;
+        }
+        for (i, (field, v)) in fields.iter().zip(items).enumerate() {
+            path.push(PathSeg::Index(i));
+            self.check_typeref(&field.ty, v, path);
+            self.check_constraints(&field.constraints, &field.ty, v, path);
+            path.pop();
         }
     }
 
@@ -250,8 +277,12 @@ impl<'m> Ctx<'m> {
                 self.err(path, format!("expected CBOR tag {}, found tag {n}", tag.0));
                 None
             }
-            // No native tag in the source (JSON, or an untagged CBOR item) —
-            // degrade and validate the payload directly. See lib.rs docs.
+            // CBOR: the tag is part of the type (RFC 8610 §3.6).
+            _ if self.require_tags => {
+                self.err(path, format!("expected CBOR tag {}, found an untagged {}", tag.0, kind_name(value)));
+                None
+            }
+            // JSON has no tags: validate the payload directly. See lib.rs docs.
             _ => Some(value),
         }
     }

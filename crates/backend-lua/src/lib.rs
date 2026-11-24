@@ -507,6 +507,12 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     w.line("end");
     w.blank();
 
+    if s.encoding == cddlc_ir::StructEncoding::Array {
+        emit_record_raw(w, cx, s, &t);
+        emit_encode_decode(w, cx, &t);
+        return;
+    }
+
     // to_raw
     w.line(&format!("--- A {t} as an item, its members in schema order."));
     w.line(&format!("function M.{t}.to_raw(v)"));
@@ -570,6 +576,73 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     w.dedent();
     w.line("end");
     emit_encode_decode(w, cx, &t);
+}
+
+/// A record's `to_raw` / `from_raw` (RFC 8610 §3.4): an array of the members'
+/// values, in order. Optional members come last: those present are written up
+/// to the first absent one, and one set after an absent one is an error.
+fn emit_record_raw(w: &mut IndentWriter, _cx: &Cx, s: &StructDef, t: &str) {
+    w.line(&format!("--- A {t} as an array item, its members in order."));
+    w.line(&format!("function M.{t}.to_raw(v)"));
+    w.indent();
+    w.line(&format!("M.{t}.validate(v)"));
+    w.line("local a = {}");
+    let mut gap = false;
+    for f in &s.fields {
+        let m = format!("v.{}", lua_member_name(&f.name));
+        if f.occurrence.is_required() {
+            w.line(&format!("a[#a + 1] = {}", to_raw(&f.ty, &m)));
+        } else {
+            if !gap {
+                w.line("local gap = false");
+                gap = true;
+            }
+            w.line(&format!("if {m} ~= nil then"));
+            w.indent();
+            w.line(&format!(
+                "if gap then R.fail({}, \"set, but an optional member before it isn't\") end",
+                lua_str(&format!("{t}.{}", f.name))
+            ));
+            w.line(&format!("a[#a + 1] = {}", to_raw(&f.ty, &m)));
+            w.dedent();
+            w.line("else gap = true end");
+        }
+    }
+    match s.tagged {
+        Some(tag) => w.line(&format!("return R.tag({}, R.array(a))", lua_int(tag.0 as i128))),
+        None => w.line("return R.array(a)"),
+    }
+    w.dedent();
+    w.line("end");
+    w.blank();
+
+    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    w.line(&format!("--- Reads a {t} from an array item, checking each member's type and constraints."));
+    w.line(&format!("function M.{t}.from_raw(raw)"));
+    w.indent();
+    let raw = match s.tagged { Some(tag) => format!("R.untag(raw, {}, {})", lua_int(tag.0 as i128), lua_str(t)), None => "raw".into() };
+    w.line(&format!("local a = R.as_array({raw}, {})", lua_str(t)));
+    w.line(&format!("if #a < {required} or #a > {} then", s.fields.len()));
+    w.indent();
+    let want = if required == s.fields.len() { required.to_string() } else { format!("{required} to {}", s.fields.len()) };
+    w.line(&format!("R.fail({}, \"expected {want} items, got \" .. #a)", lua_str(t)));
+    w.dedent();
+    w.line("end");
+    w.line(&format!("local v = setmetatable({{}}, M.{t})"));
+    for (i, f) in s.fields.iter().enumerate() {
+        let m = format!("v.{}", lua_member_name(&f.name));
+        let at = format!("{t}.{}", f.name);
+        let item = format!("a[{}]", i + 1);
+        if f.occurrence.is_required() {
+            w.line(&format!("{m} = {}", from_raw(&f.ty, &item, &at)));
+        } else {
+            w.line(&format!("if {item} ~= nil then {m} = {} end", from_raw(&f.ty, &item, &at)));
+        }
+    }
+    w.line(&format!("M.{t}.validate(v)"));
+    w.line("return v");
+    w.dedent();
+    w.line("end");
 }
 
 // ── Enum ──────────────────────────────────────────────────────────────────────
