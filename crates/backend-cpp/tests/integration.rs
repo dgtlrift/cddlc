@@ -290,9 +290,31 @@ fn test_unknown_field_handled() {
 }
 
 #[test]
-fn test_enum_encode_uses_std_visit() {
+fn test_enum_encode_switches_on_kind() {
     let g = compile(r#"status = "ok" / "warn""#);
-    assert!(g.source.contains("std::visit"));
+    assert!(g.source.contains("switch (val.kind) {"), "{}", g.source);
+}
+
+/// Issue #49: every variant type is encoded and decoded, and text, nil and
+/// integer-literal variants carry no payload.
+#[test]
+fn test_enum_variants_of_every_type() {
+    let g = compile("e = bool / float64 / int / sensor / 7 / \"off\"\nsensor = { id: uint }");
+    let h = &g.header;
+    assert!(h.contains("enum class Kind { Bool, Float64, Int, Sensor, Variant7, Off };"), "{h}");
+    assert!(h.contains("using Variant = std::variant<std::monostate, bool, double, int64_t, Sensor>;"), "{h}");
+    assert!(h.contains("static E make_Off() { return E{Kind::Off, Variant{}}; }"), "{h}");
+    assert!(h.contains("static E make_Variant7() {"), "{h}");
+    assert!(h.contains("static E make_Bool(bool v) { return E{Kind::Bool, Variant(std::in_place_type<bool>, v)}; }"), "{h}");
+
+    let src = &g.source;
+    assert!(src.contains("nanocbor_fmt_bool(enc, std::get<bool>(val.value));"), "{src}");
+    assert!(src.contains("nanocbor_fmt_double(enc, std::get<double>(val.value));"), "{src}");
+    assert!(src.contains("nanocbor_fmt_uint(enc, 7u);"), "{src}");
+    assert!(src.contains("return encode(enc, std::get<Sensor>(val.value));"), "{src}");
+    assert!(src.contains("case NANOCBOR_TYPE_FLOAT: {"), "{src}");
+    assert!(src.contains("if (u == 7u) { out = E::make_Variant7(); return NANOCBOR_OK; }"), "{src}");
+    assert!(src.contains("nanocbor_value_t tmp = *dec;"), "named variants are tried on a copy: {src}");
 }
 
 #[test]
