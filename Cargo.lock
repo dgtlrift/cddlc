@@ -68,6 +68,7 @@ dependencies = [
  "backend-c",
  "backend-cpp",
  "backend-csharp",
+ "backend-dart",
  "backend-go",
  "backend-java",
  "backend-lua",

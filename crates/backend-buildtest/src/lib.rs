@@ -528,6 +528,40 @@ fn find_busted() -> Option<String> {
     local.exists().then(|| local.to_string_lossy().into_owned())
 }
 
+/// Check and test a generated Dart package: `dart pub get`, then `dart analyze`
+/// (errors fail it, warnings don't), then `dart test` when the package has tests;
+/// the backend writes them for structs and enums only, and `dart test` fails on none.
+pub fn build_dart(
+    work_dir:    &Path,
+    files:       &[GeneratedFile],
+    schema_name: &str,
+) -> BuildOutcome {
+    let Ok(dart) = find_tool("dart") else {
+        return BuildOutcome::Skipped { reason: "dart not found".into() };
+    };
+
+    write_files(work_dir, files).expect("write files");
+
+    let pkg_dir = files.iter()
+        .find(|f| f.path.ends_with("pubspec.yaml"))
+        .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
+        .unwrap_or_else(|| work_dir.to_path_buf());
+    let has_tests = files.iter()
+        .any(|f| f.path.ends_with("_test.dart") && f.content.contains("test('"));
+
+    let t0 = std::time::Instant::now();
+    let get = run_cmd(Command::new(&dart).args(["pub", "get"]).current_dir(&pkg_dir));
+    if !get.status.success() {
+        return build_result(schema_name, get, files.len(), t0.elapsed().as_millis() as u64);
+    }
+    let analyze = run_cmd(Command::new(&dart).args(["analyze", "--no-fatal-warnings"]).current_dir(&pkg_dir));
+    if !analyze.status.success() || !has_tests {
+        return build_result(schema_name, analyze, files.len(), t0.elapsed().as_millis() as u64);
+    }
+    let out = run_cmd(Command::new(&dart).arg("test").current_dir(&pkg_dir));
+    build_result(schema_name, out, files.len(), t0.elapsed().as_millis() as u64)
+}
+
 /// Test a generated Lua package with busted (which loads `src/` and runs `spec/`).
 pub fn build_lua(
     work_dir:    &Path,

@@ -13,7 +13,7 @@
 
 use backend_buildtest::{
     assert_all_ok, build_c, build_cpp, build_csharp, build_nodejs,
-    build_go, build_java, build_lua, build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome, SCHEMAS,
+    build_dart, build_go, build_java, build_lua, build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome, SCHEMAS,
 };
 use backend_rust::RustBackend;
 use backend_c::CBackend;
@@ -24,6 +24,7 @@ use backend_python::PythonBackend;
 use backend_go::GoBackend;
 use backend_java::JavaBackend;
 use backend_lua::LuaBackend;
+use backend_dart::DartBackend;
 use cddlc_codegen::CodegenOptions;
 
 fn work_dir(lang: &str) -> tempfile::TempDir {
@@ -595,6 +596,34 @@ fn test_build_lua_json() {
     assert_all_ok(&outcomes);
 }
 
+/// Check and test all schemas using the Dart backend: dart analyze, dart test.
+/// Requires: the Dart SDK (3.0+) and network access for `dart pub get`.
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_dart -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_dart() {
+    let tmp  = work_dir("dart");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Cbor, ..CodegenOptions::default() };
+    eprintln!("\n=== Dart build test ===");
+    let outcomes = run_build_tests(&DartBackend, |d, f, n| build_dart(d, f, n), &opts, tmp.path());
+    print_summary("Dart", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
+/// Check and test all schemas using the Dart backend (Dart JSON).
+/// Requires: the Dart SDK (3.0+) and network access for `dart pub get`.
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_dart_json -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_dart_json() {
+    let tmp  = work_dir("dart-json");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    eprintln!("\n=== Dart JSON build test ===");
+    let outcomes = run_build_tests(&DartBackend, |d, f, n| build_dart(d, f, n), &opts, tmp.path());
+    print_summary("Dart JSON", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
 /// Run all language build tests in sequence with a final summary table.
 /// Run: cargo test -p backend-buildtest --test build_validation test_build_all -- --ignored --nocapture
 #[test]
@@ -627,6 +656,7 @@ fn test_build_all() {
     run_lang!("Go",      GoBackend,     |d, f, n| build_go(d, f, n),      "go");
     run_lang!("Java",    JavaBackend,   |d, f, n| build_java(d, f, n),    "java");
     run_lang!("Lua",     LuaBackend,    |d, f, n| build_lua(d, f, n),     "lua");
+    run_lang!("Dart",    DartBackend,   |d, f, n| build_dart(d, f, n),    "dart");
 
     eprintln!("\n╔════════════╦═══════╦═══════╦═══════╗");
     eprintln!("║ Language   ║  OK   ║ SKIP  ║ FAIL  ║");

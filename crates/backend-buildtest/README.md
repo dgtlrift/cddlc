@@ -59,6 +59,7 @@ cargo test -p backend-buildtest test_build_dart   -- --ignored --nocapture
 cargo test -p backend-buildtest test_build_go     -- --ignored --nocapture
 cargo test -p backend-buildtest test_build_java   -- --ignored --nocapture   # also _json, _ee, _ee_json
 cargo test -p backend-buildtest test_build_lua    -- --ignored --nocapture   # also _json
+cargo test -p backend-buildtest test_build_dart   -- --ignored --nocapture   # also _json
 ```
 
 ### Toolchain requirements
@@ -75,6 +76,7 @@ cargo test -p backend-buildtest test_build_lua    -- --ignored --nocapture   # a
 | Go | `go` 1.21+; network (or a module cache) for `go mod tidy` |
 | Java | JDK 17+, `mvn`; network (or a local Maven repository) for dependencies |
 | Lua | Lua 5.3+ and `busted` (on PATH or in `~/.luarocks/bin`) |
+| Dart | Dart SDK 3.0+ (`dart pub get` needs network access) |
 
 ## How the tests work
 
