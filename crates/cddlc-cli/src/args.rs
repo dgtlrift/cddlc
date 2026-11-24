@@ -86,8 +86,8 @@ pub struct GenerateArgs {
     pub interop: bool,
 
     /// Comma-separated list of languages for interop harnesses (default: all)
-    /// e.g. --interop-langs rust,python,nodejs
-    #[arg(long, default_value = "rust,c,cpp,csharp,nodejs,python")]
+    /// e.g. --interop-langs rust,python,nodejs,go
+    #[arg(long, default_value = "rust,c,cpp,csharp,nodejs,python,go")]
     pub interop_langs: String,
 
     /// Parse and analyze only — do not write output files
@@ -145,6 +145,7 @@ pub enum Lang {
     Nodejs,
     Python,
     Dart,
+    Go,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +171,7 @@ impl From<Lang> for cddlc_codegen::Language {
             Lang::Nodejs => cddlc_codegen::Language::Python, // reuses Python slot
             Lang::Python => cddlc_codegen::Language::Python,
             Lang::Dart   => cddlc_codegen::Language::Dart,
+            Lang::Go     => cddlc_codegen::Language::Go,
         }
     }
 }

@@ -20,6 +20,7 @@ backend-csharp = { path = "../backend-csharp" }
 backend-nodejs = { path = "../backend-nodejs" }
 backend-python = { path = "../backend-python" }
 backend-dart   = { path = "../backend-dart" }
+backend-go     = { path = "../backend-go" }
 backend-interop = { path = "../backend-interop" }
 cddlc-validate  = { path = "../cddlc-validate" }
 clap          = { version = "4", features = ["derive"] }

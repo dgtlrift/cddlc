@@ -103,8 +103,8 @@ fn test_emits_all_files_with_all_langs() {
     let parsed  = parse_cddl("x = uint", PathBuf::from("test.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let files   = generate(&lowered.module, &InteropLangs::all(), &CodegenOptions::default());
-    // vectors.json + vectors.cbor + 6 language harnesses
-    assert_eq!(files.len(), 8);
+    // vectors.json + vectors.cbor + 7 language harnesses
+    assert_eq!(files.len(), 9);
 }
 
 #[test]
@@ -379,7 +379,7 @@ status = "ok" / "warn"
     let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let files   = generate(&lowered.module, &InteropLangs::all(), &CodegenOptions::default());
-    assert_eq!(files.len(), 8);
+    assert_eq!(files.len(), 9);
     let json = files.iter().find(|f| f.path.ends_with("vectors.json")).unwrap();
     assert!(json.content.contains("SensorMessage"));
     assert!(json.content.contains("DeviceId"));
@@ -497,4 +497,21 @@ fn test_nodejs_harness_imports_package_source() {
     let h = nodejs("sensor = { id: uint }\nlabel = tstr");
     assert!(h.contains("from '../src/test.js';"), "{h}");
     assert!(h.contains("expect(decoded).toEqual(\"\");"), "{h}");
+}
+
+/// The Go harness decodes each vector, checks its primitive members and the
+/// enum kind, and re-encodes it byte for byte.
+#[test]
+fn test_go_harness() {
+    let parsed  = parse_cddl("reading = { sensor-id: uint, value: float32 }\nstatus = \"ok\" / \"warn\"\ndev = tstr .size 2", PathBuf::from("iot_sensor.cddl")).unwrap();
+    let lowered = lower(&parsed.value, 16, 64).unwrap();
+    let files   = generate(&lowered.module, &InteropLangs { go: true, ..Default::default() }, &CodegenOptions::default());
+    let go = &files.iter().find(|f| f.path == "iot_sensor-interop/go/interop_test.go").expect("go harness").content;
+    assert!(go.contains("package iotsensor\n"), "{go}");
+    assert!(go.contains("got, err := DecodeReading(interopBytes(t, \""), "{go}");
+    assert!(go.contains("if uint64(got.SensorId) != 0 {"), "{go}");
+    assert!(go.contains("if math.Abs(float64(got.Value)-0.0) > 1e-4 {"), "{go}");
+    assert!(go.contains("if got.Kind != StatusKindWarn {"), "{go}");
+    assert!(go.contains("if string(got) != \"aa\" {"), "{go}");
+    assert!(go.contains("if h := hex.EncodeToString(re); h != "), "{go}");
 }

@@ -3,7 +3,7 @@
 `cddlc` parses [RFC 8610 CDDL](https://www.rfc-editor.org/rfc/rfc8610) schema files and generates
 serialization/deserialization code for multiple target languages.  A single `.cddl` schema
 produces a ready-to-build library — with types, encode/decode logic, and roundtrip tests — for
-Rust, C, C++, C#, Node.js/TypeScript, Python, and Dart.
+Rust, C, C++, C#, Node.js/TypeScript, Python, Dart, and Go.
 
 ## Why cddlc?
 
@@ -31,6 +31,7 @@ flowchart TD
     E5["backend-nodejs\npackage.json + .ts + Jest tests"]
     E6["backend-python\npyproject.toml + .py + pytest tests"]
     E7["backend-dart\npubspec.yaml + .dart + tests"]
+    E9["backend-go\ngo.mod + .go + go test tests"]
     E8["backend-interop\nvectors.json + per-language\ninterop harnesses"]
     F["cddlc-cli\nArgument parsing\nImport resolution\nCycle detection\n→ drives the pipeline"]
     G["backend-buildtest\nReference schemas\nBuild validation harness"]
@@ -39,8 +40,8 @@ flowchart TD
     F --> B
     B --> C
     C --> D
-    D --> E1 & E2 & E3 & E4 & E5 & E6 & E7 & E8
-    E1 & E2 & E3 & E4 & E5 & E6 & E7 --> G
+    D --> E1 & E2 & E3 & E4 & E5 & E6 & E7 & E9 & E8
+    E1 & E2 & E3 & E4 & E5 & E6 & E7 & E9 --> G
 ```
 
 ### Crate responsibilities
@@ -60,6 +61,7 @@ Every crate is in this repository under `crates/`. Until 1.1.0 each was a submod
 | [`backend-nodejs`](crates/backend-nodejs) | TypeScript 5 ESM + cborg (CBOR) or `node:buffer` (JSON) |
 | [`backend-python`](crates/backend-python) | Python 3 dataclasses + cbor2 / json |
 | [`backend-dart`](crates/backend-dart) | Dart 3 / Flutter + cbor ^6 (CBOR) or `dart:convert` (JSON) |
+| [`backend-go`](crates/backend-go) | Go 1.21+ + fxamacker/cbor (CBOR) or `encoding/json` (JSON) |
 | [`backend-interop`](crates/backend-interop) | Canonical CBOR test vectors + per-language decode/roundtrip harnesses |
 | [`backend-buildtest`](crates/backend-buildtest) | Reference schemas; build validation tests (invoke real toolchains) |
 
@@ -91,6 +93,7 @@ cddlc generate my_schema.cddl --lang csharp   --output generated/
 cddlc generate my_schema.cddl --lang nodejs   --output generated/
 cddlc generate my_schema.cddl --lang python   --output generated/
 cddlc generate my_schema.cddl --lang dart     --output generated/
+cddlc generate my_schema.cddl --lang go       --output generated/
 ```
 
 ### JSON instead of CBOR
@@ -139,7 +142,7 @@ Arguments:
 
 Options:
   -l, --lang <LANG>               Target language [default: rust]
-                                  [values: rust, c, cpp, csharp, nodejs, python, dart]
+                                  [values: rust, c, cpp, csharp, nodejs, python, dart, go]
   -o, --output <DIR>              Output directory [default: ./generated]
       --format <FMT>              Serialization format [default: cbor]
                                   [values: cbor, json]
@@ -157,7 +160,7 @@ Options:
       --include-dir <DIR>         Additional search path for @import (repeatable)
       --interop                   Generate cross-language interop test vectors
       --interop-langs <LIST>      Comma-separated list of interop harness languages
-                                  [default: rust,c,cpp,csharp,nodejs,python]
+                                  [default: rust,c,cpp,csharp,nodejs,python,go]
       --dry-run                   Parse and analyse only; do not write files
       --no-source-comments        Leave each item's CDDL source line out of its docs
       --debug-parse               Print rich parse diagnostics (also: CDDLC_TRACE=1)
@@ -256,21 +259,21 @@ readings = [* sensor-reading]
 
 ## Backend Capability Matrix
 
-| Feature | Rust | C | C++ | C# | Node.js | Python | Dart |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| CBOR encode/decode | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| JSON encode/decode | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Structs | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Enums (string/int/mixed) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Arrays / typed lists | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Type aliases | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| CBOR tags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Optional fields | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Roundtrip tests | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Inline constraint validation | ✓ | ✓ | ✓ | partial | partial | partial | — |
-| dCBOR deterministic encoding | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| `#![no_std]` support | ✓ | N/A | N/A | N/A | N/A | N/A | N/A |
-| Interop test harness | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Feature | Rust | C | C++ | C# | Node.js | Python | Dart | Go |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| CBOR encode/decode | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| JSON encode/decode | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Structs | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Enums (string/int/mixed) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Arrays / typed lists | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Type aliases | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| CBOR tags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Optional fields | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Roundtrip tests | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Inline constraint validation | ✓ | ✓ | ✓ | partial | partial | partial | — | ✓ |
+| dCBOR deterministic encoding | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| `#![no_std]` support | ✓ | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Interop test harness | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
 
 ---
 
@@ -298,6 +301,7 @@ generated/
     csharp/InteropTests.cs
     nodejs/interop.test.ts
     python/test_interop.py
+    go/interop_test.go
 ```
 
 See [`docs/interop-testing.md`](docs/interop-testing.md) for detailed instructions per language.
@@ -327,13 +331,13 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 |---|---|---|
 | Java / Kotlin | High | Very common for IoT firmware and Android |
 | Swift | High | Required for Apple ecosystem / CoreBluetooth |
-| Go | Medium | Widely used in cloud/IoT gateway code |
 | Zig | Low | Attractive for embedded / no-std targets |
 
 ### Per-backend gaps
 
 - **Dart**: missing dCBOR deterministic encoding, constraint validation, and interop harness generation.
 - **C# / Node.js / Python**: constraint validation is partial (`.size`, `.range` checks only; `.regexp` not enforced).
+- **Go**: `.regexp` constraints are not checked; `float16` is written at float32 width.
 - **C / C++**: no JSON mode; JSON output is only available for higher-level language backends.
 - **Rust**: `ciborium` and `cbor4ii` runtime options are listed in the CLI but the backend only fully implements `minicbor`.
 
@@ -393,6 +397,7 @@ cddlc/
 │   ├── backend-nodejs/
 │   ├── backend-python/
 │   ├── backend-dart/
+│   ├── backend-go/
 │   ├── backend-interop/       Cross-language interop vectors
 │   └── backend-buildtest/     Build validation harness
 ├── docs/

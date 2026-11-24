@@ -19,6 +19,7 @@ backend-cpp    = { path = "../backend-cpp" }
 backend-csharp = { path = "../backend-csharp" }
 backend-nodejs = { path = "../backend-nodejs" }
 backend-python = { path = "../backend-python" }
+backend-go     = { path = "../backend-go" }
 
 [dev-dependencies]
 tempfile = "3"

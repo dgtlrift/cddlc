@@ -452,6 +452,44 @@ pub fn build_python(
     BuildOutcome::Built { schema: schema_name.into(), files: files.len(), build_ms: ms }
 }
 
+// ── Go build (go mod tidy + vet + test) ───────────────────────────────────────
+
+/// Build and test a generated Go module: `go mod tidy` (fetches fxamacker/cbor
+/// and writes go.sum), `go vet`, then `go test`.
+pub fn build_go(
+    work_dir:    &Path,
+    files:       &[GeneratedFile],
+    schema_name: &str,
+) -> BuildOutcome {
+    if let Err(reason) = require_tools(&["go"]) {
+        return BuildOutcome::Skipped { reason };
+    }
+
+    write_files(work_dir, files).expect("write files");
+
+    let mod_dir = files.iter()
+        .find(|f| f.path.ends_with("go.mod"))
+        .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
+        .unwrap_or_else(|| work_dir.to_path_buf());
+
+    let t0 = std::time::Instant::now();
+    for (label, args) in [("go mod tidy", vec!["mod", "tidy"]), ("go vet", vec!["vet", "./..."])] {
+        let out = run_cmd(Command::new("go").args(&args).current_dir(&mod_dir));
+        if !out.status.success() {
+            let (stdout, stderr) = format_output(&out);
+            return BuildOutcome::Failed {
+                schema:    schema_name.into(),
+                stdout:    format!("[{label}]\n{stdout}"),
+                stderr,
+                exit_code: out.status.code(),
+            };
+        }
+    }
+    let out = run_cmd(Command::new("go").args(["test", "./..."]).current_dir(&mod_dir));
+    let ms = t0.elapsed().as_millis() as u64;
+    build_result(schema_name, out, files.len(), ms)
+}
+
 // ── Multi-schema runner ───────────────────────────────────────────────────────
 
 /// Run a build test for all reference schemas using one backend + build fn.
