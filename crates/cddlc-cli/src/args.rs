@@ -91,8 +91,8 @@ pub struct GenerateArgs {
     pub java_flavor: JavaFlavor,
 
     /// Comma-separated list of languages for interop harnesses (default: all)
-    /// e.g. --interop-langs rust,python,nodejs,go,java
-    #[arg(long, default_value = "rust,c,cpp,csharp,nodejs,python,go,java")]
+    /// e.g. --interop-langs rust,python,nodejs,go,java,lua
+    #[arg(long, default_value = "rust,c,cpp,csharp,nodejs,python,go,java,lua")]
     pub interop_langs: String,
 
     /// Parse and analyze only — do not write output files
@@ -152,6 +152,7 @@ pub enum Lang {
     Dart,
     Go,
     Java,
+    Lua,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +189,7 @@ impl From<Lang> for cddlc_codegen::Language {
             Lang::Dart   => cddlc_codegen::Language::Dart,
             Lang::Go     => cddlc_codegen::Language::Go,
             Lang::Java   => cddlc_codegen::Language::Java,
+            Lang::Lua    => cddlc_codegen::Language::Lua,
         }
     }
 }

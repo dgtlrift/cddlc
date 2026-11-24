@@ -103,8 +103,8 @@ fn test_emits_all_files_with_all_langs() {
     let parsed  = parse_cddl("x = uint", PathBuf::from("test.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let files   = generate(&lowered.module, &InteropLangs::all(), &CodegenOptions::default());
-    // vectors.json + vectors.cbor + 8 language harnesses
-    assert_eq!(files.len(), 10);
+    // vectors.json + vectors.cbor + 9 language harnesses
+    assert_eq!(files.len(), 11);
 }
 
 #[test]
@@ -379,7 +379,7 @@ status = "ok" / "warn"
     let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let files   = generate(&lowered.module, &InteropLangs::all(), &CodegenOptions::default());
-    assert_eq!(files.len(), 10);
+    assert_eq!(files.len(), 11);
     let json = files.iter().find(|f| f.path.ends_with("vectors.json")).unwrap();
     assert!(json.content.contains("SensorMessage"));
     assert!(json.content.contains("DeviceId"));
@@ -531,4 +531,21 @@ fn test_java_harness() {
     assert!(java.contains("assertEquals(\"Warn\", got.kind());"), "{java}");
     assert!(java.contains("assertEquals(\"aa\", got.value(), \"value\");"), "{java}");
     assert!(java.contains("HexFormat.of().formatHex(got.encode())"), "{java}");
+}
+
+/// The Lua harness decodes each vector, checks its primitive members and the
+/// enum variant, and re-encodes it byte for byte.
+#[test]
+fn test_lua_harness() {
+    let parsed  = parse_cddl("reading = { sensor-id: uint, value: float32 }\nstatus = \"ok\" / \"warn\"\ndev = tstr .size 2", PathBuf::from("iot_sensor.cddl")).unwrap();
+    let lowered = lower(&parsed.value, 16, 64).unwrap();
+    let files   = generate(&lowered.module, &InteropLangs { lua: true, ..Default::default() }, &CodegenOptions::default());
+    let lua = &files.iter().find(|f| f.path == "iot_sensor-interop/lua/interop_spec.lua").expect("lua harness").content;
+    assert!(lua.contains("local M = require(\"iot_sensor\")"), "{lua}");
+    assert!(lua.contains("local got = M.Reading.decode(unhex(\""), "{lua}");
+    assert!(lua.contains("assert.equal(0, got.sensor_id)"), "{lua}");
+    assert!(lua.contains("assert.near(0.0, got.value, 1e-4)"), "{lua}");
+    assert!(lua.contains("assert.equal(\"Warn\", got.kind)"), "{lua}");
+    assert!(lua.contains("assert.equal(\"aa\", got)"), "{lua}");
+    assert!(lua.contains("hex(M.Reading.encode(got))"), "{lua}");
 }

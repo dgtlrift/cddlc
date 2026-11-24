@@ -42,6 +42,7 @@ fn parse_interop_langs(s: &str) -> backend_interop::InteropLangs {
             "python" => langs.python = true,
             "go"     => langs.go     = true,
             "java"   => langs.java   = true,
+            "lua"    => langs.lua    = true,
             _        => {}
         }
     }
@@ -206,6 +207,10 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
         }
         args::Lang::Java => {
             let backend = backend_java::JavaBackend;
+            backend.generate(ir, &opts).map_err(|e| e.to_string())?
+        }
+        args::Lang::Lua => {
+            let backend = backend_lua::LuaBackend;
             backend.generate(ir, &opts).map_err(|e| e.to_string())?
         }
     };
