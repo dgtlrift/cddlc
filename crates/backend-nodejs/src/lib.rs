@@ -1024,6 +1024,19 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
     }
+    // A float variant takes any other number (dgtlrift/cddlc#38). cborg returns
+    // small integers and floats alike as `number`, so with an integer variant
+    // present an integral float such as 1.0 already went to that variant above.
+    if !opts.is_json() {
+        if let Some(v) = e.variants.iter().find(is_float) {
+            let vname = to_pascal_case(&v.name);
+            w.line("if (typeof inner === 'number') {");
+            w.indent();
+            w.line(&format!("return {{ kind: {vname:?}, value: inner }};"));
+            w.dedent();
+            w.line("}");
+        }
+    }
     if let Some(v) = e
         .variants
         .iter()
@@ -1761,6 +1774,10 @@ fn ts_enum_variant_value(e: &EnumDef, v: &EnumVariant, opts: &CodegenOptions) ->
         TypeRef::Primitive(Primitive::Bool) => {
             format!("{{ kind: {vname:?}, value: false }} as {type_name}")
         }
+        // 1.5 is exact in every float width, so it roundtrips through a float32.
+        TypeRef::Primitive(
+            Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float,
+        ) => format!("{{ kind: {vname:?}, value: 1.5 }} as {type_name}"),
         _ => format!("{{ kind: {vname:?} }} as {type_name}"),
     }
 }
