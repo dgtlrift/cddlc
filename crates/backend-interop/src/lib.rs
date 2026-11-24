@@ -191,7 +191,7 @@ fn encode_struct(
     })
 }
 
-/// Writes a struct's map (its required members) and returns the members a
+/// Writes a struct's map, or a record's array (its required members) and returns the members a
 /// harness can assert on: those of a primitive type. Members of a named, tagged
 /// or choice type are written as real values of that type but not asserted.
 fn write_struct(
@@ -211,11 +211,19 @@ fn write_struct(
     if let Some(tag) = s.tagged {
         enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
     }
-    enc.map(fields.len() as u64).ok()?;
+    // A record (RFC 8610 §3.4) is an array of the members' values, in order.
+    let record = s.encoding == cddlc_ir::StructEncoding::Array;
+    if record {
+        enc.array(fields.len() as u64).ok()?;
+    } else {
+        enc.map(fields.len() as u64).ok()?;
+    }
 
     let mut field_values = Vec::new();
     for f in fields {
-        enc.str(f.name.as_str()).ok()?;
+        if !record {
+            enc.str(f.name.as_str()).ok()?;
+        }
         match member_value(f, explicit) {
             Some(val) => {
                 encode_field_val(enc, &val)?;

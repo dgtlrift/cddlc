@@ -52,6 +52,9 @@ pub enum IrError {
 
     // ── Structural ────────────────────────────────────────────────────────────
 
+    #[error("rule '{rule}' is not supported: {reason}")]
+    Unsupported { rule: String, reason: String },
+
     #[error("rule '{name}' cannot be both a type rule and a group rule")]
     AmbiguousRule { name: String },
 

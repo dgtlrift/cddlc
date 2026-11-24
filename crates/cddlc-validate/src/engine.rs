@@ -5,7 +5,7 @@ use base64::Engine as _;
 
 use cddlc_ir::{
     CborTag, Constraint, FieldDef, FieldKey, IrModule, LiteralValue, Occurrence,
-    Primitive, TypeDef, TypeRef,
+    Primitive, StructEncoding, TypeDef, TypeRef,
 };
 
 use crate::error::{PathSeg, ValidationError};
@@ -90,7 +90,10 @@ impl<'m> Ctx<'m> {
         match def {
             TypeDef::Struct(s) => {
                 if let Some(payload) = self.unwrap_tag(s.tagged, value, path) {
-                    self.check_struct(&s.fields, &s.name, payload, path);
+                    match s.encoding {
+                        StructEncoding::Map   => self.check_struct(&s.fields, &s.name, payload, path),
+                        StructEncoding::Array => self.check_record(&s.fields, &s.name, payload, path),
+                    }
                 }
             }
             TypeDef::Enum(e) => {
@@ -150,6 +153,27 @@ impl<'m> Ctx<'m> {
             if !fields.iter().any(|f| field_key_matches(&f.key, k)) {
                 self.err(path, format!("unknown field {}", describe_key(k)));
             }
+        }
+    }
+
+/// A record: a struct encoded as an array of its members' values, in order
+    /// (RFC 8610 §3.4). Optional members come last and may be left off.
+    fn check_record(&mut self, fields: &[FieldDef], name: &str, value: &Value, path: &mut Vec<PathSeg>) {
+        let Value::Array(items) = value else {
+            self.err(path, format!("expected an array for record '{name}', found {}", kind_name(value)));
+            return;
+        };
+        let required = fields.iter().filter(|f| f.occurrence.is_required()).count();
+        if items.len() < required || items.len() > fields.len() {
+            let want = if required == fields.len() { format!("{required}") } else { format!("{required} to {}", fields.len()) };
+            self.err(path, format!("record '{name}' needs {want} item(s), found {}", items.len()));
+            return;
+        }
+        for (i, (field, v)) in fields.iter().zip(items).enumerate() {
+            path.push(PathSeg::Index(i));
+            self.check_typeref(&field.ty, v, path);
+            self.check_constraints(&field.constraints, &field.ty, v, path);
+            path.pop();
         }
     }
 
