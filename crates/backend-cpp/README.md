@@ -61,14 +61,18 @@ struct DeviceId {
 };
 
 struct Status {
-    using Variant = std::variant<std::string_view>;
-    Variant value{std::string_view("ok")};
+    /// Which variant this value is.
+    enum class Kind { Ok, Warn, Error };
+    using Variant = std::variant<std::monostate>;
 
-    static Status make_Ok(std::string_view v) { return Status{v}; }
-    static Status make_Warn(std::string_view v) { return Status{v}; }
-    static Status make_Error(std::string_view v) { return Status{v}; }
+    Kind kind{Kind::Ok};
+    Variant value{};
 
-    bool operator==(const Status &o) const noexcept { return value == o.value; }
+    static Status make_Ok() { return Status{Kind::Ok, Variant{}}; }
+    static Status make_Warn() { return Status{Kind::Warn, Variant{}}; }
+    static Status make_Error() { return Status{Kind::Error, Variant{}}; }
+
+    bool operator==(const Status &o) const noexcept { return kind == o.kind && value == o.value; }
 };
 
 /// A device report.
@@ -89,9 +93,13 @@ struct Device {
 - **Aliases** are each their own struct holding `value`, so two aliases of the
   same C++ type (`a = tstr`, `b = bstr`) still get distinct `encode`/`decode`
   overloads, each writing its own CBOR type.
-- **Enums** are a struct around a `std::variant` of the variants' payload types,
-  with a `make_<Variant>` constructor per variant. A text variant stores its
-  string, so `make_Warn` takes the CDDL text: `Status::make_Warn("warn")`.
+- **Enums** are a struct with a `Kind kind` naming the variant and a
+  `std::variant` holding the payload of valued variants. Each variant has a
+  `make_<Variant>` constructor. Text, `nil` and integer-literal variants carry
+  no payload, so their constructors take no argument (`Status::make_Warn()`).
+  Valued variants (`uint`, `int`, `bool`, floats, `tstr`, `bstr`, named types)
+  take their value: for `level = uint / "off"`, `Level::make_Uint(5)`. Decoding
+  picks the variant by the CBOR type it reads, matching literals first.
 - **Arrays** are a struct with `std::array<T, N> items` and `std::size_t count`;
   `N` comes from `; @capacity` or `--max-array`. With `--alloc heap` they are a
   struct with `std::vector<T> items` and no capacity limit.
@@ -126,7 +134,7 @@ using namespace device;
 Device dev{};
 dev.id     = DeviceId{"sensor-7"};
 dev.active = true;
-dev.status = Status::make_Warn("warn");
+dev.status = Status::make_Warn();
 dev.label  = "kitchen";
 
 uint8_t buf[128];
@@ -186,12 +194,9 @@ nanocbor (or nlohmann/json) on the first configure.
 ## Known gaps
 
 - **nanocbor only**: `--runtime` is accepted, but only nanocbor is wired up.
-- **Text enums are not type-checked**: a text variant stores its string, so
-  `make_Ok("warn")` builds a value that encodes as `"warn"`.
-- **Mixed-type enums**: enums mixing text and integer variants are a
-  `std::variant`, but decoding doesn't handle every combination.
+- **`nil` enum variants** are written as their CDDL text, as in the other
+  backends, not as CBOR null.
 - **`.regexp`** constraints need a user-supplied `@regex-hook`.
-- **nlohmann/json is fetched from `master`**, not a pinned version.
 
 ## License
 

@@ -227,19 +227,19 @@ fn test_c_uses_nanocbor_put_tstrn() {
     }
 }
 
-/// Generated C++ source must not call tstr string-enum factory constructors with
-/// zero args (they require the decoded string_view to be passed in).
+/// Generated C++ text enums record their variant in `kind` (dgtlrift/cddlc#49):
+/// a decoded literal maps to its no-argument constructor, and encoding writes the
+/// variant's own literal rather than a stored string.
 #[test]
-fn test_cpp_enum_tstr_decode_passes_value() {
+fn test_cpp_enum_tstr_decode_sets_kind() {
     let opts = CodegenOptions::default();
     let src = SCHEMAS.iter().find(|(n, _)| *n == "enums").unwrap().1;
     let files = backend_buildtest::generate_schema("enums", src, &CppBackend, &opts).unwrap();
     let cpp = files.iter().find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/")).unwrap();
-    // Each make_Xxx() call in the tstr decode path must pass `sv`, not be empty.
-    // A zero-arg call looks like `make_Ok()` or `make_Warn()`.
-    assert!(!cpp.content.contains("make_Ok()"),    "enums .cpp: make_Ok() must pass the decoded string_view");
-    assert!(!cpp.content.contains("make_Warn()"),  "enums .cpp: make_Warn() must pass the decoded string_view");
-    assert!(!cpp.content.contains("make_Error()"), "enums .cpp: make_Error() must pass the decoded string_view");
+    assert!(cpp.content.contains("if (sv == std::string_view(\"ok\")) { out = Status::make_Ok(); return NANOCBOR_OK; }"),
+        "enums .cpp: \"ok\" must decode to Status::make_Ok()");
+    assert!(cpp.content.contains("case Status::Kind::Warn:\n        nanocbor_put_tstrn(enc, \"warn\", 4);"),
+        "enums .cpp: Status::Kind::Warn must encode as \"warn\"");
 }
 
 /// Generated C++ source for structs with optional fields must compute the map
@@ -282,17 +282,16 @@ fn test_cpp_size_constrained_alias_has_valid_default() {
         "aliases .hpp: DeviceName default value must be a 32-char string to satisfy .size 32 constraint");
 }
 
-/// Generated C++ enum struct must default-initialize `value` to the first
-/// variant's literal string so default-constructed instances encode correctly.
+/// A default-constructed C++ enum is its first variant (dgtlrift/cddlc#49).
 #[test]
 fn test_cpp_enum_tstr_has_valid_default() {
     let opts = CodegenOptions::default();
     let src = SCHEMAS.iter().find(|(n, _)| *n == "enums").unwrap().1;
     let files = backend_buildtest::generate_schema("enums", src, &CppBackend, &opts).unwrap();
     let hpp = files.iter().find(|f| f.path.ends_with(".hpp")).unwrap();
-    // status = "ok" / "warn" / "error" — default should hold "ok"
-    assert!(hpp.content.contains("\"ok\""),
-        "enums .hpp: Status default value must hold the first variant string \"ok\"");
+    // status = "ok" / "warn" / "error"
+    assert!(hpp.content.contains("enum class Kind { Ok, Warn, Error };"), "{}", hpp.content);
+    assert!(hpp.content.contains("Kind kind{Kind::Ok};"), "enums .hpp: Status must default to Kind::Ok");
 }
 
 /// Generated C++ decode functions must use the container cursor (&map / &arr)

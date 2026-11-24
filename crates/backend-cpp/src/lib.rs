@@ -14,7 +14,7 @@ use cddlc_codegen::{
     IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Capacity, Constraint, EnumDef,
+    AliasDef, ArrayDef, Capacity, Constraint, EnumDef, EnumVariant,
     IrModule, LiteralValue, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
@@ -289,69 +289,55 @@ fn emit_enum_hpp(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, e.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
     let type_name = to_pascal_case(&e.name);
 
-    // Build std::variant type list
-    let variant_types: Vec<String> = e.variants.iter()
-        .map(|v| match &v.ty {
-            TypeRef::Primitive(Primitive::Null) => "std::monostate".into(),
-            TypeRef::Primitive(p)  => cpp_primitive(p, opts).to_owned(),
-            TypeRef::Named(n)      => to_pascal_case(n),
-            _                      => "std::monostate".into(),
-        })
-        .collect();
+    // The payload types of valued variants, deduplicated in order.
+    let mut payloads: Vec<String> = Vec::new();
+    for v in &e.variants {
+        if let Some(t) = cpp_variant_payload(v, opts) {
+            if !payloads.contains(&t) {
+                payloads.push(t);
+            }
+        }
+    }
+    let mut alternatives = vec!["std::monostate".to_owned()];
+    alternatives.extend(payloads.iter().cloned());
 
-    // Deduplicate while preserving order
-    let mut seen = std::collections::HashSet::new();
-    let unique_types: Vec<&str> = variant_types.iter()
-        .filter(|t| seen.insert(t.as_str()))
-        .map(|s| s.as_str())
-        .collect();
+    let kinds: Vec<String> = e.variants.iter().map(|v| to_pascal_case(&v.name)).collect();
 
     w.line(&format!("struct {type_name} {{"));
     w.indent();
-    w.line(&format!("using Variant = std::variant<{}>;", unique_types.join(", ")));
-    // Default-initialize to the first variant's value so default-constructed
-    // instances are valid for encode/decode roundtrip tests.
-    let default_init = e.variants.first().map(|v| match &v.ty {
-        TypeRef::Primitive(Primitive::Null) => "std::monostate{}".into(),
-        TypeRef::Primitive(Primitive::Tstr) => {
-            let s = cddlc_codegen::enum_variant_text(v);
-            format!("std::string_view({:?})", s)
-        }
-        TypeRef::Primitive(Primitive::Uint) => "uint64_t{0}".into(),
-        TypeRef::Primitive(Primitive::Int)  => "int64_t{0}".into(),
-        TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) => "float{0}".into(),
-        TypeRef::Primitive(Primitive::Float64 | Primitive::Float)   => "double{0}".into(),
-        TypeRef::Named(n) => format!("{}{{}}",to_pascal_case(n)),
-        _ => String::new(),
-    }).unwrap_or_default();
-    if default_init.is_empty() {
-        w.line("Variant value{};");
-    } else {
-        w.line(&format!("Variant value{{{default_init}}};"));
+    w.line("/// Which variant this value is.");
+    w.line(&format!("enum class Kind {{ {} }};", kinds.join(", ")));
+    w.line(&format!("using Variant = std::variant<{}>;", alternatives.join(", ")));
+    w.blank();
+    let first = e.variants.first();
+    let first_kind = first.map(|v| to_pascal_case(&v.name));
+    match first_kind {
+        Some(k) => w.line(&format!("Kind kind{{Kind::{k}}};")),
+        None => w.line("Kind kind{};"),
+    }
+    // The payload of a valued variant; `std::monostate` for text, nil and
+    // integer-literal variants. Defaults to the first variant's payload.
+    match first.and_then(|v| cpp_variant_payload(v, opts)) {
+        Some(t) => w.line(&format!("Variant value{{std::in_place_type<{t}>}};")),
+        None => w.line("Variant value{};"),
     }
     w.blank();
 
-    // Named constructors for each variant
     for v in &e.variants {
-        let vname = to_pascal_case(&v.name);
-        match &v.ty {
-            TypeRef::Primitive(Primitive::Null) => {
-                w.line(&format!("static {type_name} make_{vname}() {{ return {type_name}{{std::monostate{{}}}}; }}"));
-            }
-            TypeRef::Primitive(p) => {
-                let ct = cpp_primitive(p, opts);
-                w.line(&format!("static {type_name} make_{vname}({ct} v) {{ return {type_name}{{v}}; }}"));
-            }
-            TypeRef::Named(n) => {
-                let ct = to_pascal_case(n);
-                w.line(&format!("static {type_name} make_{vname}({ct} v) {{ return {type_name}{{v}}; }}"));
-            }
-            _ => {}
+        let k = to_pascal_case(&v.name);
+        match cpp_variant_payload(v, opts) {
+            None => w.line(&format!(
+                "static {type_name} make_{k}() {{ return {type_name}{{Kind::{k}, Variant{{}}}}; }}"
+            )),
+            Some(t) => w.line(&format!(
+                "static {type_name} make_{k}({t} v) {{ return {type_name}{{Kind::{k}, Variant(std::in_place_type<{t}>, v)}}; }}"
+            )),
         }
     }
     w.blank();
-
-    w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{ return value == o.value; }}"));
+    w.line(&format!(
+        "bool operator==(const {type_name} &o) const noexcept {{ return kind == o.kind && value == o.value; }}"
+    ));
     w.dedent();
     w.line("};");
 }
@@ -360,6 +346,46 @@ fn emit_enum_hpp(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 /// fixed-capacity `std::array` plus a count.
 fn is_heap(opts: &CodegenOptions) -> bool {
     matches!(opts.alloc, cddlc_codegen::AllocStrategy::Heap)
+}
+
+/// The C++ payload type of an enum variant, or `None` for a variant that carries
+/// no value: a text literal, `nil`, or an integer literal (dgtlrift/cddlc#49).
+fn cpp_variant_payload(v: &EnumVariant, opts: &CodegenOptions) -> Option<String> {
+    if cpp_int_literal(v).is_some() {
+        return None;
+    }
+    match &v.ty {
+        TypeRef::Primitive(Primitive::Tstr) if cpp_text_literal(v).is_some() => None,
+        TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => None,
+        TypeRef::Primitive(p) => Some(cpp_primitive(p, opts).to_owned()),
+        TypeRef::Named(n) => Some(to_pascal_case(n)),
+        TypeRef::Tagged(..) | TypeRef::Choice(_) => None,
+    }
+}
+
+/// The text literal of a text variant (`"free-space"`).
+fn cpp_text_literal(v: &EnumVariant) -> Option<&str> {
+    v.constraints.iter().find_map(|c| match c {
+        Constraint::Eq(LiteralValue::Text(t)) => Some(t.as_str()),
+        _ => None,
+    })
+}
+
+/// The integer literal of an integer variant (the `2` in `1 / 2 / 3`).
+fn cpp_int_literal(v: &EnumVariant) -> Option<i128> {
+    match &v.ty {
+        TypeRef::Primitive(Primitive::Uint | Primitive::Int) => v.constraints.iter().find_map(|c| match c {
+            Constraint::Eq(LiteralValue::Uint(n)) => Some(*n as i128),
+            Constraint::Eq(LiteralValue::Int(n)) => Some(*n as i128),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+/// A C++ string literal and its byte length, for `nanocbor_put_tstrn`.
+fn cpp_str_lit(s: &str) -> (String, usize) {
+    (format!("{s:?}"), s.len())
 }
 
 fn emit_array_hpp(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
@@ -513,61 +539,47 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             if let Some(tag) = e.tagged {
                 w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
             }
-            w.line("return std::visit([enc](auto &&v) -> int {");
-            w.indent();
-            w.line("using T = std::decay_t<decltype(v)>;");
+            let type_name = to_pascal_case(&e.name);
+            w.line("switch (val.kind) {");
             for v in &e.variants {
-                let _vname = to_pascal_case(&v.name);
-                match &v.ty {
-                    TypeRef::Primitive(Primitive::Null) => {
-                        w.line("if constexpr (std::is_same_v<T, std::monostate>) {");
-                        let cddl_str = cddlc_codegen::enum_variant_text(v);
-                        w.indent();
-                        w.line(&format!("nanocbor_put_tstr(enc, {:?});", cddl_str));
-                        w.line("return NANOCBOR_OK;");
-                        w.dedent();
-                        w.line("}");
+                let k = to_pascal_case(&v.name);
+                w.line(&format!("case {type_name}::Kind::{k}:"));
+                w.indent();
+                let payload = cpp_variant_payload(v, opts);
+                let get = |t: &str| format!("std::get<{t}>(val.value)");
+                match (&v.ty, payload.as_deref()) {
+                    (_, None) if cpp_int_literal(v).is_some() => {
+                        let n = cpp_int_literal(v).unwrap_or_default();
+                        if n >= 0 {
+                            w.line(&format!("nanocbor_fmt_uint(enc, {n}u);"));
+                        } else {
+                            w.line(&format!("nanocbor_fmt_int(enc, {n});"));
+                        }
                     }
-                    TypeRef::Primitive(Primitive::Tstr) => {
-                        w.line("if constexpr (std::is_same_v<T, std::string_view>) {");
-                        w.indent();
-                        w.line("nanocbor_put_tstrn(enc, v.data(), v.size());");
-                        w.line("return NANOCBOR_OK;");
-                        w.dedent();
-                        w.line("}");
+                    (TypeRef::Primitive(Primitive::Tstr | Primitive::Null | Primitive::Undefined), None) => {
+                        // Text and nil variants are written as their CDDL text.
+                        let (lit, len) = cpp_str_lit(&cddlc_codegen::enum_variant_text(v));
+                        w.line(&format!("nanocbor_put_tstrn(enc, {lit}, {len});"));
                     }
-                    TypeRef::Primitive(p) if is_integer_p(p) => {
-                        let ct = cpp_primitive(p, opts);
-                        w.line(&format!("if constexpr (std::is_same_v<T, {ct}>) {{"));
-                        w.indent();
-                        w.line("nanocbor_fmt_int(enc, static_cast<int64_t>(v));");
-                        w.line("return NANOCBOR_OK;");
-                        w.dedent();
-                        w.line("}");
+                    (TypeRef::Primitive(Primitive::Uint), Some(t)) => w.line(&format!("nanocbor_fmt_uint(enc, {});", get(t))),
+                    (TypeRef::Primitive(Primitive::Int), Some(t)) => w.line(&format!("nanocbor_fmt_int(enc, {});", get(t))),
+                    (TypeRef::Primitive(Primitive::Bool), Some(t)) => w.line(&format!("nanocbor_fmt_bool(enc, {});", get(t))),
+                    (TypeRef::Primitive(Primitive::Float32 | Primitive::Float16), Some(t)) => w.line(&format!("nanocbor_fmt_float(enc, {});", get(t))),
+                    (TypeRef::Primitive(Primitive::Float64 | Primitive::Float), Some(t)) => w.line(&format!("nanocbor_fmt_double(enc, {});", get(t))),
+                    (TypeRef::Primitive(Primitive::Tstr), Some(t)) => {
+                        w.line(&format!("{{ const auto &s = {}; nanocbor_put_tstrn(enc, s.data(), s.size()); }}", get(t)));
                     }
-                    TypeRef::Primitive(p) if is_float_p(p) => {
-                        let ct = cpp_primitive(p, opts);
-                        w.line(&format!("if constexpr (std::is_same_v<T, {ct}>) {{"));
-                        w.indent();
-                        w.line("nanocbor_fmt_double(enc, static_cast<double>(v));");
-                        w.line("return NANOCBOR_OK;");
-                        w.dedent();
-                        w.line("}");
+                    (TypeRef::Primitive(Primitive::Bstr | Primitive::Any), Some(t)) => {
+                        w.line(&format!("{{ const auto &b = {}; nanocbor_put_bstr(enc, reinterpret_cast<const uint8_t*>(b.data()), b.size()); }}", get(t)));
                     }
-                    TypeRef::Named(n) => {
-                        let ct = to_pascal_case(n);
-                        w.line(&format!("if constexpr (std::is_same_v<T, {ct}>) {{"));
-                        w.indent();
-                        w.line("return encode(enc, v);");
-                        w.dedent();
-                        w.line("}");
-                    }
-                    _ => {}
+                    (TypeRef::Named(_), Some(t)) => w.line(&format!("return encode(enc, {});", get(t))),
+                    _ => w.line("return -1; // unsupported variant type"),
                 }
+                w.line("return NANOCBOR_OK;");
+                w.dedent();
             }
+            w.line("}");
             w.line("return -1;");
-            w.dedent();
-            w.line("}, val.value);");
         }
         TypeDef::Array(a) => {
             if let Some(tag) = a.tagged {
@@ -700,37 +712,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                 w.line("  if (nanocbor_get_tag(dec, &tag) < 0) return -1;");
                 w.line(&format!("  if (tag != {}) return -1; }}", tag.0));
             }
-            w.line("uint8_t major = nanocbor_get_type(dec);");
-            w.line("if (major == NANOCBOR_TYPE_TSTR) {");
-            w.indent();
-            w.line("const uint8_t *s; size_t slen;");
-            w.line("if (nanocbor_get_tstr(dec, &s, &slen) < 0) return -1;");
-            w.line("std::string_view sv(reinterpret_cast<const char*>(s), slen);");
-            for v in &e.variants {
-                if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)) {
-                    let cddl_str = cddlc_codegen::enum_variant_text(v);
-                    let vname = to_pascal_case(&v.name);
-                    let type_name2 = to_pascal_case(&e.name);
-                    w.line(&format!("if (sv == {:?}) {{ out = {}::make_{}(sv); return NANOCBOR_OK; }}", cddl_str, type_name2, vname));
-                }
-            }
-            w.line("return -1;");
-            w.dedent();
-            w.line("} else if (major == NANOCBOR_TYPE_UINT || major == NANOCBOR_TYPE_NINT) {");
-            w.indent();
-            w.line("int64_t n; if (nanocbor_get_int64(dec, &n) < 0) return -1;");
-            for v in &e.variants {
-                if matches!(&v.ty, TypeRef::Primitive(Primitive::Int | Primitive::Uint)) {
-                    let vname = to_pascal_case(&v.name);
-                    let type_name2 = to_pascal_case(&e.name);
-                    w.line(&format!("out = {}::make_{}(n); return NANOCBOR_OK;", type_name2, vname));
-                    break;
-                }
-            }
-            w.line("return -1;");
-            w.dedent();
-            w.line("}");
-            w.line("return -1;");
+            emit_cpp_enum_decode(w, e, opts);
         }
         TypeDef::Array(a) => {
             if let Some(tag) = a.tagged {
@@ -785,6 +767,132 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
 
     w.dedent();
     w.line("}");
+}
+
+/// Decodes an enum by the CBOR major type it finds: literals first, then the
+/// variant whose payload type matches; a value no case accepts is tried against
+/// each named variant (dgtlrift/cddlc#49).
+fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+    let t = to_pascal_case(&e.name);
+    let make = |v: &EnumVariant, arg: &str| format!("out = {t}::make_{}({arg}); return NANOCBOR_OK;", to_pascal_case(&v.name));
+    let payload_is = |v: &EnumVariant, f: &dyn Fn(&Primitive) -> bool| {
+        cpp_variant_payload(v, opts).is_some() && matches!(&v.ty, TypeRef::Primitive(p) if f(p))
+    };
+
+    w.line("switch (nanocbor_get_type(dec)) {");
+
+    // Text: text and nil literals, then a `tstr` payload variant.
+    w.line("case NANOCBOR_TYPE_TSTR: {");
+    w.indent();
+    w.line("const uint8_t *s; size_t slen;");
+    w.line("if (nanocbor_get_tstr(dec, &s, &slen) < 0) return -1;");
+    w.line("std::string_view sv(reinterpret_cast<const char*>(s), slen);");
+    for v in &e.variants {
+        if cpp_variant_payload(v, opts).is_none()
+            && matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null | Primitive::Undefined))
+        {
+            let text = cddlc_codegen::enum_variant_text(v);
+            w.line(&format!("if (sv == std::string_view({text:?})) {{ {} }}", make(v, "")));
+        }
+    }
+    if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Tstr))) {
+        w.line(&make(v, "sv"));
+    } else {
+        w.line("return -1;");
+    }
+    w.dedent();
+    w.line("}");
+
+    // Integers: integer literals, then a `uint` / `int` payload variant.
+    w.line("case NANOCBOR_TYPE_UINT: {");
+    w.indent();
+    w.line("uint64_t u; if (nanocbor_get_uint64(dec, &u) < 0) return -1;");
+    for v in &e.variants {
+        if let Some(n) = cpp_int_literal(v).filter(|n| *n >= 0) {
+            w.line(&format!("if (u == {n}u) {{ {} }}", make(v, "")));
+        }
+    }
+    if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Uint))) {
+        w.line(&make(v, "u"));
+    } else if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Int))) {
+        w.line(&format!("if (u <= static_cast<uint64_t>(INT64_MAX)) {{ {} }}", make(v, "static_cast<int64_t>(u)")));
+        w.line("return -1;");
+    } else {
+        w.line("return -1;");
+    }
+    w.dedent();
+    w.line("}");
+    w.line("case NANOCBOR_TYPE_NINT: {");
+    w.indent();
+    w.line("int64_t n; if (nanocbor_get_int64(dec, &n) < 0) return -1;");
+    for v in &e.variants {
+        if let Some(n) = cpp_int_literal(v).filter(|n| *n < 0) {
+            w.line(&format!("if (n == {n}) {{ {} }}", make(v, "")));
+        }
+    }
+    if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Int))) {
+        w.line(&make(v, "n"));
+    } else {
+        w.line("return -1;");
+    }
+    w.dedent();
+    w.line("}");
+
+    // Byte strings: a `bstr` payload variant.
+    if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Bstr | Primitive::Any))) {
+        w.line("case NANOCBOR_TYPE_BSTR: {");
+        w.indent();
+        w.line("const uint8_t *b; size_t blen;");
+        w.line("if (nanocbor_get_bstr(dec, &b, &blen) < 0) return -1;");
+        w.line(&make(v, "std::string_view(reinterpret_cast<const char*>(b), blen)"));
+        w.dedent();
+        w.line("}");
+    }
+
+    // Major type 7: a bool, or a float.
+    let bool_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Bool)));
+    let f64_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Float64 | Primitive::Float)));
+    let f32_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Float32 | Primitive::Float16)));
+    if bool_v.is_some() || f64_v.is_some() || f32_v.is_some() {
+        w.line("case NANOCBOR_TYPE_FLOAT: {");
+        w.indent();
+        if let Some(v) = bool_v {
+            w.line(&format!("{{ bool b; if (nanocbor_get_bool(dec, &b) >= 0) {{ {} }} }}", make(v, "b")));
+        }
+        if let Some(v) = f32_v {
+            w.line(&format!("{{ float f; if (nanocbor_get_float(dec, &f) >= 0) {{ {} }} }}", make(v, "f")));
+        }
+        if let Some(v) = f64_v {
+            w.line(&format!("{{ double d; if (nanocbor_get_double(dec, &d) >= 0) {{ {} }} }}", make(v, "d")));
+        }
+        w.line("break;");
+        w.dedent();
+        w.line("}");
+    }
+    w.line("default:");
+    w.indent();
+    w.line("break;");
+    w.dedent();
+    w.line("}");
+
+    // Anything else: the first named variant whose decoder accepts it.
+    for v in &e.variants {
+        if let (TypeRef::Named(n), Some(_)) = (&v.ty, cpp_variant_payload(v, opts)) {
+            let nt = to_pascal_case(n);
+            w.line("{");
+            w.indent();
+            w.line("nanocbor_value_t tmp = *dec;");
+            w.line(&format!("{nt} v{{}};"));
+            w.line("if (decode(&tmp, v, cb, ctx) == 0) { *dec = tmp; ");
+            w.indent();
+            w.line(&make(v, "v"));
+            w.dedent();
+            w.line("}");
+            w.dedent();
+            w.line("}");
+        }
+    }
+    w.line("return -1;");
 }
 
 fn emit_cpp_decode_field(
@@ -965,6 +1073,8 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
     w.line(&format!("static void test_{fn_name}_roundtrip() {{"));
     w.indent();
 
+    // An enum test loops over one value per variant; the roundtrip below is the body.
+    let mut enum_loop = false;
     match def {
         TypeDef::Alias(a) if !a.constraints.is_empty() => {
             // For size-constrained aliases, construct a valid test value.
@@ -992,24 +1102,24 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
             }
         }
         TypeDef::Enum(e) => {
-            if let Some(v) = e.variants.first() {
-                let vname = to_pascal_case(&v.name);
-                let arg = match &v.ty {
-                    TypeRef::Primitive(Primitive::Null) => String::new(),
-                    TypeRef::Primitive(Primitive::Tstr) => {
-                        let cddl_str = cddlc_codegen::enum_variant_text(v);
-                        format!("std::string_view({:?})", cddl_str)
-                    }
-                    TypeRef::Primitive(Primitive::Uint) => "0u".into(),
-                    TypeRef::Primitive(Primitive::Int)  => "0".into(),
-                    TypeRef::Primitive(p) => cpp_primitive(p, _opts).to_string() + "{}",
-                    TypeRef::Named(n) => format!("{}{{}}",to_pascal_case(n)),
-                    _ => String::new(),
+            // Roundtrip every variant (dgtlrift/cddlc#49).
+            let values: Vec<String> = e.variants.iter().map(|v| {
+                let k = to_pascal_case(&v.name);
+                let arg = match (&v.ty, cpp_variant_payload(v, _opts)) {
+                    (_, None) => String::new(),
+                    (TypeRef::Primitive(Primitive::Uint), _) => "42u".into(),
+                    (TypeRef::Primitive(Primitive::Int), _) => "-1".into(),
+                    (TypeRef::Primitive(Primitive::Bool), _) => "true".into(),
+                    (TypeRef::Primitive(Primitive::Float32 | Primitive::Float16), _) => "1.5f".into(),
+                    (TypeRef::Primitive(Primitive::Float64 | Primitive::Float), _) => "1.5".into(),
+                    (TypeRef::Primitive(Primitive::Tstr), _) => "std::string_view(\"hello\")".into(),
+                    (_, Some(t)) => format!("{t}{{}}"),
                 };
-                w.line(&format!("{type_name} original = {type_name}::make_{vname}({arg});"));
-            } else {
-                w.line(&format!("{type_name} original{{}};"));
-            }
+                format!("{type_name}::make_{k}({arg})")
+            }).collect();
+            w.line(&format!("for (const {type_name} &original : {{ {} }}) {{", values.join(", ")));
+            w.indent();
+            enum_loop = true;
         }
         TypeDef::Struct(s) => {
             w.line(&format!("{type_name} original{{}};"));
@@ -1101,6 +1211,10 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
     w.line("assert(decode(&dec, decoded) == 0);");
     w.line("assert(original == decoded);");
+    if enum_loop {
+        w.dedent();
+        w.line("}");
+    }
     w.line(&format!("std::printf(\"{fn_name}_roundtrip: PASS\\n\");"));
 
     w.dedent();
@@ -1148,13 +1262,7 @@ fn cpp_primitive<'a>(p: &Primitive, _opts: &CodegenOptions) -> &'a str {
     }
 }
 
-fn is_integer_p(p: &Primitive) -> bool {
-    matches!(p, Primitive::Uint | Primitive::Int)
-}
 
-fn is_float_p(p: &Primitive) -> bool {
-    matches!(p, Primitive::Float | Primitive::Float16 | Primitive::Float32 | Primitive::Float64)
-}
 
 // ── C++ JSON backend (nlohmann/json) ─────────────────────────────────────────
 
@@ -1166,9 +1274,10 @@ project({name}_json CXX)
 set(CMAKE_CXX_STANDARD 17)
 
 include(FetchContent)
+# nlohmann/json v3.12.0 release archive, pinned by hash (dgtlrift/cddlc#51)
 FetchContent_Declare(nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        master
+    URL      https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+    URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
 )
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
