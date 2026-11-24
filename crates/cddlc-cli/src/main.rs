@@ -266,7 +266,7 @@ fn run_validate(args: &ValidateArgs) -> Result<bool, Box<dyn std::error::Error>>
     let mut all_ok = true;
 
     for path in &args.json {
-        let ok = validate_one(path, type_name, ir, |bytes| {
+        let ok = validate_one(path, type_name, ir, cddlc_validate::Source::Json, |bytes| {
             let json: serde_json::Value = serde_json::from_slice(bytes)?;
             Ok(cddlc_validate::Value::from(json))
         });
@@ -274,7 +274,7 @@ fn run_validate(args: &ValidateArgs) -> Result<bool, Box<dyn std::error::Error>>
     }
 
     for path in &args.cbor {
-        let ok = validate_one(path, type_name, ir, |bytes| {
+        let ok = validate_one(path, type_name, ir, cddlc_validate::Source::Cbor, |bytes| {
             let cbor: ciborium::Value = ciborium::from_reader(bytes)?;
             Ok(cddlc_validate::Value::from(cbor))
         });
@@ -288,6 +288,7 @@ fn validate_one(
     path:      &PathBuf,
     type_name: &str,
     ir:        &IrModule,
+    source:    cddlc_validate::Source,
     decode:    impl FnOnce(&[u8]) -> Result<cddlc_validate::Value, Box<dyn std::error::Error>>,
 ) -> bool {
     let bytes = match std::fs::read(path) {
@@ -306,7 +307,7 @@ fn validate_one(
         }
     };
 
-    match cddlc_validate::validate(ir, Some(type_name), &value) {
+    match cddlc_validate::validate_from(ir, Some(type_name), &value, source) {
         Ok(()) => {
             println!("{}: OK ({type_name})", path.display());
             true

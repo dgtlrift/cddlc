@@ -200,6 +200,14 @@ func (e *mapEncoder) finish() ([]byte, error) {
 	return encodeMap(e.keys, e.vals)
 }
 
+// finishArray writes the members' values as an array, in order: a record.
+func (e *mapEncoder) finishArray() ([]byte, error) {
+	if e.err != nil {
+		return nil, e.err
+	}
+	return encodeArray(e.vals)
+}
+
 func encodeEach[T any](items []T, f func(T) ([]byte, error)) ([]byte, error) {
 	out := make([][]byte, 0, len(items))
 	for i, it := range items {
@@ -998,6 +1006,12 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     w.line("}");
     w.blank();
 
+    if s.encoding == cddlc_ir::StructEncoding::Array {
+        emit_record_marshal(w, s, &name, opts);
+        emit_encode_decode(w, &name, opts);
+        return;
+    }
+
     // Marshal
     w.line(&format!("// {} writes v as a {} map, members in schema order.", marshal_name(opts), format_name(opts)));
     w.line(&format!("func (v {name}) {}() ([]byte, error) {{", marshal_name(opts)));
@@ -1095,6 +1109,89 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     w.line("}");
     w.blank();
     emit_encode_decode(w, &name, opts);
+}
+
+/// A record's marshal / unmarshal methods (RFC 8610 §3.4): an array of the
+/// members' values, in order. Optional members come last: those present are
+/// written up to the first absent one, and one set after an absent one is an error.
+fn emit_record_marshal(w: &mut IndentWriter, s: &StructDef, name: &str, opts: &CodegenOptions) {
+    w.line(&format!("// {} writes v as a {} array, members in order.", marshal_name(opts), format_name(opts)));
+    w.line(&format!("func (v {name}) {}() ([]byte, error) {{", marshal_name(opts)));
+    w.indent();
+    w.line("if err := v.Validate(); err != nil {");
+    w.line("    return nil, err");
+    w.line("}");
+    w.line("var e mapEncoder");
+    let mut gap = false;
+    for f in &s.fields {
+        let field = format!("v.{}", go_field_name(&f.name));
+        let key = go_str(&f.name);
+        if f.occurrence.is_required() {
+            w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &field)));
+        } else {
+            if !gap {
+                w.line("gap := false");
+                gap = true;
+            }
+            w.line(&format!("if {field} != nil {{"));
+            w.indent();
+            w.line("if gap {");
+            w.line(&format!(
+                "    return nil, fmt.Errorf(\"%s: set, but an optional member before it isn't\", {})",
+                go_str(&format!("{name}.{}", f.name))
+            ));
+            w.line("}");
+            w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &format!("*{field}"))));
+            w.dedent();
+            w.line("} else {");
+            w.line("    gap = true");
+            w.line("}");
+        }
+    }
+    if gap { w.line("_ = gap"); }
+    let tag = if opts.is_json() { None } else { s.tagged };
+    return_encoded(w, tag, "e.finishArray()");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let want = if required == s.fields.len() { required.to_string() } else { format!("{required} to {}", s.fields.len()) };
+    w.line(&format!("// {} reads v from a {} array, checking each member's type and constraints.", unmarshal_name(opts), format_name(opts)));
+    w.line(&format!("func (v *{name}) {}(data []byte) error {{", unmarshal_name(opts)));
+    w.indent();
+    untag_input(w, tag, name);
+    w.line(&format!("items, err := decodeArray(r, {})", go_str(name)));
+    w.line("if err != nil {");
+    w.line("    return err");
+    w.line("}");
+    w.line(&format!("if len(items) < {required} || len(items) > {} {{", s.fields.len()));
+    w.line(&format!("    return fmt.Errorf(\"%s: expected {want} items, got %d\", {}, len(items))", go_str(name)));
+    w.line("}");
+    w.line(&format!("var out {name}"));
+    for (i, f) in s.fields.iter().enumerate() {
+        let field = format!("out.{}", go_field_name(&f.name));
+        let at = format!("{name}.{}", f.name);
+        if f.occurrence.is_required() {
+            emit_decode(w, &f.ty, &format!("items[{i}]"), &field, &at);
+        } else {
+            w.line(&format!("if len(items) > {i} {{"));
+            w.indent();
+            w.line(&format!("var x {}", go_type(&f.ty)));
+            emit_decode(w, &f.ty, &format!("items[{i}]"), "x", &at);
+            w.line(&format!("{field} = &x"));
+            w.dedent();
+            w.line("}");
+        }
+    }
+    w.line("if err := out.Validate(); err != nil {");
+    w.line("    return err");
+    w.line("}");
+    w.line("*v = out");
+    w.line("return nil");
+    w.dedent();
+    w.line("}");
+    w.blank();
 }
 
 // ── Enum ──────────────────────────────────────────────────────────────────────
