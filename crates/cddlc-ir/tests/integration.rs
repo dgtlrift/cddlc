@@ -555,3 +555,34 @@ fn test_true_false_nil_members_lower_to_bool_and_null() {
     assert_eq!(s.fields[3].ty, bool_ty);
     assert!(s.fields[3].constraints.is_empty());
 }
+
+fn member_constraints(src: &str) -> Vec<Constraint> {
+    let m = compile(src);
+    let Some(TypeDef::Struct(s)) = m.get("msg") else { panic!("expected struct msg") };
+    s.fields[0].constraints.clone()
+}
+
+/// Issue #70: `.size` takes a parenthesized byte count or range.
+#[test]
+fn test_size_with_parenthesized_range() {
+    assert_eq!(member_constraints("msg = { ? note: tstr .size (1..8) }"), vec![Constraint::SizeRange { min: Some(1), max: Some(8) }]);
+    // `...` excludes the upper bound.
+    assert_eq!(member_constraints("msg = { b: bstr .size (0...32) }"), vec![Constraint::SizeRange { min: Some(0), max: Some(31) }]);
+    assert_eq!(member_constraints("msg = { b: bstr .size (16) }"), vec![Constraint::SizeExact(16)]);
+    // On an integer, the largest byte count bounds the value.
+    assert_eq!(
+        member_constraints("msg = { v: uint .size (1..2) }"),
+        vec![Constraint::ValueRangeUint { min: None, max: Some(0xFFFF), inclusive: true }]
+    );
+    assert_eq!(member_constraints("msg = { v: uint .size (1..8) }"), vec![], "every u64 fits in 8 bytes");
+}
+
+/// Issue #70: an unsupported `.size` operand is reported plainly, without the AST.
+#[test]
+fn test_size_error_is_readable() {
+    let parsed = cddlc_parser::parse_cddl("msg = { v: tstr .size (\"a\") }", std::path::PathBuf::from("t.cddl")).expect("parse");
+    let Err(err) = cddlc_ir::lower(&parsed.value, 16, 64) else { panic!("should fail") };
+    let err = err.to_string();
+    assert!(err.contains("the operand must be a byte count (`.size 8`) or a range of them (`.size (1..8)`)"), "{err}");
+    assert!(!err.contains("Spanned"), "{err}");
+}
