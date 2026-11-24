@@ -956,8 +956,11 @@ impl<'m> LowerCtx<'m> {
         if let Some(p) = Primitive::from_prelude(name) {
             return Ok(TypeRef::Primitive(p));
         }
+        if let Some(tr) = crate::prelude::prelude_typeref(name) {
+            return Ok(tr);
+        }
         if is_prelude(name) {
-            return Ok(TypeRef::Primitive(Primitive::Any)); // tagged prelude types
+            return Ok(TypeRef::Primitive(Primitive::Any));
         }
         if self.known_rules.contains(name) {
             return Ok(TypeRef::Named(name.into()));

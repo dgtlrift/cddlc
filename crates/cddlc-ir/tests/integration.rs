@@ -651,6 +651,26 @@ fn test_size_error_is_readable() {
     assert!(!err.contains("Spanned"), "{err}");
 }
 
+// ── Prelude types (dgtlrift/cddlc#88) ────────────────────────────────────────
+
+#[test]
+fn prelude_types_lower_to_their_definitions() {
+    let ty = |name: &str| match compile(&format!("r = {{ v: {name} }}\n")).get("r") {
+        Some(TypeDef::Struct(s)) => s.fields[0].ty.clone(),
+        other => panic!("{name}: {other:?}"),
+    };
+    let p = TypeRef::Primitive;
+    let tag = |n: u64, t: TypeRef| TypeRef::Tagged(CborTag(n), Box::new(t));
+    let number = TypeRef::Choice(vec![p(Primitive::Int), p(Primitive::Float)]);
+    assert_eq!(ty("number"), number);
+    assert_eq!(ty("tdate"), tag(0, p(Primitive::Tstr)));
+    assert_eq!(ty("time"), tag(1, number));
+    assert_eq!(ty("biguint"), tag(2, p(Primitive::Bstr)));
+    assert_eq!(ty("uri"), tag(32, p(Primitive::Tstr)));
+    assert_eq!(ty("cbor-any"), tag(55799, p(Primitive::Any)));
+    assert_eq!(ty("unsigned"), TypeRef::Choice(vec![p(Primitive::Uint), tag(2, p(Primitive::Bstr))]));
+}
+
 // ── Major types (dgtlrift/cddlc#89) ──────────────────────────────────────────
 
 #[test]

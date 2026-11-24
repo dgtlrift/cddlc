@@ -398,6 +398,8 @@ fn lower_type2_to_typeref(t2: &Type2, rule_name: &str) -> Result<TypeRef, IrErro
             let n = name.node.as_str();
             if let Some(p) = Primitive::from_prelude(n) {
                 Ok(TypeRef::Primitive(p))
+            } else if let Some(tr) = crate::prelude::prelude_typeref(n) {
+                Ok(tr)
             } else {
                 Ok(TypeRef::Named(n.into()))
             }

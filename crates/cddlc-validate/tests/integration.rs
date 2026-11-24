@@ -325,6 +325,23 @@ fn literal_fields_are_enforced() {
     assert_fails(&m, "start", &json(r#"{"t":1,"cat":"kernel","type":"SimEnd"}"#));
 }
 
+// ── Prelude types (dgtlrift/cddlc#88) ────────────────────────────────────────
+
+#[test]
+fn prelude_types_validate_as_defined() {
+    let m = lower("r = { n: number, at: tdate }\n");
+    assert_ok(&m, "r", &json(r#"{"n": 1.5, "at": "2026-01-01T00:00:00Z"}"#));
+    assert_ok(&m, "r", &json(r#"{"n": 2, "at": "2026-01-01T00:00:00Z"}"#));
+    assert_fails(&m, "r", &json(r#"{"n": "x", "at": "2026-01-01T00:00:00Z"}"#));
+    assert_fails(&m, "r", &json(r#"{"n": 1, "at": 5}"#));
+
+    // A bignum that fits reaches the validator as an integer.
+    let m = lower("r = biguint\n");
+    assert_ok(&m, "r", &Value::from(ciborium::Value::Integer(5.into())));
+    let tagged = ciborium::Value::Tag(2, Box::new(ciborium::Value::Bytes(vec![1, 0, 0, 0, 0, 0, 0, 0, 0])));
+    assert_ok(&m, "r", &Value::from(tagged));
+}
+
 // ── Record arrays (dgtlrift/cddlc#81) ────────────────────────────────────────
 
 #[test]
