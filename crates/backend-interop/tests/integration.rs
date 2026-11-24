@@ -385,3 +385,17 @@ status = "ok" / "warn"
     assert!(json.content.contains("Readings"));
     assert!(json.content.contains("Status"));
 }
+
+/// Issue #36: an enum vector encodes the variant's CDDL literal.
+#[test]
+fn test_enum_vector_uses_cddl_literal() {
+    let vectors = compile("model = \"free-space\" / \"Log_Distance\"");
+    let hex: Vec<String> = vectors.iter().map(|v| v.cbor_hex()).collect();
+    // 0x6a = text string of length 10
+    assert!(hex.contains(&format!("6a{}", hex_of("free-space"))), "{hex:?}");
+    assert!(hex.contains(&format!("6c{}", hex_of("Log_Distance"))), "{hex:?}");
+}
+
+fn hex_of(s: &str) -> String {
+    s.bytes().map(|b| format!("{b:02x}")).collect()
+}

@@ -111,7 +111,8 @@ pub enum FieldVal {
     Text(String),
     Bytes(Vec<u8>),
     Null,
-    Enum { kind: String },
+    /// `kind` is the variant's type name, `text` its CDDL string on the wire.
+    Enum { kind: String, text: String },
 }
 
 // ── Vector collection ─────────────────────────────────────────────────────────
@@ -199,12 +200,12 @@ fn encode_enum_variant(
         enc.tag(minicbor::data::Tag::new(tag.0)).ok().map(|_| ())?;
     }
 
-    let cddl_str = v.name.to_lowercase().replace('_', "-");
+    let cddl_str = cddlc_codegen::enum_variant_text(v);
     let field_val;
     match &v.ty {
         TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
             enc.str(&cddl_str).ok().map(|_| ())?;
-            field_val = FieldVal::Enum { kind: to_pascal_case(&v.name) };
+            field_val = FieldVal::Enum { kind: to_pascal_case(&v.name), text: cddl_str.clone() };
         }
         TypeRef::Primitive(Primitive::Uint) => {
             enc.u64(0).ok().map(|_| ())?;
@@ -283,7 +284,7 @@ fn encode_field_val(enc: &mut Encoder<&mut Vec<u8>>, val: &FieldVal) -> Option<(
         FieldVal::Text(s)    => enc.str(s).ok().map(|_| ()),
         FieldVal::Bytes(b)   => enc.bytes(b).ok().map(|_| ()),
         FieldVal::Null       => enc.null().ok().map(|_| ()),
-        FieldVal::Enum { kind } => enc.str(&kind.to_lowercase().replace('_', "-")).ok().map(|_| ()),
+        FieldVal::Enum { text, .. } => enc.str(text).ok().map(|_| ()),
     }
 }
 
@@ -384,7 +385,7 @@ fn json_value(v: &FieldVal) -> String {
             format!("\"0x{hex}\"")
         }
         FieldVal::Null        => "null".into(),
-        FieldVal::Enum { kind } => format!("\"{}\"", kind),
+        FieldVal::Enum { kind, .. } => format!("\"{}\"", kind),
     }
 }
 
@@ -434,7 +435,7 @@ fn emit_rust_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions
         for f in &v.fields {
             let fname = &f.name;
             match &f.value {
-                FieldVal::Enum { kind } =>
+                FieldVal::Enum { kind, .. } =>
                     w.line(&format!("assert_eq!(decoded.kind, {:?});", kind)),
                 FieldVal::Text(s) =>
                     w.line(&format!("assert_eq!(decoded.{fname}, {:?});", s)),
@@ -515,7 +516,7 @@ fn emit_c_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -
                 FieldVal::Text(s) =>
                     w.line(&format!("assert(decoded.{fname}.len == {} && memcmp(decoded.{fname}.ptr, {:?}, {}) == 0);",
                         s.len(), s, s.len())),
-                FieldVal::Enum { kind } =>
+                FieldVal::Enum { kind, .. } =>
                     w.line(&format!("assert(decoded.tag == {}_{});",
                         to_snake_case(&v.type_name).to_uppercase(),
                         to_snake_case(kind).to_uppercase())),
@@ -594,7 +595,7 @@ fn emit_cpp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
                     w.line(&format!("assert(std::abs(decoded.{fname} - {f}) < 1e-6);")),
                 FieldVal::Text(s) =>
                     w.line(&format!("assert(decoded.{fname} == std::string_view({:?}));", s)),
-                FieldVal::Enum { kind } =>
+                FieldVal::Enum { kind, .. } =>
                     w.line(&format!("assert(std::holds_alternative<{}>(*std::get_if<{}>(&decoded.value)));",
                         to_pascal_case(kind), to_pascal_case(kind))),
                 _ => {}
@@ -668,7 +669,7 @@ fn emit_csharp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                 FieldVal::Bool(b)  => w.line(&format!("Assert.Equal({}, decoded.{pname});", if *b { "true" } else { "false" })),
                 FieldVal::Float(f) => w.line(&format!("Assert.True(Math.Abs(decoded.{pname} - {f}) < 1e-6);")),
                 FieldVal::Text(s)  => w.line(&format!("Assert.Equal({:?}, decoded.{pname});", s)),
-                FieldVal::Enum { kind } => w.line(&format!("Assert.IsType<{type_name}.{kind}>(decoded);")),
+                FieldVal::Enum { kind, .. } => w.line(&format!("Assert.IsType<{type_name}.{kind}>(decoded);")),
                 FieldVal::Null     => w.line(&format!("Assert.Null(decoded.{pname});")),
                 FieldVal::Bytes(b) => {
                     let hex = b.iter().map(|x| format!("{x:02x}")).collect::<String>();
@@ -782,7 +783,7 @@ fn emit_nodejs_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                         w.line(&format!("expect(Math.abs(Number(decoded.{fname}) - {f})).toBeLessThan(1e-4);")),
                     FieldVal::Text(s) =>
                         w.line(&format!("expect(decoded.{fname}).toEqual({s:?});")),
-                    FieldVal::Enum { kind } =>
+                    FieldVal::Enum { kind, .. } =>
                         w.line(&format!("expect(decoded.kind).toEqual({kind:?});")),
                     FieldVal::Null =>
                         w.line(&format!("expect(decoded.{fname}).toBeNull();")),
@@ -877,7 +878,7 @@ fn emit_python_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                         w.line(&format!("assert abs(decoded.{fname} - {f}) < 1e-4")),
                     FieldVal::Text(s) =>
                         w.line(&format!("assert decoded.{fname} == {s:?}")),
-                    FieldVal::Enum { kind } =>
+                    FieldVal::Enum { kind, .. } =>
                         w.line(&format!("assert decoded.kind == {kind:?}")),
                     FieldVal::Null =>
                         w.line(&format!("assert decoded.{fname} is None")),

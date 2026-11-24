@@ -313,7 +313,7 @@ fn emit_enum_hpp(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     let default_init = e.variants.first().map(|v| match &v.ty {
         TypeRef::Primitive(Primitive::Null) => "std::monostate{}".into(),
         TypeRef::Primitive(Primitive::Tstr) => {
-            let s = v.name.to_lowercase().replace('_', "-");
+            let s = cddlc_codegen::enum_variant_text(v);
             format!("std::string_view({:?})", s)
         }
         TypeRef::Primitive(Primitive::Uint) => "uint64_t{0}".into(),
@@ -505,7 +505,7 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                 match &v.ty {
                     TypeRef::Primitive(Primitive::Null) => {
                         w.line("if constexpr (std::is_same_v<T, std::monostate>) {");
-                        let cddl_str = v.name.to_lowercase().replace('_', "-");
+                        let cddl_str = cddlc_codegen::enum_variant_text(v);
                         w.indent();
                         w.line(&format!("nanocbor_put_tstr(enc, {:?});", cddl_str));
                         w.line("return NANOCBOR_OK;");
@@ -676,7 +676,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             w.line("std::string_view sv(reinterpret_cast<const char*>(s), slen);");
             for v in &e.variants {
                 if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)) {
-                    let cddl_str = v.name.to_lowercase().replace('_', "-");
+                    let cddl_str = cddlc_codegen::enum_variant_text(v);
                     let vname = to_pascal_case(&v.name);
                     let type_name2 = to_pascal_case(&e.name);
                     w.line(&format!("if (sv == {:?}) {{ out = {}::make_{}(sv); return NANOCBOR_OK; }}", cddl_str, type_name2, vname));
@@ -950,7 +950,7 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                 let arg = match &v.ty {
                     TypeRef::Primitive(Primitive::Null) => String::new(),
                     TypeRef::Primitive(Primitive::Tstr) => {
-                        let cddl_str = v.name.to_lowercase().replace('_', "-");
+                        let cddl_str = cddlc_codegen::enum_variant_text(v);
                         format!("std::string_view({:?})", cddl_str)
                     }
                     TypeRef::Primitive(Primitive::Uint) => "0u".into(),
@@ -1221,7 +1221,7 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
                 matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)));
             if all_str {
                 let variants: Vec<String> = e.variants.iter()
-                    .map(|v| format!("{:?}", v.name.to_lowercase().replace('_', "-")))
+                    .map(|v| format!("{:?}", cddlc_codegen::enum_variant_text(v)))
                     .collect();
                 w.line(&format!("// {ctype}: string enum ({} variants)", variants.len()));
                 w.line(&format!("using {ctype} = std::string;"));
