@@ -10,6 +10,15 @@ From 1.1.0 on, release-plz writes this file from the conventional commit message
 
 ## [1.1.1](https://github.com/dgtlrift/cddlc/compare/v1.1.0...v1.1.1) - 2026-11-24
 
+### Changed
+
+Generated code changed in ways callers may notice:
+
+- C++ enums are a `Kind kind` plus a `std::variant` payload; constructors of text, `nil` and integer-literal variants take no argument (`Status::make_Warn()`) (#49).
+- C++ with `--alloc heap` makes arrays `std::vector<T> items`, with no capacity limit (#50).
+- C++ JSON output fetches nlohmann/json v3.12.0 by URL and SHA-256 instead of `master` (#51).
+- Python packages need cbor2 >= 6.0 and Python 3.11; struct fields are keyword-only (#48).
+
 ### Fixed
 
 - *(python)* rework the Python backend so every reference schema passes
@@ -36,27 +45,9 @@ From 1.1.0 on, release-plz writes this file from the conventional commit message
 
 ### Other
 
-- Merge pull request #59 from dgtlrift/fix-cpp-json
-- Merge origin/main into fix-cpp-alloc-heap
-- Merge pull request #56 from dgtlrift/fix-nodejs-float-int-enum
-- Merge pull request #57 from dgtlrift/fix-cpp-enums
-- Merge pull request #55 from dgtlrift/fix-rust-tagged-members
-- Merge pull request #53 from dgtlrift/fix-cpp-json-pin-nlohmann
-- Merge remote-tracking branch 'origin/main' into fix-c-cpp-simple-values
-- Merge pull request #45 from dgtlrift/docs-cpp-readme
-- Merge pull request #44 from dgtlrift/fix-nodejs-float-enum
+- Build tests: the Python test runs pytest with the interpreter in `CDDLC_PYTHON` (or `python3`) and reports a skip without cbor2 >= 6 and pytest; new C++ JSON and Python JSON build tests.
 - *(cpp)* rewrite the README from real generated output
-- Merge pull request #34 from dgtlrift/fix-cpp-alias-overloads
 - *(cli)* give each test a unique temp dir and remove it afterwards
-- Merge remote-tracking branch 'origin/main' into fix-nodejs-cbor-tags
-- Merge remote-tracking branch 'origin/main' into fix-optional-null-member
-- Merge remote-tracking branch 'origin/main' into fix-optional-null-member
-- Merge remote-tracking branch 'origin/main' into fix-size-on-uint
-- Merge remote-tracking branch 'origin/main' into fix-optional-null-member
-- Merge remote-tracking branch 'origin/main' into fix-size-on-uint
-- Merge remote-tracking branch 'origin/main' into fix-true-false-nil-members
-- Merge pull request #29 from dgtlrift/fix-nodejs-test-setup
-- Merge pull request #26 from dgtlrift/fix-nanocbor-macos
 - *(release)* release PRs only from scripts/release.sh; the workflow only releases
 
 ## [1.1.0] - 2026-11-02
