@@ -10,7 +10,7 @@ test suite — from an `IrModule`.  The generated code uses Python dataclasses f
 flowchart LR
     A["cddlc-ir\nIrModule"] --> B["cddlc-codegen\nBackend trait"]
     B --> C["backend-python\n(this crate)"]:::active
-    C --> D["📁 pyproject.toml\n📁 src/schema.py\n📁 tests/test_schema.py"]
+    C --> D["📁 pyproject.toml\n📁 src/schema.py\n📁 tests/test_roundtrip.py"]
     classDef active fill:#d4edda,stroke:#28a745
 ```
 
@@ -18,85 +18,83 @@ flowchart LR
 
 ```
 <output>/
-  pyproject.toml           # PEP 517 build config; deps: cbor2; devDeps: pytest
+  pyproject.toml           # PEP 517 build config; deps: cbor2>=6.0; dev: pytest
   src/
     <module>.py            # all types as @dataclass with encode/decode methods
   tests/
-    test_<module>.py       # pytest roundtrip tests for every type
+    test_roundtrip.py      # pytest roundtrip tests for every type
 ```
 
 ## Runtime
 
 | Format | Runtime library |
 |---|---|
-| CBOR (default) | [cbor2](https://pypi.org/project/cbor2/) — pure-Python RFC 8949 |
-| JSON | Built-in `json` module |
+| CBOR (default) | [cbor2](https://pypi.org/project/cbor2/) 6.0 or later (for `semantic_decoders`) |
+| JSON | Built-in `json` module; `bstr` values are base64url strings |
+
+Requires Python 3.11+.
 
 ## What is generated per IR type
+
+Every class has `encode() -> bytes` and `decode(data: bytes)` for the selected
+format. Under them, `_to_raw()` and `_from_raw(raw)` convert to and from plain
+Python values, so nested types, tags and JSON's base64url bytes are handled in
+one place. `decode` checks every value's type and raises `ValueError` on a
+mismatch, a missing field, or a failed constraint.
 
 ### Structs
 
 ```python
-from dataclasses import dataclass, field
-from typing import Optional
-
-@dataclass
+@dataclass(kw_only=True)
 class Device:
-    id:     str
-    active: bool
-    label:  Optional[str] = None    # optional field
+    id: DeviceId
+    label: Optional[str] = None    # optional field
+    temp: float
 
-    def to_cbor(self) -> bytes: …
+    def encode(self) -> bytes: …
     @classmethod
-    def from_cbor(cls, data: bytes) -> "Device": …
-
-    def to_json(self) -> dict: …
-    @classmethod
-    def from_json(cls, data: dict) -> "Device": …
+    def decode(cls, data: bytes) -> "Device": …
 ```
 
-- Optional fields use `Optional[T]` with a default of `None`.
-- CBOR maps use string keys by default; integer keys are used when specified in CDDL.
-- JSON encode/decode uses `dict` literals — no extra library required.
+- Fields are keyword-only, so optional fields can come before required ones.
+- An optional field is `Optional[T] = None` and is left out of the map when `None`.
 
 ### Enums
 
 ```python
-from enum import Enum
+@dataclass
+class Level:
+    kind: Literal["Uint", "Off"]
+    value: int | None = None
 
-class Status(Enum):
-    OK    = "ok"
-    WARN  = "warn"
-    ERROR = "error"
+    @classmethod
+    def make_Uint(cls, value: int) -> "Level": …
+    @classmethod
+    def make_Off(cls) -> "Level": …
 ```
 
-Integer-valued variants use `int` values; mixed-type enums use a tagged-dict encoding
-with `{"kind": name, "value": raw}` to avoid Python's strict `Enum` typing.
+Text, `nil` and integer-literal variants carry no value. Decoding picks the
+variant from the CBOR/JSON type it reads, matching literals first.
 
-### Arrays
+### Arrays and aliases
 
 ```python
 @dataclass
 class Readings:
     items: list[float] = field(default_factory=list)
 
-    def to_cbor(self) -> bytes: …
-    @classmethod
-    def from_cbor(cls, data: bytes) -> "Readings": …
+@dataclass
+class DeviceId:
+    value: str          # tstr .size 16, checked in __post_init__
 ```
 
-### Aliases
+### Tags and floats
 
-```python
-DeviceId = str    # transparent type alias
-```
-
-## Supported serialization formats
-
-| `--format` | Generated methods |
-|---|---|
-| `cbor` (default) | `to_cbor() → bytes`, `from_cbor(bytes)` |
-| `json` | `to_json() → dict`, `from_json(dict)` |
+- `#6.N(T)` is written as `cbor2.CBORTag(N, …)` and checked on decode. Every
+  tag the module uses is decoded raw, so cbor2 does not turn tag 1 into a
+  `datetime`. JSON has no tags, so they are dropped.
+- `float16` and `float32` values are written at their own CBOR width; cbor2
+  would otherwise write every Python float as a float64.
 
 ## Install and test generated code
 
@@ -106,22 +104,15 @@ pip install -e ".[dev]"
 pytest tests/
 ```
 
-Requires Python 3.10+ (uses `match` statements and `list[T]` generic syntax).
+The generated tests build each type, encode and decode it, and assert
+`decoded == original`.
 
 ## Known gaps and future enhancements
 
-- **Partial constraint validation**: `.size` and `.range` checks emit `ValueError` raises
-  in constructors; `.regexp` constraints are not yet emitted as `re.fullmatch()` checks.
-- **Python 3.10+ minimum**: the generated code uses structural pattern matching (`match`)
-  for enum decode.  A `3.8`-compatible fallback using `if/elif` chains would broaden reach.
-- **No `__slots__`**: `@dataclass` classes do not have `__slots__` enabled; adding them
-  would reduce per-instance memory overhead for large collections of objects.
-- **No `@doc` as docstrings**: doc pragmas are not rendered as class-level `"""…"""` docstrings.
-- **No type-checking for JSON input**: `from_json` trusts the input dictionary; adding
-  `isinstance` guards or integrating `pydantic` would improve robustness.
-- **No packaging for PyPI**: the `pyproject.toml` is a library definition but no
-  publishing configuration (classifiers, wheel build, upload) is included.
-- **No interop harness for Dart**: the `--interop-langs` list does not include `dart`.
+- **`.regexp`** constraints are checked only through a user-supplied `@regex-hook`.
+- **No `__slots__`**: `@dataclass` classes do not set `__slots__`.
+- **No `@doc` as docstrings**: doc pragmas are not rendered as `"""…"""` docstrings.
+- **No packaging for PyPI**: the `pyproject.toml` has no classifiers or publishing setup.
 
 ## License
 

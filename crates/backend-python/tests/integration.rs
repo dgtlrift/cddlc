@@ -88,7 +88,7 @@ fn test_pyproject_pytest_dev_dependency() {
 fn test_pyproject_pep517_build_system() {
     let g = compile("x = uint");
     assert!(g.pyproject.contains("[build-system]"));
-    assert!(g.pyproject.contains("setuptools"));
+    assert!(g.pyproject.contains("build-backend = \"setuptools.build_meta\""), "{}", g.pyproject);
 }
 
 // ── Source file ───────────────────────────────────────────────────────────────
@@ -186,14 +186,15 @@ fn test_struct_encode_uses_cbor2_dumps() {
 #[test]
 fn test_struct_encode_builds_map() {
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("_map = {"));
+    assert!(g.source.contains("m: dict[str, Any] = {}"));
     assert!(g.source.contains("\"id\""));
 }
 
 #[test]
 fn test_struct_decode_uses_cbor2_loads() {
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("cbor2.loads(data)"));
+    assert!(g.source.contains("cbor2.loads(data, semantic_decoders=_SEMANTIC_DECODERS)"));
+    assert!(g.source.contains("return cls._from_raw(_loads(data))"));
 }
 
 #[test]
@@ -220,7 +221,7 @@ fn test_struct_optional_uses_spread() {
 #[test]
 fn test_tagged_struct_encode_cbor_tag() {
     let g = compile("tagged-sensor = #6.100({ id: uint })");
-    assert!(g.source.contains("CBORTag(100"));
+    assert!(g.source.contains("return _tag(100, m)"));
 }
 
 #[test]
@@ -290,7 +291,8 @@ fn test_array_uses_default_factory() {
 #[test]
 fn test_array_encode_dumps_items() {
     let g = compile("readings = [* uint]");
-    assert!(g.source.contains("cbor2.dumps(self.items)"));
+    assert!(g.source.contains("return [item for item in self.items]"));
+    assert!(g.source.contains("return _dumps(self._to_raw())"));
 }
 
 #[test]
@@ -332,7 +334,7 @@ fn test_range_constraint_validation() {
 #[test]
 fn test_tagged_alias_encode_cbor_tag() {
     let g = compile("timestamp = #6.1(uint)");
-    assert!(g.source.contains("CBORTag(1"));
+    assert!(g.source.contains("return _tag(1, self.value)"));
 }
 
 #[test]
@@ -398,7 +400,7 @@ fn test_roundtrip_struct_explicit_test() {
 #[test]
 fn test_roundtrip_uses_assert() {
     let g = compile("sensor = { id: uint }");
-    assert!(g.tests.contains("assert decoded."));
+    assert!(g.tests.contains("assert decoded == original"));
 }
 
 #[test]
@@ -438,7 +440,7 @@ timestamp = #6.1(uint)
     assert!(g.source.contains("class SensorMessage:"));
     assert!(g.source.contains("class DeviceId:"));
     assert!(g.source.contains("len(self.value) == 16"));
-    assert!(g.source.contains("CBORTag(1"));
+    assert!(g.source.contains("_SEMANTIC_DECODERS = {1: _raw_tag(1)}"));
 }
 
 /// Issue #36: a text enum is written and read as its CDDL literal, not a string
@@ -450,4 +452,55 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(g.source.contains("\"Log_Distance\""), "{}", g.source);
     assert!(!g.source.contains("\"freespace\""), "{}", g.source);
     assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
+}
+
+/// Issue #48: a class named `Test...` is marked so pytest does not collect it.
+#[test]
+fn test_test_prefixed_class_not_collected() {
+    let g = compile("test-group = { id: uint }\nsensor = { id: uint }");
+    assert!(g.source.contains("class TestGroup:\n    __test__ = False"), "{}", g.source);
+    assert_eq!(g.source.matches("__test__ = False").count(), 1, "{}", g.source);
+}
+
+/// Issue #48: an enum of only text literals emits no empty integer branch,
+/// and an integer enum matches its literal values.
+#[test]
+fn test_enum_from_raw_branches() {
+    let g = compile("status = \"ok\" / \"warn\"\npriority = 1 / 2 / 3");
+    let status = &g.source[g.source.find("class Status").unwrap()..g.source.find("class Priority").unwrap()];
+    assert!(status.contains("if isinstance(raw, str):"), "{status}");
+    assert!(!status.contains("isinstance(raw, int)"), "{status}");
+    let priority = &g.source[g.source.find("class Priority").unwrap()..];
+    assert!(priority.contains("if raw == 2:"), "{priority}");
+    assert!(!priority.contains("isinstance(raw, str)"), "{priority}");
+}
+
+/// Issue #48: tags are decoded raw, so tag 1 is not turned into a datetime,
+/// and the package requires a cbor2 with `semantic_decoders`.
+#[test]
+fn test_semantic_decoders_and_cbor2_version() {
+    let g = compile("timestamp = #6.1(uint)");
+    assert!(g.source.contains("_SEMANTIC_DECODERS = {1: _raw_tag(1)}"), "{}", g.source);
+    assert!(g.pyproject.contains("cbor2>=6.0"), "{}", g.pyproject);
+}
+
+/// Issue #48: float16/float32 fields are written at their own CBOR width
+/// (cbor2 writes every Python float as float64); float64 is left alone.
+#[test]
+fn test_float_fields_keep_their_width() {
+    let g = compile("r = { a: float16, b: float32, c: float64 }");
+    assert!(g.source.contains("m[\"a\"] = _f16(self.a)"), "{}", g.source);
+    assert!(g.source.contains("m[\"b\"] = _f32(self.b)"), "{}", g.source);
+    assert!(g.source.contains("m[\"c\"] = self.c"), "{}", g.source);
+    assert!(g.source.contains("cbor2.dumps(value, default=_default)"), "{}", g.source);
+}
+
+/// Issue #48: range errors state the bounds, not Rust's `Option` debug text.
+#[test]
+fn test_range_error_message_is_readable() {
+    let g = compile("pct = uint .le 100\ntemp = int .ge -40\nlevel = 0..10");
+    assert!(g.source.contains("\"Pct: value must be <= 100\""), "{}", g.source);
+    assert!(g.source.contains("\"Temp: value must be >= -40\""), "{}", g.source);
+    assert!(g.source.contains("value must be >= 0 and <= 10"), "{}", g.source);
+    assert!(!g.source.contains("Some("), "{}", g.source);
 }
