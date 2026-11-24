@@ -93,6 +93,16 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
         w.line("import 'package:cbor/cbor.dart';");
     }
     w.blank();
+    if !opts.is_json() && module_uses_tags(module) {
+        let mut helpers = vec![UNTAG_HELPER];
+        if module_uses_any(module) { helpers.push(WITH_TAGS_HELPER); }
+        for h in helpers {
+            for l in h.lines() {
+                if l.is_empty() { w.blank() } else { w.line(l) }
+            }
+            w.blank();
+        }
+    }
 
     for (_, def) in &module.types {
         emit_type(&mut w, module, def, opts);
@@ -100,6 +110,74 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     }
 
     w.finish()
+}
+
+/// Decoding checks a tag with `_untag`; package:cbor keeps tags on the value.
+const UNTAG_HELPER: &str = r#"/// [v], checked to carry CBOR tag [tag]; [at] names it in the error.
+CborValue _untag(int tag, CborValue v, String at) {
+  if (!v.tags.contains(tag)) {
+    throw FormatException('$at: expected CBOR tag $tag, got ${v.tags}');
+  }
+  return v;
+}"#;
+
+/// For an `any` or a choice under a tag: `CborValue(object)` takes no tags, so
+/// the tags' heads are written in front of its encoding and the result decoded.
+const WITH_TAGS_HELPER: &str = r#"/// [v] with CBOR [tags] in front, outermost first.
+CborValue _withTags(List<int> tags, CborValue v) {
+  final head = <int>[];
+  for (final tag in tags) {
+    if (tag < 24) {
+      head.add(0xc0 | tag);
+    } else if (tag < 0x100) {
+      head.addAll([0xd8, tag]);
+    } else if (tag < 0x10000) {
+      head.addAll([0xd9, tag >> 8, tag & 0xff]);
+    } else if (tag < 0x100000000) {
+      head.addAll([0xda, (tag >> 24) & 0xff, (tag >> 16) & 0xff, (tag >> 8) & 0xff, tag & 0xff]);
+    } else {
+      head.add(0xdb);
+      for (var shift = 56; shift >= 0; shift -= 8) {
+        head.add((tag >> shift) & 0xff);
+      }
+    }
+  }
+  return cbor.decode([...head, ...cbor.encode(v)]);
+}"#;
+
+fn module_uses_tags(module: &IrModule) -> bool {
+    fn tr(t: &TypeRef) -> bool {
+        match t {
+            TypeRef::Tagged(..)  => true,
+            TypeRef::Choice(ts)  => ts.iter().any(tr),
+            _                    => false,
+        }
+    }
+    module.types.values().any(|def| match def {
+        TypeDef::Struct(s) => s.tagged.is_some() || s.fields.iter().any(|f| tr(&f.ty)),
+        TypeDef::Enum(e)   => e.tagged.is_some() || e.variants.iter().any(|v| tr(&v.ty)),
+        TypeDef::Array(a)  => a.tagged.is_some() || tr(&a.element),
+        TypeDef::Map(m)    => m.tagged.is_some(),
+        TypeDef::Alias(a)  => a.tagged.is_some() || tr(&a.ty),
+    })
+}
+
+/// Whether an `any` or an inline choice appears anywhere, which a tag may wrap.
+fn module_uses_any(module: &IrModule) -> bool {
+    fn tr(t: &TypeRef) -> bool {
+        match t {
+            TypeRef::Primitive(Primitive::Any) | TypeRef::Choice(_) => true,
+            TypeRef::Tagged(_, inner) => tr(inner),
+            _ => false,
+        }
+    }
+    module.types.values().any(|def| match def {
+        TypeDef::Struct(s) => s.fields.iter().any(|f| tr(&f.ty)),
+        TypeDef::Enum(e)   => e.variants.iter().any(|v| tr(&v.ty)),
+        TypeDef::Array(a)  => tr(&a.element),
+        TypeDef::Map(_)    => false,
+        TypeDef::Alias(a)  => tr(&a.ty),
+    })
 }
 
 fn module_uses_bstr(module: &IrModule) -> bool {
@@ -243,23 +321,22 @@ fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
 fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
     w.line(&format!("static {class_name} decode(Uint8List bytes) {{"));
     w.indent();
-    w.line("final v = cbor.decode(bytes);");
-    if s.tagged.is_some() {
-        w.line("final m = (v is CborTag ? v.value : v) as CborMap;");
-    } else {
-        w.line("final m = v as CborMap;");
-    }
-    w.line(&format!("return {class_name}._fromCborMap(m);"));
+    w.line(&format!("return {class_name}._fromCborMap(cbor.decode(bytes) as CborMap);"));
     w.dedent();
     w.line("}");
     w.blank();
-    w.line(&format!("factory {class_name}._fromCborMap(CborMap m) => {class_name}("));
+    w.line(&format!("factory {class_name}._fromCborMap(CborMap m) {{"));
+    w.indent();
+    if let Some(tag) = s.tagged {
+        w.line(&format!("_untag({}, m, '{class_name}');", tag.0));
+    }
+    w.line(&format!("return {class_name}("));
     w.indent();
     for f in &s.fields {
         let fname    = dart_field(&f.name);
         let cbor_key = cbor_map_key(&f.key);
         if matches!(f.occurrence, Occurrence::Optional) {
-            let conv = cbor_from_expr(&f.ty, &format!("m[{cbor_key}]"), module, opts);
+            let conv = cbor_from_expr(&f.ty, &format!("m[{cbor_key}]!"), module, opts);
             w.line(&format!("{fname}: m.containsKey({cbor_key}) ? {conv} : null,"));
         } else if f.occurrence.is_repeated() {
             let item_conv = cbor_from_expr(&f.ty, "e", module, opts);
@@ -272,14 +349,16 @@ fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     }
     w.dedent();
     w.line(");");
+    w.dedent();
+    w.line("}");
 }
 
 fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &CodegenOptions) {
-    w.line("Uint8List encode() => cbor.encode(_toCborValue());");
+    w.line("Uint8List encode() => Uint8List.fromList(cbor.encode(_toCborValue()));");
     w.blank();
-    w.line("CborValue _toCborValue() {");
+    w.line("CborValue _toCborValue([List<int> tags = const []]) {");
     w.indent();
-    w.line("final m = CborMap({");
+    w.line("return CborMap({");
     w.indent();
     let fields: Vec<_> = if s.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
@@ -304,12 +383,11 @@ fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
         }
     }
     w.dedent();
-    w.line("});");
-    if let Some(tag) = s.tagged {
-        w.line(&format!("return CborTag([{}], m);", tag.0));
-    } else {
-        w.line("return m;");
-    }
+    let tags = match s.tagged {
+        Some(tag) => add_tag("tags", tag.0),
+        None      => "tags".to_owned(),
+    };
+    w.line(&format!("}}, tags: {tags});"));
     w.dedent();
     w.line("}");
 }
@@ -496,58 +574,57 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, class_name: &str, _opts: &C
 }
 
 fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_name: &str, opts: &CodegenOptions) {
-    w.line("Uint8List encode() => cbor.encode(_toCborValue());");
+    w.line("Uint8List encode() => Uint8List.fromList(cbor.encode(_toCborValue()));");
     w.blank();
-    w.line("CborValue _toCborValue() {");
+    w.line("CborValue _toCborValue([List<int> tags = const []]) {");
     w.indent();
+    let tags = match e.tagged {
+        Some(tag) => add_tag("tags", tag.0),
+        None      => "tags".to_owned(),
+    };
     w.line("switch (kind) {");
     w.indent();
     for v in &e.variants {
         let kind_str = variant_kind_str(v);
         let cbor_val = match &v.ty {
             TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
-                format!("CborString({kind_str:?})")
+                format!("CborString({kind_str:?}, tags: {tags})")
             }
             TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
                 if let Some(lit) = variant_int_literal(&v.name) {
-                    format!("CborSmallInt({lit})")
+                    format!("CborSmallInt({lit}, tags: {tags})")
                 } else {
-                    cbor_to_expr(
-                        &TypeRef::Primitive(Primitive::Int), "value as int", module, opts)
+                    cbor_to_expr_tagged(
+                        &TypeRef::Primitive(Primitive::Int), "value as int", module, opts, &tags)
                 }
             }
             TypeRef::Primitive(p) => {
-                cbor_to_expr(&TypeRef::Primitive(p.clone()), "value as dynamic", module, opts)
+                cbor_to_expr_tagged(&TypeRef::Primitive(p.clone()), "value as dynamic", module, opts, &tags)
             }
-            TypeRef::Named(_) => "(value as dynamic)._toCborValue()".to_owned(),
-            _                 => format!("CborString({kind_str:?})"),
+            TypeRef::Named(_) => format!("(value as dynamic)._toCborValue({tags})"),
+            _                 => format!("CborString({kind_str:?}, tags: {tags})"),
         };
         w.line(&format!("case {kind_str:?}: return {cbor_val};"));
     }
     w.dedent();
     w.line("}");
-    if let Some(tag) = e.tagged {
-        w.line(&format!("return CborTag([{}], CborNull());", tag.0));
-    } else {
-        w.line("throw StateError('Unknown kind: $kind');");
-    }
+    w.line("throw StateError('Unknown kind: $kind');");
     w.dedent();
     w.line("}");
     w.blank();
 
     w.line(&format!("static {class_name} decode(Uint8List bytes) {{"));
     w.indent();
-    w.line("var v = cbor.decode(bytes);");
-    if e.tagged.is_some() {
-        w.line("if (v is CborTag) v = v.value;");
-    }
-    w.line(&format!("return {class_name}._fromCborValue(v);"));
+    w.line(&format!("return {class_name}._fromCborValue(cbor.decode(bytes));"));
     w.dedent();
     w.line("}");
     w.blank();
 
     w.line(&format!("static {class_name} _fromCborValue(CborValue v) {{"));
     w.indent();
+    if let Some(tag) = e.tagged {
+        w.line(&format!("_untag({}, v, '{class_name}');", tag.0));
+    }
 
     // String variants
     let has_str = e.variants.iter().any(|v|
@@ -871,11 +948,14 @@ fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
             Primitive::Bstr                   =>
                 format!("Uint8List.fromList(({expr} as CborBytes).bytes)"),
             Primitive::Tstr                   => format!("({expr} as CborString).toString()"),
-            Primitive::Undefined | Primitive::Any => expr.to_owned(),
+            Primitive::Undefined | Primitive::Any => format!("({expr}).toObject()"),
         },
         TypeRef::Named(n) => {
             match module.get(n.as_str()) {
-                Some(TypeDef::Alias(a)) => cbor_from_expr(&a.ty, expr, module, opts),
+                Some(TypeDef::Alias(a)) => match a.tagged {
+                    Some(tag) => cbor_from_expr(&a.ty, &format!("_untag({}, {expr}, '{}')", tag.0, to_pascal_case(n)), module, opts),
+                    None      => cbor_from_expr(&a.ty, expr, module, opts),
+                },
                 Some(TypeDef::Array(a)) => {
                     let item = cbor_from_expr(&a.element, "e", module, opts);
                     format!("({expr} as CborList).map((e) => {item}).toList()")
@@ -883,7 +963,7 @@ fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                 Some(TypeDef::Map(_)) => format!("{expr} as Map"),
                 Some(TypeDef::Enum(_)) => {
                     let cls = to_pascal_case(n);
-                    format!("{cls}._fromCborValue({expr}!)")
+                    format!("{cls}._fromCborValue({expr})")
                 }
                 Some(TypeDef::Struct(_)) | None => {
                     let cls = to_pascal_case(n);
@@ -891,38 +971,68 @@ fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                 }
             }
         }
-        TypeRef::Tagged(_, inner) => cbor_from_expr(inner, expr, module, opts),
-        TypeRef::Choice(_)        => expr.to_owned(),
+        TypeRef::Tagged(tag, inner) =>
+            cbor_from_expr(inner, &format!("_untag({}, {expr}, 'tagged value')", tag.0), module, opts),
+        TypeRef::Choice(_)        => format!("({expr}).toObject()"),
     }
 }
 
 fn cbor_to_expr(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOptions) -> String {
+    cbor_to_expr_tagged(ty, field, module, opts, "")
+}
+
+/// `tags` followed by tag `n`, as a Dart list expression; `tags` is a list
+/// expression too, or empty for none.
+fn add_tag(tags: &str, n: u64) -> String {
+    if tags.is_empty() { format!("[{n}]") } else { format!("[...{tags}, {n}]") }
+}
+
+/// [`cbor_to_expr`], the value carrying `tags` (a Dart list expression, or empty
+/// for none): package:cbor keeps tags on the value, so each constructor gets them.
+fn cbor_to_expr_tagged(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOptions, tags: &str) -> String {
+    let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
+    let t_only = if tags.is_empty() { String::new() } else { format!("tags: {tags}") };
     match ty {
         TypeRef::Primitive(p) => match p {
-            Primitive::Bool                   => format!("CborBool({field})"),
-            Primitive::Null                   => "CborNull()".to_owned(),
-            Primitive::Uint | Primitive::Int  => format!("CborSmallInt({field})"),
+            Primitive::Bool                   => format!("CborBool({field}{t})"),
+            Primitive::Null                   => format!("CborNull({t_only})"),
+            Primitive::Uint | Primitive::Int  => format!("CborSmallInt({field}{t})"),
+            // package:cbor writes the shortest lossless width unless told; the
+            // other backends write float16/float32 at 4 bytes and float64 at 8.
             Primitive::Float16 | Primitive::Float32
-                | Primitive::Float64 | Primitive::Float
-                                              => format!("CborFloat({field})"),
-            Primitive::Bstr                   => format!("CborBytes({field})"),
-            Primitive::Tstr                   => format!("CborString({field})"),
-            Primitive::Undefined | Primitive::Any => format!("CborString({field}.toString())"),
+                => format!("(CborFloat((Float32List(1)..[0] = {field})[0]{t})..floatPrecision())"),
+            Primitive::Float64 | Primitive::Float
+                => format!("(CborFloat({field}{t})..doublePrecision())"),
+            Primitive::Bstr                   => format!("CborBytes({field}{t})"),
+            Primitive::Tstr                   => format!("CborString({field}{t})"),
+            Primitive::Undefined              => format!("CborUndefined({t_only})"),
+            Primitive::Any if tags.is_empty() => format!("CborValue({field})"),
+            Primitive::Any                    => format!("_withTags({tags}, CborValue({field}))"),
         },
         TypeRef::Named(n) => {
             match module.get(n.as_str()) {
-                Some(TypeDef::Alias(a)) => cbor_to_expr(&a.ty, field, module, opts),
-                Some(TypeDef::Array(a)) => {
-                    let item = cbor_to_expr(&a.element, "e", module, opts);
-                    format!("CborList({field}.map((e) => {item}).toList())")
+                Some(TypeDef::Alias(a)) => {
+                    let tags = match a.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
+                    cbor_to_expr_tagged(&a.ty, field, module, opts, &tags)
                 }
-                Some(TypeDef::Map(_)) => format!("CborMap({field})"),
-                Some(TypeDef::Enum(_)) => format!("{field}._toCborValue()"),
-                Some(TypeDef::Struct(_)) | None => format!("{field}._toCborValue()"),
+                Some(TypeDef::Array(a)) => {
+                    let tags = match a.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
+                    let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
+                    let item = cbor_to_expr(&a.element, "e", module, opts);
+                    format!("CborList({field}.map((e) => {item}).toList(){t})")
+                }
+                Some(TypeDef::Map(m)) => {
+                    let tags = match m.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
+                    let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
+                    format!("CborMap({field}{t})")
+                }
+                Some(TypeDef::Enum(_)) | Some(TypeDef::Struct(_)) | None =>
+                    format!("{field}._toCborValue({tags})"),
             }
         }
-        TypeRef::Tagged(_, inner) => cbor_to_expr(inner, field, module, opts),
-        TypeRef::Choice(_)        => "CborNull()".to_owned(),
+        TypeRef::Tagged(tag, inner) => cbor_to_expr_tagged(inner, field, module, opts, &add_tag(tags, tag.0)),
+        TypeRef::Choice(_) if tags.is_empty() => format!("CborValue({field})"),
+        TypeRef::Choice(_)        => format!("_withTags({tags}, CborValue({field}))"),
     }
 }
 

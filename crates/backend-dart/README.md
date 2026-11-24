@@ -115,6 +115,19 @@ typedef DeviceId = String;
 | `cbor` (default) | `toCbor() → CborValue`, `fromCbor(CborValue)` |
 | `json` | `toJson() → dynamic`, `fromJson(dynamic)` |
 
+## CBOR wire format
+
+The bytes match the other backends' for the same values (checked against the
+`--interop` vectors):
+
+- **Tags** (`#6.N(T)`) on a type, a member or an alias are written, and checked on
+  decode: a value without its tag raises `FormatException`.
+- **Floats** are written at their CDDL width: `float32` (and `float16`) at 4 bytes,
+  rounded to float32 first, and `float64` at 8. `package:cbor` would otherwise pick
+  the shortest width that holds the value.
+- **`any`** and inline choices are converted with `CborValue(object)` and decoded
+  with `toObject()`.
+
 ## Install and test generated code
 
 ```bash
@@ -152,6 +165,8 @@ dependencies:
   on the generated class.
 - **Sealed classes for enums**: Dart 3 sealed classes would provide exhaustive pattern
   matching for CDDL enums; the current tagged-class approach requires manual `if/else`.
+- **Aliases and arrays** are `typedef`s with no `encode` / `decode` of their own;
+  they are encoded as members of structs, and get no generated tests.
 - **`package:cbor` v6 API**: the generated code targets `cbor: ^6.3.0`; earlier versions
   have a different API and are not supported.
 - **No null-safety migration guard**: the generated code requires sound null safety (Dart
