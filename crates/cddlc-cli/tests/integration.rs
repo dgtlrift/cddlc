@@ -47,7 +47,7 @@ fn dry_run(input: &Path, extra: &[&str]) -> (String, String, bool) {
 }
 
 /// Run cddlc and write output to a temp dir, return the dir path.
-fn generate(input: &Path, extra: &[&str]) -> (PathBuf, String, bool) {
+fn generate(input: &Path, extra: &[&str]) -> (TestDir, String, bool) {
     let dir = tempdir();
     let mut args = vec![
         "generate",
@@ -59,16 +59,27 @@ fn generate(input: &Path, extra: &[&str]) -> (PathBuf, String, bool) {
     (dir, stderr, ok)
 }
 
-/// Create a unique temp directory under /tmp.
-fn tempdir() -> PathBuf {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
-    let dir = std::env::temp_dir().join(format!("cddlc_test_{ts}"));
-    fs::create_dir_all(&dir).unwrap();
-    dir
+/// A temp directory for one test, removed when the test drops it. Derefs to
+/// `Path`, so it is used like one (`dir.join(..)`, `&dir`).
+struct TestDir(tempfile::TempDir);
+
+impl std::ops::Deref for TestDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+/// Create a fresh, uniquely named temp directory. `tempfile` creates it
+/// atomically, so tests running in parallel never share one (issue #30: names
+/// built from the clock's nanoseconds could collide).
+fn tempdir() -> TestDir {
+    TestDir(
+        tempfile::Builder::new()
+            .prefix("cddlc_test_")
+            .tempdir()
+            .expect("create temp dir"),
+    )
 }
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
@@ -432,7 +443,7 @@ fn test_validate_no_data_files_errors() {
     assert!(stderr.contains("--json") || stderr.contains("--cbor"), "{stderr}");
 }
 
-fn run_generate(input: &Path, extra: &[&str]) -> (PathBuf, String, bool) {
+fn run_generate(input: &Path, extra: &[&str]) -> (TestDir, String, bool) {
     let dir = tempdir();
     let mut args = vec![
         "generate",
