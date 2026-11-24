@@ -22,7 +22,7 @@ use cddlc_codegen::{
     CodegenOptions, GeneratedFile, IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, IrModule,
+    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, FieldDef, IrModule, LiteralValue,
     Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 use minicbor::encode::Encoder;
@@ -111,7 +111,8 @@ pub enum FieldVal {
     Text(String),
     Bytes(Vec<u8>),
     Null,
-    Enum { kind: String },
+    /// `kind` is the variant's type name, `text` its CDDL string on the wire.
+    Enum { kind: String, text: String },
 }
 
 // ── Vector collection ─────────────────────────────────────────────────────────
@@ -121,19 +122,19 @@ fn collect_vectors(module: &IrModule, opts: &CodegenOptions) -> Vec<TestVector> 
     for (_, def) in &module.types {
         match def {
             TypeDef::Struct(s) => {
-                if let Some(v) = encode_struct(s, "default values", false, opts) { vecs.push(v); }
-                if let Some(v) = encode_struct(s, "explicit values", true, opts) { vecs.push(v); }
+                if let Some(v) = encode_struct(s, module, "default values", false, opts) { vecs.push(v); }
+                if let Some(v) = encode_struct(s, module, "explicit values", true, opts) { vecs.push(v); }
             }
             TypeDef::Enum(e) => {
                 for v in &e.variants {
-                    if let Some(vec) = encode_enum_variant(e, v, opts) { vecs.push(vec); }
+                    if let Some(vec) = encode_enum_variant(e, v, module, opts) { vecs.push(vec); }
                 }
             }
             TypeDef::Alias(a) => {
-                if let Some(v) = encode_alias(a, opts) { vecs.push(v); }
+                if let Some(v) = encode_alias(a, module, opts) { vecs.push(v); }
             }
             TypeDef::Array(a) => {
-                if let Some(v) = encode_array_empty(a, opts) { vecs.push(v); }
+                if let Some(v) = encode_array_empty(a, module, opts) { vecs.push(v); }
             }
             TypeDef::Map(_) => {}
         }
@@ -143,39 +144,21 @@ fn collect_vectors(module: &IrModule, opts: &CodegenOptions) -> Vec<TestVector> 
 
 // ── Struct encoder ────────────────────────────────────────────────────────────
 
+type Enc<'a> = Encoder<&'a mut Vec<u8>>;
+
+/// Nesting depth past which a vector can't be built (a recursive schema).
+const MAX_SAMPLE_DEPTH: usize = 4;
+
 fn encode_struct(
     s:        &StructDef,
+    module:   &IrModule,
     desc:     &str,
     explicit: bool,
     opts:     &CodegenOptions,
 ) -> Option<TestVector> {
-    let fields: Vec<_> = if opts.dcbor {
-        let mut fs: Vec<_> = s.fields.iter().collect();
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
-        fs
-    } else {
-        s.fields.iter().collect()
-    };
-
     let mut buf = Vec::new();
     let mut enc = Encoder::new(&mut buf);
-
-    if let Some(tag) = s.tagged {
-        enc.tag(minicbor::data::Tag::new(tag.0)).ok().map(|_| ())?;
-    }
-
-    let field_count = fields.iter().filter(|f| !matches!(f.occurrence, Occurrence::Optional)).count();
-    enc.map(field_count as u64).ok().map(|_| ())?;
-
-    let mut field_values = Vec::new();
-    for f in &fields {
-        if matches!(f.occurrence, Occurrence::Optional) { continue; }
-        enc.str(f.name.as_str()).ok().map(|_| ())?;
-        let val = if explicit { explicit_field_val(&f.ty) } else { default_field_val(&f.ty) };
-        encode_field_val(&mut enc, &val)?;
-        field_values.push(FieldValue { name: to_snake_case(&f.name), value: val });
-    }
-
+    let field_values = write_struct(&mut enc, s, module, explicit, opts, 0)?;
     drop(enc);
     Some(TestVector {
         type_name:   to_pascal_case(&s.name),
@@ -185,88 +168,238 @@ fn encode_struct(
     })
 }
 
+/// Writes a struct's map (its required members) and returns the members a
+/// harness can assert on: those of a primitive type. Members of a named, tagged
+/// or choice type are written as real values of that type but not asserted.
+fn write_struct(
+    enc:      &mut Enc,
+    s:        &StructDef,
+    module:   &IrModule,
+    explicit: bool,
+    opts:     &CodegenOptions,
+    depth:    usize,
+) -> Option<Vec<FieldValue>> {
+    let mut fields: Vec<&FieldDef> = s.fields.iter()
+        .filter(|f| !matches!(f.occurrence, Occurrence::Optional))
+        .collect();
+    if opts.dcbor {
+        fields.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    if let Some(tag) = s.tagged {
+        enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
+    }
+    enc.map(fields.len() as u64).ok()?;
+
+    let mut field_values = Vec::new();
+    for f in fields {
+        enc.str(f.name.as_str()).ok()?;
+        match member_value(f, explicit) {
+            Some(val) => {
+                encode_field_val(enc, &val)?;
+                field_values.push(FieldValue { name: to_snake_case(&f.name), value: val });
+            }
+            None => write_sample(enc, &f.ty, module, explicit, opts, depth + 1)?,
+        }
+    }
+    Some(field_values)
+}
+
+/// The value of a primitive-typed member: its literal when it is pinned to one
+/// (`always: true`), a value inside its constraints, or the default/explicit
+/// value. `None` for members of a named, tagged or choice type.
+fn member_value(f: &FieldDef, explicit: bool) -> Option<FieldVal> {
+    let TypeRef::Primitive(_) = &f.ty else { return None };
+    if let Some(lit) = f.constraints.iter().find_map(|c| match c {
+        Constraint::Eq(v) => literal_val(v),
+        _ => None,
+    }) {
+        return Some(lit);
+    }
+    if !f.constraints.is_empty() {
+        return Some(valid_alias_val(&f.constraints, &f.ty));
+    }
+    Some(if explicit { explicit_field_val(&f.ty) } else { default_field_val(&f.ty) })
+}
+
+fn literal_val(v: &LiteralValue) -> Option<FieldVal> {
+    Some(match v {
+        LiteralValue::Bool(b)  => FieldVal::Bool(*b),
+        LiteralValue::Uint(n)  => FieldVal::Uint(*n),
+        LiteralValue::Int(n)   => FieldVal::Int(*n),
+        LiteralValue::Float(f) => FieldVal::Float(*f),
+        LiteralValue::Text(t)  => FieldVal::Text(t.clone()),
+        LiteralValue::Bytes(b) => FieldVal::Bytes(b.clone()),
+        LiteralValue::Null     => FieldVal::Null,
+    })
+}
+
+/// Writes a valid value of `ty`. A named type is built from its definition:
+/// a struct's map, an alias's (tagged, constrained) inner value, an enum's first
+/// variant, an array with its minimum number of elements. `None` when no value
+/// can be built (a bare map type, or nesting past `MAX_SAMPLE_DEPTH`).
+fn write_sample(
+    enc:      &mut Enc,
+    ty:       &TypeRef,
+    module:   &IrModule,
+    explicit: bool,
+    opts:     &CodegenOptions,
+    depth:    usize,
+) -> Option<()> {
+    if depth > MAX_SAMPLE_DEPTH {
+        return None;
+    }
+    match ty {
+        TypeRef::Primitive(_) => {
+            let val = if explicit { explicit_field_val(ty) } else { default_field_val(ty) };
+            encode_field_val(enc, &val)
+        }
+        TypeRef::Tagged(tag, inner) => {
+            enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
+            write_sample(enc, inner, module, explicit, opts, depth)
+        }
+        TypeRef::Choice(alts) => write_sample(enc, alts.first()?, module, explicit, opts, depth),
+        TypeRef::Named(n) => match module.get(n)? {
+            TypeDef::Struct(s) => write_struct(enc, s, module, explicit, opts, depth).map(|_| ()),
+            TypeDef::Alias(a) => write_alias(enc, a, module, opts, depth),
+            TypeDef::Enum(e) => {
+                if let Some(tag) = e.tagged {
+                    enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
+                }
+                write_variant(enc, e.variants.first()?, module, opts, depth)
+            }
+            TypeDef::Array(a) => write_array(enc, a, module, explicit, opts, depth),
+            TypeDef::Map(_) => None,
+        },
+    }
+}
+
+/// Writes an alias's value: its tag, then a value inside its constraints.
+fn write_alias(enc: &mut Enc, a: &AliasDef, module: &IrModule, opts: &CodegenOptions, depth: usize) -> Option<()> {
+    if let Some(tag) = a.tagged {
+        enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
+    }
+    match &a.ty {
+        TypeRef::Primitive(_) => encode_field_val(enc, &valid_alias_val(&a.constraints, &a.ty)),
+        other => write_sample(enc, other, module, false, opts, depth + 1),
+    }
+}
+
+/// Writes an array with the fewest elements its occurrence allows.
+fn write_array(
+    enc:      &mut Enc,
+    a:        &ArrayDef,
+    module:   &IrModule,
+    explicit: bool,
+    opts:     &CodegenOptions,
+    depth:    usize,
+) -> Option<()> {
+    if let Some(tag) = a.tagged {
+        enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
+    }
+    let min = match &a.occurrence {
+        Occurrence::OneOrMore { .. } => 1,
+        Occurrence::Bounded { min, .. } => *min as u64,
+        _ => 0,
+    };
+    enc.array(min).ok()?;
+    for _ in 0..min {
+        write_sample(enc, &a.element, module, explicit, opts, depth + 1)?;
+    }
+    Some(())
+}
+
+/// Writes one enum variant's value: its text or integer literal, or a value of
+/// its type.
+fn write_variant(enc: &mut Enc, v: &EnumVariant, module: &IrModule, opts: &CodegenOptions, depth: usize) -> Option<()> {
+    let int_literal = v.constraints.iter().find_map(|c| match c {
+        Constraint::Eq(LiteralValue::Uint(n)) => Some(FieldVal::Uint(*n)),
+        Constraint::Eq(LiteralValue::Int(n))  => Some(FieldVal::Int(*n)),
+        _ => None,
+    });
+    match &v.ty {
+        TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
+            enc.str(&cddlc_codegen::enum_variant_text(v)).ok().map(|_| ())
+        }
+        TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
+            encode_field_val(enc, &int_literal.unwrap_or(FieldVal::Uint(0)))
+        }
+        TypeRef::Primitive(Primitive::Bool) => enc.bool(false).ok().map(|_| ()),
+        other => write_sample(enc, other, module, false, opts, depth + 1),
+    }
+}
+
 // ── Enum variant encoder ──────────────────────────────────────────────────────
 
 fn encode_enum_variant(
-    e:    &EnumDef,
-    v:    &EnumVariant,
-    _opts: &CodegenOptions,
+    e:      &EnumDef,
+    v:      &EnumVariant,
+    module: &IrModule,
+    opts:   &CodegenOptions,
 ) -> Option<TestVector> {
     let mut buf = Vec::new();
     let mut enc = Encoder::new(&mut buf);
 
     if let Some(tag) = e.tagged {
-        enc.tag(minicbor::data::Tag::new(tag.0)).ok().map(|_| ())?;
+        enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
     }
-
-    let cddl_str = v.name.to_lowercase().replace('_', "-");
-    let field_val;
-    match &v.ty {
-        TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
-            enc.str(&cddl_str).ok().map(|_| ())?;
-            field_val = FieldVal::Enum { kind: to_pascal_case(&v.name) };
-        }
-        TypeRef::Primitive(Primitive::Uint) => {
-            enc.u64(0).ok().map(|_| ())?;
-            field_val = FieldVal::Uint(0);
-        }
-        TypeRef::Primitive(Primitive::Int) => {
-            enc.i64(0).ok().map(|_| ())?;
-            field_val = FieldVal::Int(0);
-        }
-        TypeRef::Primitive(Primitive::Bool) => {
-            enc.bool(false).ok().map(|_| ())?;
-            field_val = FieldVal::Bool(false);
-        }
-        _ => return None,
-    }
-
+    write_variant(&mut enc, v, module, opts, 0)?;
     drop(enc);
+
+    // Only a text variant is asserted (by its kind); an enum has no `kind`
+    // member a harness could compare an integer or boolean variant against.
+    let fields = match &v.ty {
+        TypeRef::Primitive(Primitive::Tstr) => vec![FieldValue {
+            name:  "kind".into(),
+            value: FieldVal::Enum {
+                kind: to_pascal_case(&v.name),
+                text: cddlc_codegen::enum_variant_text(v),
+            },
+        }],
+        _ => vec![],
+    };
     Some(TestVector {
         type_name:   to_pascal_case(&e.name),
         description: format!("variant {}", to_pascal_case(&v.name)),
         cbor_bytes:  buf,
-        fields:      vec![FieldValue { name: "kind".into(), value: field_val }],
+        fields,
     })
 }
 
 // ── Alias encoder ─────────────────────────────────────────────────────────────
 
-fn encode_alias(a: &AliasDef, _opts: &CodegenOptions) -> Option<TestVector> {
+fn encode_alias(a: &AliasDef, module: &IrModule, opts: &CodegenOptions) -> Option<TestVector> {
     let mut buf = Vec::new();
     let mut enc = Encoder::new(&mut buf);
-
-    if let Some(tag) = a.tagged {
-        enc.tag(minicbor::data::Tag::new(tag.0)).ok().map(|_| ())?;
-    }
-
-    let val = valid_alias_val(&a.constraints, &a.ty);
-    encode_field_val(&mut enc, &val)?;
-
+    write_alias(&mut enc, a, module, opts, 0)?;
     drop(enc);
+
+    // A primitive alias is asserted through its `value`; an alias of a named
+    // type is only decoded.
+    let fields = match &a.ty {
+        TypeRef::Primitive(_) => vec![FieldValue {
+            name:  "value".into(),
+            value: valid_alias_val(&a.constraints, &a.ty),
+        }],
+        _ => vec![],
+    };
     Some(TestVector {
         type_name:   to_pascal_case(&a.name),
         description: "valid value".into(),
         cbor_bytes:  buf,
-        fields:      vec![FieldValue { name: "value".into(), value: val }],
+        fields,
     })
 }
 
 // ── Array encoder ─────────────────────────────────────────────────────────────
 
-fn encode_array_empty(a: &ArrayDef, _opts: &CodegenOptions) -> Option<TestVector> {
+fn encode_array_empty(a: &ArrayDef, module: &IrModule, opts: &CodegenOptions) -> Option<TestVector> {
     let mut buf = Vec::new();
     let mut enc = Encoder::new(&mut buf);
-
-    if let Some(tag) = a.tagged {
-        enc.tag(minicbor::data::Tag::new(tag.0)).ok().map(|_| ())?;
-    }
-    enc.array(0).ok().map(|_| ())?;
-
+    write_array(&mut enc, a, module, false, opts, 0)?;
     drop(enc);
     Some(TestVector {
         type_name:   to_pascal_case(&a.name),
-        description: "empty array".into(),
+        description: "minimal array".into(),
         cbor_bytes:  buf,
         fields:      vec![],
     })
@@ -283,7 +416,7 @@ fn encode_field_val(enc: &mut Encoder<&mut Vec<u8>>, val: &FieldVal) -> Option<(
         FieldVal::Text(s)    => enc.str(s).ok().map(|_| ()),
         FieldVal::Bytes(b)   => enc.bytes(b).ok().map(|_| ()),
         FieldVal::Null       => enc.null().ok().map(|_| ()),
-        FieldVal::Enum { kind } => enc.str(&kind.to_lowercase().replace('_', "-")).ok().map(|_| ()),
+        FieldVal::Enum { text, .. } => enc.str(text).ok().map(|_| ()),
     }
 }
 
@@ -384,7 +517,7 @@ fn json_value(v: &FieldVal) -> String {
             format!("\"0x{hex}\"")
         }
         FieldVal::Null        => "null".into(),
-        FieldVal::Enum { kind } => format!("\"{}\"", kind),
+        FieldVal::Enum { kind, .. } => format!("\"{}\"", kind),
     }
 }
 
@@ -434,7 +567,7 @@ fn emit_rust_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions
         for f in &v.fields {
             let fname = &f.name;
             match &f.value {
-                FieldVal::Enum { kind } =>
+                FieldVal::Enum { kind, .. } =>
                     w.line(&format!("assert_eq!(decoded.kind, {:?});", kind)),
                 FieldVal::Text(s) =>
                     w.line(&format!("assert_eq!(decoded.{fname}, {:?});", s)),
@@ -515,7 +648,7 @@ fn emit_c_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -
                 FieldVal::Text(s) =>
                     w.line(&format!("assert(decoded.{fname}.len == {} && memcmp(decoded.{fname}.ptr, {:?}, {}) == 0);",
                         s.len(), s, s.len())),
-                FieldVal::Enum { kind } =>
+                FieldVal::Enum { kind, .. } =>
                     w.line(&format!("assert(decoded.tag == {}_{});",
                         to_snake_case(&v.type_name).to_uppercase(),
                         to_snake_case(kind).to_uppercase())),
@@ -556,6 +689,7 @@ fn emit_cpp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
     w.line("// interop test harness (C++)");
     w.line(&format!("#include \"{schema}.hpp\""));
     w.line("#include <cassert>");
+    w.line("#include <cmath>");
     w.line("#include <cstring>");
     w.line("#include <cstdio>");
     w.line("#include <array>");
@@ -585,7 +719,7 @@ fn emit_cpp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
             let fname = &f.name;
             match &f.value {
                 FieldVal::Uint(n) =>
-                    w.line(&format!("assert(std::get<uint64_t>(decoded.{fname}) == {n}ULL || decoded.{fname} == {n}ULL);")),
+                    w.line(&format!("assert(decoded.{fname} == {n}ULL);")),
                 FieldVal::Int(n) =>
                     w.line(&format!("assert(decoded.{fname} == {n}LL);")),
                 FieldVal::Bool(b) =>
@@ -594,9 +728,11 @@ fn emit_cpp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
                     w.line(&format!("assert(std::abs(decoded.{fname} - {f}) < 1e-6);")),
                 FieldVal::Text(s) =>
                     w.line(&format!("assert(decoded.{fname} == std::string_view({:?}));", s)),
-                FieldVal::Enum { kind } =>
-                    w.line(&format!("assert(std::holds_alternative<{}>(*std::get_if<{}>(&decoded.value)));",
-                        to_pascal_case(kind), to_pascal_case(kind))),
+                // A C++ enum holds a text variant as its `std::string_view`.
+                FieldVal::Enum { text, .. } =>
+                    w.line(&format!(
+                        "assert(std::get_if<std::string_view>(&decoded.value) && *std::get_if<std::string_view>(&decoded.value) == std::string_view({text:?}));"
+                    )),
                 _ => {}
             }
         }
@@ -668,7 +804,7 @@ fn emit_csharp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                 FieldVal::Bool(b)  => w.line(&format!("Assert.Equal({}, decoded.{pname});", if *b { "true" } else { "false" })),
                 FieldVal::Float(f) => w.line(&format!("Assert.True(Math.Abs(decoded.{pname} - {f}) < 1e-6);")),
                 FieldVal::Text(s)  => w.line(&format!("Assert.Equal({:?}, decoded.{pname});", s)),
-                FieldVal::Enum { kind } => w.line(&format!("Assert.IsType<{type_name}.{kind}>(decoded);")),
+                FieldVal::Enum { kind, .. } => w.line(&format!("Assert.IsType<{type_name}.{kind}>(decoded);")),
                 FieldVal::Null     => w.line(&format!("Assert.Null(decoded.{pname});")),
                 FieldVal::Bytes(b) => {
                     let hex = b.iter().map(|x| format!("{x:02x}")).collect::<String>();
@@ -782,7 +918,7 @@ fn emit_nodejs_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                         w.line(&format!("expect(Math.abs(Number(decoded.{fname}) - {f})).toBeLessThan(1e-4);")),
                     FieldVal::Text(s) =>
                         w.line(&format!("expect(decoded.{fname}).toEqual({s:?});")),
-                    FieldVal::Enum { kind } =>
+                    FieldVal::Enum { kind, .. } =>
                         w.line(&format!("expect(decoded.kind).toEqual({kind:?});")),
                     FieldVal::Null =>
                         w.line(&format!("expect(decoded.{fname}).toBeNull();")),
@@ -877,7 +1013,7 @@ fn emit_python_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                         w.line(&format!("assert abs(decoded.{fname} - {f}) < 1e-4")),
                     FieldVal::Text(s) =>
                         w.line(&format!("assert decoded.{fname} == {s:?}")),
-                    FieldVal::Enum { kind } =>
+                    FieldVal::Enum { kind, .. } =>
                         w.line(&format!("assert decoded.kind == {kind:?}")),
                     FieldVal::Null =>
                         w.line(&format!("assert decoded.{fname} is None")),

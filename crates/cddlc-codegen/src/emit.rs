@@ -233,6 +233,24 @@ pub fn literal_to_c(v: &LiteralValue) -> String {
 
 // ── Capacity helpers ──────────────────────────────────────────────────────────
 
+/// The CDDL string of a text (or `null`) enum variant: the literal it was
+/// written with (`"free-space"` in `"free-space" / "log-distance"`).
+///
+/// A variant without a text literal falls back to its lowercased name. Never
+/// rebuild the string from the name when a literal exists: the name is
+/// PascalCase (`FreeSpace`), so that loses separators and case
+/// (dgtlrift/cddlc#36).
+pub fn enum_variant_text(v: &cddlc_ir::EnumVariant) -> String {
+    let literal = v.constraints.iter().find_map(|c| match c {
+        cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => Some(t.as_str()),
+        _ => None,
+    });
+    match (&v.ty, literal) {
+        (cddlc_ir::TypeRef::Primitive(cddlc_ir::Primitive::Tstr), Some(t)) => t.to_owned(),
+        _ => v.name.to_lowercase().replace('_', "-"),
+    }
+}
+
 use cddlc_ir::Capacity;
 
 pub fn capacity_value(cap: &Capacity, default: usize) -> usize {

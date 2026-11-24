@@ -362,7 +362,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     w.indent();
     for v in &e.variants {
         let vname    = to_pascal_case(&v.name);
-        let cddl_str = v.name.to_lowercase().replace('_', "-");
+        let cddl_str = cddlc_codegen::enum_variant_text(v);
         w.line(&format!("case {vname:?}:"));
         w.indent();
         match &v.ty {
@@ -426,7 +426,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     for v in &e.variants {
         if matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)) {
             let vname    = to_pascal_case(&v.name);
-            let cddl_str = v.name.to_lowercase().replace('_', "-");
+            let cddl_str = cddlc_codegen::enum_variant_text(v);
             w.line(&format!("case {cddl_str:?}: return cls(kind={vname:?})"));
         }
     }

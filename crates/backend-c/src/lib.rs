@@ -438,7 +438,7 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                 w.indent();
                 match &v.ty {
                     TypeRef::Primitive(Primitive::Tstr) => {
-                        let s = v.name.to_lowercase().replace('_', "-");
+                        let s = cddlc_codegen::enum_variant_text(v);
                         w.line(&format!("nanocbor_put_tstr(enc, {:?});", s));
                     }
                     TypeRef::Primitive(Primitive::Uint) =>
@@ -663,7 +663,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
             w.line("if (nanocbor_get_tstr(dec, &s, &slen) < 0) return -1;");
             for v in &e.variants {
                 if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
-                    let cddl_str = v.name.to_lowercase().replace('_', "-");
+                    let cddl_str = cddlc_codegen::enum_variant_text(v);
                     let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
                     w.line(&format!(
                         "if (slen == {} && memcmp(s, {:?}, {}) == 0) {{ out->tag = {vconst}; return NANOCBOR_OK; }}",
@@ -1628,7 +1628,7 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
     for v in &e.variants {
         let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
         let vsnake = v.name.replace('-', "_");
-        let cddl_str = v.name.to_lowercase().replace('_', "-");
+        let cddl_str = cddlc_codegen::enum_variant_text(v);
         w.line(&format!("case {vconst}:"));
         w.indent();
         match &v.ty {
@@ -1658,7 +1658,7 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
     for v in &e.variants {
         if matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)) {
             let vconst   = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-            let cddl_str = v.name.to_lowercase().replace('_', "-");
+            let cddl_str = cddlc_codegen::enum_variant_text(v);
             w.line(&format!("if (strcmp(s, {cddl_str:?}) == 0) {{ out->tag = {vconst}; return true; }}"));
         }
     }

@@ -404,3 +404,14 @@ fn test_literal_members_use_their_literal_in_tests() {
     assert!(t.contains("original.version = 1u;"), "{t}");
     assert!(t.contains("original.kind = std::string_view(\"kernel\");"), "{t}");
 }
+
+/// Issue #36: a text enum is written and read as its CDDL literal, not a string
+/// rebuilt from the PascalCase variant name (`FreeSpace` -> "freespace").
+#[test]
+fn test_text_enum_uses_cddl_literal() {
+    let g = compile("model = \"free-space\" / \"Log_Distance\"");
+    assert!(g.source.contains("\"free-space\""), "{}", g.source);
+    assert!(g.source.contains("\"Log_Distance\""), "{}", g.source);
+    assert!(!g.source.contains("\"freespace\""), "{}", g.source);
+    assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
+}

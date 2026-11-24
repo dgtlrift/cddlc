@@ -351,12 +351,12 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                 w.indent();
                 w.line(&format!("public static readonly {vname} Instance = new();"));
                 w.line(&format!("public override void Encode(CborWriter writer) => writer.WriteTextString({:?});",
-                    v.name.to_lowercase().replace('_', "-")));
+                    cddlc_codegen::enum_variant_text(v)));
                 w.dedent();
                 w.line("}");
             }
             TypeRef::Primitive(Primitive::Tstr) => {
-                let cddl_str = v.name.to_lowercase().replace('_', "-");
+                let cddl_str = cddlc_codegen::enum_variant_text(v);
                 w.line(&format!("public sealed class {vname} : {type_name}"));
                 w.line("{");
                 w.indent();
@@ -426,7 +426,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     for v in &e.variants {
         if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)) {
             let vname    = to_pascal_case(&v.name);
-            let cddl_str = v.name.to_lowercase().replace('_', "-");
+            let cddl_str = cddlc_codegen::enum_variant_text(v);
             w.line(&format!("{:?} => {vname}.Instance,", cddl_str));
         }
     }
@@ -484,7 +484,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef) {
     // Sealed subclasses
     for v in &e.variants {
         let vname    = to_pascal_case(&v.name);
-        let cddl_str = v.name.to_lowercase().replace('_', "-");
+        let cddl_str = cddlc_codegen::enum_variant_text(v);
         match &v.ty {
             TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
                 w.line(&format!("public sealed class {vname} : {type_name}"));
@@ -533,7 +533,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef) {
     // Factory methods
     for v in &e.variants {
         let vname    = to_pascal_case(&v.name);
-        let cddl_str = v.name.to_lowercase().replace('_', "-");
+        let cddl_str = cddlc_codegen::enum_variant_text(v);
         match &v.ty {
             TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
                 w.line(&format!("public static {vname} Create{vname}(string _ = {cddl_str:?}) => {vname}.Instance;"));
@@ -572,7 +572,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef) {
     for v in &e.variants {
         if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)) {
             let vname    = to_pascal_case(&v.name);
-            let cddl_str = v.name.to_lowercase().replace('_', "-");
+            let cddl_str = cddlc_codegen::enum_variant_text(v);
             w.line(&format!("{cddl_str:?} => {vname}.Instance,"));
         }
     }
@@ -1210,7 +1210,7 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         if opts.is_json() {
             let construct = match &v.ty {
                 TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
-                    let cddl_str = v.name.to_lowercase().replace('_', "-");
+                    let cddl_str = cddlc_codegen::enum_variant_text(v);
                     format!("{type_name}.Create{vname}({cddl_str:?})")
                 }
                 TypeRef::Primitive(Primitive::Uint) =>

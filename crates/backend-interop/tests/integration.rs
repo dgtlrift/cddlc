@@ -72,7 +72,8 @@ fn test_array_produces_one_vector() {
     let vecs = compile("readings = [* float32]");
     let arr: Vec<_> = vecs.iter().filter(|v| v.type_name == "Readings").collect();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0].description, "empty array");
+    assert_eq!(arr[0].description, "minimal array");
+    assert_eq!(arr[0].cbor_hex(), "80", "`[* T]` allows zero elements");
 }
 
 #[test]
@@ -384,4 +385,72 @@ status = "ok" / "warn"
     assert!(json.content.contains("DeviceId"));
     assert!(json.content.contains("Readings"));
     assert!(json.content.contains("Status"));
+}
+
+/// Issue #36: an enum vector encodes the variant's CDDL literal.
+#[test]
+fn test_enum_vector_uses_cddl_literal() {
+    let vectors = compile("model = \"free-space\" / \"Log_Distance\"");
+    let hex: Vec<String> = vectors.iter().map(|v| v.cbor_hex()).collect();
+    // 0x6a = text string of length 10
+    assert!(hex.contains(&format!("6a{}", hex_of("free-space"))), "{hex:?}");
+    assert!(hex.contains(&format!("6c{}", hex_of("Log_Distance"))), "{hex:?}");
+}
+
+fn hex_of(s: &str) -> String {
+    s.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+
+/// Issue #37: a member of a named type is encoded as a real value of that type,
+/// not the integer 0, and isn't asserted on.
+#[test]
+fn test_named_member_is_encoded_as_its_type() {
+    let vecs = compile("reading = { id: uint, sensor: sensor }\nsensor = { kind: uint }");
+    let r = vecs.iter().find(|v| v.type_name == "Reading" && v.description == "default values").unwrap();
+    // {"id": 0, "sensor": {"kind": 0}}
+    assert_eq!(r.cbor_hex(), format!("a2{}00{}a1{}00", key("id"), key("sensor"), key("kind")));
+    assert_eq!(r.fields.len(), 1, "only the primitive member is asserted");
+}
+
+/// Issue #37: an enum member uses the first variant's literal; a tagged member
+/// keeps its tag; a `+` array has one element; a literal member uses its literal.
+#[test]
+fn test_member_vectors_respect_types_and_literals() {
+    let vecs = compile(
+        "rec = { m: model, s: #6.1(uint), t: tags, on: true, n: 1..5 }\n\
+         model = \"free-space\" / \"other\"\n\
+         tags = [+ uint]",
+    );
+    let r = vecs.iter().find(|v| v.type_name == "Rec" && v.description == "default values").unwrap();
+    let hex = r.cbor_hex();
+    assert!(hex.contains(&format!("{}6a{}", key("m"), hex_of("free-space"))), "{hex}");
+    assert!(hex.contains(&format!("{}c100", key("s"))), "tag 1 around 0: {hex}");
+    assert!(hex.contains(&format!("{}8100", key("t"))), "one-element array: {hex}");
+    assert!(hex.contains(&format!("{}f5", key("on"))), "literal true: {hex}");
+    assert!(hex.contains(&format!("{}01", key("n"))), "range minimum: {hex}");
+}
+
+/// Issue #37: an int-literal enum's vectors encode each literal.
+#[test]
+fn test_int_literal_enum_vectors_encode_literals() {
+    let vecs = compile("priority = 1 / 2 / 3");
+    let hex: Vec<String> = vecs.iter().map(|v| v.cbor_hex()).collect();
+    assert_eq!(hex, vec!["01", "02", "03"]);
+    assert!(vecs.iter().all(|v| v.fields.is_empty()), "no `kind` assertions on integer variants");
+}
+
+/// Issue #37: the C++ harness compares plain members directly (no `std::get`
+/// on a non-variant) and checks a text enum variant through its string_view.
+#[test]
+fn test_cpp_harness_compares_members_directly() {
+    let h = gen("sensor = { id: uint }\nmodel = \"free-space\" / \"other\"").4;
+    assert!(h.contains("assert(decoded.id == 0ULL);"), "{h}");
+    assert!(!h.contains("std::get<uint64_t>"), "{h}");
+    assert!(h.contains("*std::get_if<std::string_view>(&decoded.value) == std::string_view(\"free-space\")"), "{h}");
+}
+
+/// CBOR text-string key: 0x60 + length, then the bytes (short keys only).
+fn key(s: &str) -> String {
+    format!("{:02x}{}", 0x60 + s.len(), hex_of(s))
 }

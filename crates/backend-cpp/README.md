@@ -1,9 +1,9 @@
 # backend-cpp
 
-Generates a complete C++17 library — `CMakeLists.txt`, a header/implementation pair,
-and a Catch2 test suite — from an `IrModule`.  The generated code uses modern C++17
-features (`std::optional`, `std::variant`, `std::string_view`) and wraps the `nanocbor`
-C runtime for CBOR I/O.
+Generates a C++17 library from an `IrModule`: a CMake project with a header, an
+implementation file and a roundtrip test. CBOR output wraps the
+[nanocbor](https://github.com/bergzand/NanoCBOR) C runtime; JSON output uses
+[nlohmann/json](https://github.com/nlohmann/json). Both are fetched by CMake.
 
 ## Position in the pipeline
 
@@ -11,107 +11,187 @@ C runtime for CBOR I/O.
 flowchart LR
     A["cddlc-ir\nIrModule"] --> B["cddlc-codegen\nBackend trait"]
     B --> C["backend-cpp\n(this crate)"]:::active
-    C --> D["📁 CMakeLists.txt\n📁 include/schema.hpp\n📁 tests/test_schema.cpp"]
+    C --> D["📁 CMakeLists.txt\n📁 include/module.hpp\n📁 src/module.cpp\n📁 test/test_roundtrip.cpp"]
     classDef active fill:#d4edda,stroke:#28a745
 ```
 
 ## Generated output layout
 
 ```
-<output>/
-  CMakeLists.txt           # CMake build definition, fetches nanocbor + Catch2
-  include/
-    <module>.hpp           # all types with encode/decode (header-only)
-  tests/
-    test_<module>.cpp      # Catch2 roundtrip tests
+<output>/<module>-cbor-cpp/        # --format cbor (default)
+  CMakeLists.txt                   # library + test; fetches nanocbor (pinned commit)
+  include/<module>.hpp             # types and encode/decode declarations
+  src/<module>.cpp                 # encode/decode implementations
+  compat/endian.h                  # macOS shim for nanocbor's <endian.h>
+  test/test_roundtrip.cpp          # assert-based roundtrip test, run by ctest
+
+<output>/<module>-json-cpp/        # --format json
+  CMakeLists.txt                   # library + test; fetches nlohmann/json
+  include/<module>.hpp
+  src/<module>.cpp
+  test/test_roundtrip.cpp
 ```
 
-## Runtime
+Everything is declared in `namespace <module>`.
 
-The C++ backend uses **nanocbor** for CBOR encoding and decoding (the same runtime as the
-C backend's `nanocbor` mode).  The nanocbor C API is wrapped in RAII-friendly C++ helpers;
-callers supply pre-allocated byte buffers and never touch `nanocbor_encoder_t` directly.
+## Example
 
-## What is generated per IR type
+The examples below are generated from this schema:
 
-### Structs
-
-```cpp
-struct Device {
-    std::string                id;
-    bool                       active;
-    std::optional<std::string> label;   // optional field
-
-    bool encode(uint8_t* buf, size_t len, size_t& written) const;
-    static std::optional<Device> decode(const uint8_t* buf, size_t len);
-};
+```cddl
+; A device report.
+device = {
+  id:      device-id,
+  active:  bool,
+  status:  status,
+  ? label: tstr,
+}
+status    = "ok" / "warn" / "error"
+device-id = tstr
 ```
 
-- `std::optional<T>` for optional fields.
-- `std::string` for `tstr`; `std::vector<uint8_t>` for `bstr`.
-- Arrays are `std::array<T, N>` (stack) or `std::vector<T>` (heap).
+## CBOR (`--format cbor`)
 
-### Enums
+### Types
 
 ```cpp
-enum class Status { Ok, Warn, Error };
-
-bool status_encode(Status v, uint8_t* buf, size_t len, size_t& written);
-std::optional<Status> status_decode(const uint8_t* buf, size_t len);
-```
-
-### Type aliases
-
-Every alias is its own struct holding a `value`, so each has its own
-`encode`/`decode` overloads even when two aliases share a C++ type:
-
-```cpp
-// device-id = tstr
 struct DeviceId {
     std::string_view value{};
     bool operator==(const DeviceId &o) const noexcept { return value == o.value; }
 };
 
-int encode(nanocbor_encoder_t *enc, const DeviceId &val);
-int decode(nanocbor_value_t *dec, DeviceId &out, const Callbacks &cb = {}, void *ctx = nullptr);
+struct Status {
+    using Variant = std::variant<std::string_view>;
+    Variant value{std::string_view("ok")};
+
+    static Status make_Ok(std::string_view v) { return Status{v}; }
+    static Status make_Warn(std::string_view v) { return Status{v}; }
+    static Status make_Error(std::string_view v) { return Status{v}; }
+
+    bool operator==(const Status &o) const noexcept { return value == o.value; }
+};
+
+/// A device report.
+struct Device {
+    DeviceId id{};
+    bool active{};
+    Status status{};
+    std::optional<std::string_view> label{};
+
+    bool operator==(const Device &o) const noexcept { ... }
+};
 ```
 
-## Allocation strategy
+- **Structs** are plain aggregates. Optional members are `std::optional<T>`;
+  repeated members are `std::array<T, N>`.
+- **`tstr` and `bstr`** are `std::string_view`: zero-copy views into the buffer
+  being decoded, so that buffer must outlive the decoded value.
+- **Aliases** are each their own struct holding `value`, so two aliases of the
+  same C++ type (`a = tstr`, `b = bstr`) still get distinct `encode`/`decode`
+  overloads, each writing its own CBOR type.
+- **Enums** are a struct around a `std::variant` of the variants' payload types,
+  with a `make_<Variant>` constructor per variant. A text variant stores its
+  string, so `make_Warn` takes the CDDL text: `Status::make_Warn("warn")`.
+- **Arrays** are a struct with `std::array<T, N> items` and `std::size_t count`.
+  `N` comes from `; @capacity` or `--max-array`.
+- Doc comments and `; @doc` pragmas become `///` comments.
 
-| `--alloc` | Arrays use |
-|---|---|
-| `stack` (default) | `std::array<T, N>` — compile-time fixed capacity |
-| `heap` | `std::vector<T>` — dynamic allocation |
+### Functions
 
-## dCBOR support
+Every type gets an `encode`/`decode` overload pair:
 
-When `--dcbor` is set, struct encode methods sort map entries by CBOR key before writing,
-producing deterministic output per RFC 8949 §4.2.
+```cpp
+int encode(nanocbor_encoder_t *enc, const Device &val);
+int decode(nanocbor_value_t *dec, Device &out, const Callbacks &cb = {}, void *ctx = nullptr);
+```
+
+Both return a negative value on failure. `Callbacks` lets the caller observe
+errors and unknown map keys during decode:
+
+```cpp
+struct Callbacks {
+    void (*on_error)(void *ctx, FieldError err){nullptr};          // code, field name, index
+    void (*on_unknown_field)(void *ctx, std::string_view key){nullptr};
+};
+```
+
+### Usage
+
+```cpp
+#include "device.hpp"
+
+using namespace device;
+
+Device dev{};
+dev.id     = DeviceId{"sensor-7"};
+dev.active = true;
+dev.status = Status::make_Warn("warn");
+dev.label  = "kitchen";
+
+uint8_t buf[128];
+nanocbor_encoder_t enc;
+nanocbor_encoder_init(&enc, buf, sizeof buf);
+if (encode(&enc, dev) < 0) { /* buffer too small */ }
+size_t len = nanocbor_encoded_len(&enc);
+
+Device back{};
+nanocbor_value_t dec;
+nanocbor_decoder_init(&dec, buf, len);
+if (decode(&dec, back) < 0) { /* invalid input */ }
+```
+
+## JSON (`--format json`)
+
+Owning types (`std::string`, `std::vector<uint8_t>`) and member functions:
+
+```cpp
+struct DeviceId {
+    std::string value{};
+    std::vector<uint8_t> encode() const;
+    static DeviceId decode(const std::vector<uint8_t>& data);
+};
+
+using Status = std::string;
+
+struct Device {
+    DeviceId id{};
+    bool active{};
+    Status status{};
+    std::optional<std::string> label{};
+    std::vector<uint8_t> encode() const;
+    static Device decode(const std::vector<uint8_t>& data);
+};
+```
+
+`bstr` members are base64url strings in JSON (`b64url_encode` / `b64url_decode`
+are generated alongside).
+
+## dCBOR
+
+With `--dcbor`, struct encoders write map members sorted by name.
 
 ## Build the generated code
 
 ```bash
-cd <output>/
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17
-make
-ctest --output-on-failure
+cd <output>/<module>-cbor-cpp
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+(cd build && ctest --output-on-failure)
 ```
 
-Requires a C++17-capable compiler (GCC 7+, Clang 5+, MSVC 2017+).
+Requires CMake 3.17+ (3.16+ for JSON) and a C++17 compiler. CMake downloads
+nanocbor (or nlohmann/json) on the first configure.
 
-## Known gaps and future enhancements
+## Known gaps
 
-- **JSON mode not available**: like the C backend, only CBOR output is generated.
-- **nanocbor only**: the `--runtime` flag is accepted but only nanocbor is wired up.
-- **Mixed-type enum decode**: mixed-type CDDL enums (string + integer variants) use
-  `std::variant<…>` but the decode path does not yet handle all combinations robustly.
-- **Header-only but large**: all types and implementations are in `.hpp`; splitting into
-  `.hpp` + `.cpp` would reduce compile times for large schemas.
-- **C++20 improvements**: the generated code targets C++17; `std::span`, Concepts, and
-  `std::format` could improve the public API in C++20 mode.
-- **Partial constraint validation**: `.regexp` constraints require a user `@regex-hook`.
-- **No `@doc` as Doxygen comments**: doc pragmas are not rendered in the generated header.
+- **nanocbor only**: `--runtime` is accepted, but only nanocbor is wired up.
+- **`--alloc` is ignored**: arrays are always `std::array<T, N>` plus a count.
+- **Text enums are not type-checked**: a text variant stores its string, so
+  `make_Ok("warn")` builds a value that encodes as `"warn"`.
+- **Mixed-type enums**: enums mixing text and integer variants are a
+  `std::variant`, but decoding doesn't handle every combination.
+- **`.regexp`** constraints need a user-supplied `@regex-hook`.
+- **nlohmann/json is fetched from `master`**, not a pinned version.
 
 ## License
 

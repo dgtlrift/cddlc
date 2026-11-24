@@ -412,3 +412,14 @@ device-id = tstr .size 16
     assert!(g.source.contains(".Length == 16"));
     assert!(g.source.contains("WriteTag") && g.source.contains("1"));
 }
+
+/// Issue #36: a text enum is written and read as its CDDL literal, not a string
+/// rebuilt from the PascalCase variant name (`FreeSpace` -> "freespace").
+#[test]
+fn test_text_enum_uses_cddl_literal() {
+    let g = compile("model = \"free-space\" / \"Log_Distance\"");
+    assert!(g.source.contains("\"free-space\""), "{}", g.source);
+    assert!(g.source.contains("\"Log_Distance\""), "{}", g.source);
+    assert!(!g.source.contains("\"freespace\""), "{}", g.source);
+    assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
+}

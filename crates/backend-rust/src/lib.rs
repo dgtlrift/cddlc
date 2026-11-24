@@ -82,9 +82,7 @@ fn text_literal(v: &EnumVariant) -> Option<&str> {
 /// The CDDL string for a `tstr` enum variant: its literal, or (for variants without
 /// one) the historical lowercased-name fallback.
 fn variant_str(v: &EnumVariant) -> String {
-    text_literal(v)
-        .map(str::to_owned)
-        .unwrap_or_else(|| v.name.to_lowercase().replace('_', "-"))
+    cddlc_codegen::enum_variant_text(v)
 }
 
 /// A Rust expression for a literal value, as an owned field value.
