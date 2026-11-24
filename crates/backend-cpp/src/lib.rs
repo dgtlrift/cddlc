@@ -386,7 +386,11 @@ fn emit_array_hpp(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
 fn emit_alias_hpp(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
     let type_name = to_pascal_case(&a.name);
-    if a.tagged.is_some() || !a.constraints.is_empty() {
+    // Every alias is its own struct, never a `using`: two aliases of one C++ type
+    // (`prim-tstr = tstr`, `prim-bstr = bstr`, both `std::string_view`) would
+    // otherwise share encode/decode overloads (dgtlrift/cddlc#25), and the type
+    // also records which CBOR type its value is written as.
+    {
         let inner = cpp_typeref(&a.ty, opts);
         w.line(&format!("struct {type_name} {{"));
         w.indent();
@@ -412,9 +416,6 @@ fn emit_alias_hpp(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{ return value == o.value; }}"));
         w.dedent();
         w.line("};");
-    } else {
-        let inner = cpp_typeref(&a.ty, opts);
-        w.line(&format!("using {type_name} = {inner};"));
     }
 }
 
@@ -568,12 +569,7 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             if let Some(tag) = a.tagged {
                 w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
             }
-            let expr = if a.tagged.is_some() || !a.constraints.is_empty() {
-                "val.value"
-            } else {
-                "val"
-            };
-            emit_cpp_encode_field(w, &a.ty, expr, &Occurrence::Required, opts);
+            emit_cpp_encode_field(w, &a.ty, "val.value", &Occurrence::Required, opts);
             w.line("return NANOCBOR_OK;");
         }
         TypeDef::Map(_) => {
@@ -732,12 +728,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                 w.line("  if (nanocbor_get_tag(dec, &tag) < 0) return -1;");
                 w.line(&format!("  if (tag != {}) return -1; }}", tag.0));
             }
-            let dest = if a.tagged.is_some() || !a.constraints.is_empty() {
-                "out.value"
-            } else {
-                "out"
-            };
-            emit_cpp_decode_field(w, &a.ty, dest, &a.constraints, "value", "dec", opts);
+            emit_cpp_decode_field(w, &a.ty, "out.value", &a.constraints, "value", "dec", opts);
             w.line("return NANOCBOR_OK;");
         }
         TypeDef::Map(_) => {

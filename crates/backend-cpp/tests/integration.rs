@@ -216,9 +216,9 @@ fn test_array_has_count_field() {
 // ── Alias declaration ─────────────────────────────────────────────────────────
 
 #[test]
-fn test_simple_alias_using() {
+fn test_simple_alias_is_a_struct() {
     let g = compile("device-id = uint");
-    assert!(g.header.contains("using DeviceId =") || g.header.contains("DeviceId"));
+    assert!(g.header.contains("struct DeviceId {\n    uint64_t value{};"), "{}", g.header);
 }
 
 #[test]
@@ -358,4 +358,23 @@ device-id = tstr .size 16
 "#);
     assert!(g.header.contains("SensorMessage") || g.header.contains("sensor_message"));
     assert!(g.header.contains("DeviceId") || g.header.contains("device_id"));
+}
+
+/// Issue #25: two aliases of the same C++ type each get their own struct, so
+/// their `encode`/`decode` overloads are distinct and each knows its CBOR type.
+#[test]
+fn test_plain_aliases_are_distinct_types() {
+    let g = compile("prim-tstr = tstr\nprim-bstr = bstr");
+    let h = &g.header;
+    assert!(!h.contains("using PrimTstr"), "{h}");
+    assert!(h.contains("struct PrimTstr {\n    std::string_view value{};"), "{h}");
+    assert!(h.contains("struct PrimBstr {\n    std::string_view value{};"), "{h}");
+    assert!(h.contains("int encode(nanocbor_encoder_t *enc, const PrimTstr &val);"), "{h}");
+    assert!(h.contains("int encode(nanocbor_encoder_t *enc, const PrimBstr &val);"), "{h}");
+
+    let src = &g.source;
+    assert!(src.contains("nanocbor_put_tstrn(enc, val.value.data(), val.value.size());"), "{src}");
+    assert!(src.contains("nanocbor_put_bstr(enc, reinterpret_cast<const uint8_t*>(val.value.data()), val.value.size());"), "{src}");
+    assert!(src.contains("nanocbor_get_tstr(dec, &_p, &_l); if (_r >= 0) out.value ="), "{src}");
+    assert!(src.contains("nanocbor_get_bstr(dec, &_p, &_l); if (_r >= 0) out.value ="), "{src}");
 }

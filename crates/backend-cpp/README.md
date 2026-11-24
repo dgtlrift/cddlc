@@ -62,8 +62,18 @@ std::optional<Status> status_decode(const uint8_t* buf, size_t len);
 
 ### Type aliases
 
+Every alias is its own struct holding a `value`, so each has its own
+`encode`/`decode` overloads even when two aliases share a C++ type:
+
 ```cpp
-using DeviceId = std::string;    // transparent alias
+// device-id = tstr
+struct DeviceId {
+    std::string_view value{};
+    bool operator==(const DeviceId &o) const noexcept { return value == o.value; }
+};
+
+int encode(nanocbor_encoder_t *enc, const DeviceId &val);
+int decode(nanocbor_value_t *dec, DeviceId &out, const Callbacks &cb = {}, void *ctx = nullptr);
 ```
 
 ## Allocation strategy
