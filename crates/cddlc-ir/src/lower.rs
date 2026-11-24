@@ -255,8 +255,21 @@ impl<'m> LowerCtx<'m> {
                 Ok(TypeDef::Alias(def))
             }
 
-            // Any / MajorType → alias to Any
-            Type2::Any | Type2::MajorType(_) => {
+            // `#mt.ai` → the type it stands for (RFC 8610 §3.6)
+            Type2::MajorType(mt, ai) => {
+                let (ty, constraints) = major_type(*mt, *ai);
+                Ok(TypeDef::Alias(AliasDef {
+                    name:        name.into(),
+                    ty,
+                    constraints,
+                    tagged:      meta.tag,
+                    doc:         meta.doc.clone(),
+                    deprecated:  meta.deprecated,
+                }))
+            }
+
+            // Any → alias to Any
+            Type2::Any => {
                 Ok(TypeDef::Alias(AliasDef {
                     name:        name.into(),
                     ty:          TypeRef::Primitive(Primitive::Any),
@@ -1013,6 +1026,10 @@ impl<'m> LowerCtx<'m> {
                 constraints.push(Constraint::Eq(lower_value(v)));
             }
         }
+        // A major type's constraints (`#1` is a negative integer).
+        if let Type2::MajorType(mt, ai) = &t1.base.node {
+            constraints.extend(major_type(*mt, *ai).1);
+        }
         // So are the prelude's `true` and `false` (dgtlrift/cddlc#15).
         if let Some(b) = bool_value_name(&t1.base.node) {
             if t1.ops.is_empty() {
@@ -1060,7 +1077,8 @@ impl<'m> LowerCtx<'m> {
                 let inner_tr = self.lower_type_single(&inner.node, rule_name)?;
                 Ok(TypeRef::Tagged(CborTag(*tag), Box::new(inner_tr)))
             }
-            Type2::Any | Type2::MajorType(_) => Ok(TypeRef::Primitive(Primitive::Any)),
+            Type2::MajorType(mt, ai) => Ok(major_type(*mt, *ai).0),
+            Type2::Any => Ok(TypeRef::Primitive(Primitive::Any)),
             Type2::Unwrap(id) => self.resolve_typeref(id.node.as_str(), rule_name),
             Type2::Map(_) | Type2::Array(_) | Type2::Group(_) => {
                 // Inline complex type — generate a synthetic named type
@@ -1257,6 +1275,30 @@ fn pascal_case(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The type `#mt` or `#mt.ai` stands for (RFC 8610 §3.6), and its constraints.
+/// For major types 0 and 1 an additional information below 24 is the value
+/// itself; for 7 it picks a simple value or float width. Arrays, maps, bare
+/// tags and other simple values aren't modelled, and are `any`.
+fn major_type(mt: u8, ai: Option<u64>) -> (TypeRef, Vec<Constraint>) {
+    let p = TypeRef::Primitive;
+    match (mt, ai) {
+        (0, Some(n)) if n < 24 => (p(Primitive::Uint), vec![Constraint::Eq(LiteralValue::Uint(n))]),
+        (0, _)                 => (p(Primitive::Uint), vec![]),
+        (1, Some(n)) if n < 24 => (p(Primitive::Int), vec![Constraint::Eq(LiteralValue::Int(-1 - n as i64))]),
+        (1, _)                 => (p(Primitive::Int), vec![Constraint::ValueRangeInt { min: None, max: Some(-1), inclusive: true }]),
+        (2, _)                 => (p(Primitive::Bstr), vec![]),
+        (3, _)                 => (p(Primitive::Tstr), vec![]),
+        (7, Some(20))          => (p(Primitive::Bool), vec![Constraint::Eq(LiteralValue::Bool(false))]),
+        (7, Some(21))          => (p(Primitive::Bool), vec![Constraint::Eq(LiteralValue::Bool(true))]),
+        (7, Some(22))          => (p(Primitive::Null), vec![]),
+        (7, Some(23))          => (p(Primitive::Undefined), vec![]),
+        (7, Some(25))          => (p(Primitive::Float16), vec![]),
+        (7, Some(26))          => (p(Primitive::Float32), vec![]),
+        (7, Some(27))          => (p(Primitive::Float64), vec![]),
+        _                      => (p(Primitive::Any), vec![]),
+    }
 }
 
 fn literal_to_typeref(lit: &LiteralValue) -> TypeRef {

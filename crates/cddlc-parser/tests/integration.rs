@@ -591,3 +591,24 @@ n = uint
         assert_eq!(keys, [true, true, true]);
     }
 }
+
+// ── Major types and cuts (dgtlrift/cddlc#89) ─────────────────────────────────
+
+#[test]
+fn major_types_with_additional_information() {
+
+    for (src, want) in [("r = #7.25\n", (7, Some(25))), ("r = #7.16\n", (7, Some(16))), ("r = #0\n", (0, None))] {
+        let m = parse(src);
+        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!("{src}") };
+        match &ty.node.choices[0].node.base.node {
+            Type2::MajorType(mt, ai) => assert_eq!((*mt, *ai), want, "{src}"),
+            other => panic!("{src}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn map_cut_before_arrow() {
+    let m = parse("r = { \"a\" ^ => uint, * tstr => any }\n");
+    assert_eq!(m.rules.len(), 1);
+}
