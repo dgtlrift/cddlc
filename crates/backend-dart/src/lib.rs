@@ -334,7 +334,7 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
     // Named constructors for each variant
     for v in &e.variants {
         let vname    = to_pascal_case(&v.name);
-        let kind_str = variant_kind_str(&v.name);
+        let kind_str = variant_kind_str(v);
         match &v.ty {
             TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
                 w.line(&format!(
@@ -390,7 +390,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, class_name: &str, _opts: &C
     w.line("switch (kind) {");
     w.indent();
     for v in &e.variants {
-        let kind_str = variant_kind_str(&v.name);
+        let kind_str = variant_kind_str(v);
         let case_val = match &v.ty {
             TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
                 format!("return {kind_str:?};")
@@ -431,7 +431,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, class_name: &str, _opts: &C
         w.indent();
         for v in &e.variants {
             if matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)) {
-                let kind_str = variant_kind_str(&v.name);
+                let kind_str = variant_kind_str(v);
                 let vname    = to_pascal_case(&v.name);
                 w.line(&format!("case {kind_str:?}: return {class_name}.{vname};"));
             }
@@ -502,7 +502,7 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     w.line("switch (kind) {");
     w.indent();
     for v in &e.variants {
-        let kind_str = variant_kind_str(&v.name);
+        let kind_str = variant_kind_str(v);
         let cbor_val = match &v.ty {
             TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
                 format!("CborString({kind_str:?})")
@@ -558,7 +558,7 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         w.indent();
         for v2 in &e.variants {
             if matches!(&v2.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)) {
-                let kind_str = variant_kind_str(&v2.name);
+                let kind_str = variant_kind_str(v2);
                 let vname    = to_pascal_case(&v2.name);
                 w.line(&format!("case {kind_str:?}: return {class_name}.{vname};"));
             }
@@ -991,9 +991,9 @@ fn field_key_str(key: &FieldKey) -> String {
     }
 }
 
-/// The string that represents this enum variant's wire value (from its CDDL name).
-fn variant_kind_str(name: &str) -> String {
-    name.replace('_', "-").to_lowercase()
+/// The string that represents this enum variant's wire value: its CDDL literal.
+fn variant_kind_str(v: &cddlc_ir::EnumVariant) -> String {
+    cddlc_codegen::enum_variant_text(v)
 }
 
 /// For integer literal variants the IR names them "Variant{n}" where n is the literal.

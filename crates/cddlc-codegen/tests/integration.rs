@@ -305,3 +305,16 @@ mod docs_headers_sources {
         assert_eq!(s.fields[0].doc.as_deref(), Some("cddl: schema/t.cddl:3: id: uint,"));
     }
 }
+
+/// Issue #36: `enum_variant_text` is the variant's literal, falling back to the
+/// lowercased name only when there is none.
+#[test]
+fn test_enum_variant_text_prefers_literal() {
+    let parsed = parse_cddl("model = \"free-space\" / \"Log_Distance\" / nil", PathBuf::from("t.cddl")).expect("parse");
+    let lowered = lower(&parsed.value, 16, 64).expect("lower");
+    let Some(cddlc_ir::TypeDef::Enum(e)) = lowered.module.get("model") else { panic!("expected enum") };
+    let texts: Vec<String> = e.variants.iter().map(cddlc_codegen::enum_variant_text).collect();
+    assert_eq!(texts[0], "free-space");
+    assert_eq!(texts[1], "Log_Distance");
+    assert_eq!(texts[2], e.variants[2].name.to_lowercase());
+}

@@ -737,24 +737,10 @@ function expectNull(v: unknown, at: string): null {
   return null;
 }"#;
 
-/// The literal of a `tstr` variant (`"free-space"` in `"free-space" / "log-distance"`).
-fn text_literal(v: &EnumVariant) -> Option<&str> {
-    let lit = v.constraints.iter().find_map(|c| match c {
-        Constraint::Eq(LiteralValue::Text(t)) => Some(t.as_str()),
-        _ => None,
-    });
-    match &v.ty {
-        TypeRef::Primitive(Primitive::Tstr) => lit,
-        _ => None,
-    }
-}
-
 /// The CDDL string of a `tstr` or `null` enum variant: its literal, or (for variants
 /// without one) the historical lowercased-name fallback.
 fn variant_str(v: &EnumVariant) -> String {
-    text_literal(v)
-        .map(str::to_owned)
-        .unwrap_or_else(|| v.name.to_lowercase().replace('_', "-"))
+    cddlc_codegen::enum_variant_text(v)
 }
 
 /// The integer of an int-literal enum variant (the `2` in `priority = 1 / 2 / 3`),
