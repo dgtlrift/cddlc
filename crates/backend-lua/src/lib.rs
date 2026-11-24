@@ -1086,7 +1086,11 @@ fn lua_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint]
             Primitive::Null | Primitive::Undefined => "M.null".into(),
         },
         TypeRef::Tagged(_, inner) => lua_value(cx, inner, &Occurrence::Required, constraints, explicit, depth),
-        TypeRef::Choice(_) => "M.null".into(),
+        // A choice's first alternative (null isn't a value of it).
+        TypeRef::Choice(cs) => match cs.first() {
+            Some(first) => lua_value(cx, first, &Occurrence::Required, &[], explicit, depth),
+            None => "M.null".into(),
+        },
         TypeRef::Named(n) => {
             let t = lua_type_name(n);
             match cx.module.get(n) {

@@ -44,6 +44,26 @@ public final class Cddl {
 
     // ── Raw to Java values, each type checked ──────────────────────────────────
 
+    /** A choice of primitive types: the first alternative that reads {@code raw}. */
+    @SafeVarargs
+    public static Object choice(Object raw, String at, java.util.function.Function<Object, Object>... alts) {
+        for (java.util.function.Function<Object, Object> alt : alts) {
+            try {
+                return alt.apply(raw);
+            } catch (IllegalArgumentException e) {
+                // try the next alternative
+            }
+        }
+        throw invalid(at, "no alternative of the choice matches");
+    }
+
+    /** A choice's value in the value model, keeping a float's width and a byte string's encoding. */
+    public static Object choiceToRaw(Object v) {
+        if (v instanceof Float f) return f32(f);
+        if (v instanceof byte[] b) return bytes(b);
+        return v;
+    }
+
     public static IllegalArgumentException invalid(String at, String message) {
         return new IllegalArgumentException(at + ": " + message);
     }

@@ -401,6 +401,7 @@ fn to_raw(ty: &TypeRef, expr: &str) -> String {
         },
         TypeRef::Named(_) => format!("{expr}.toRaw()"),
         TypeRef::Tagged(tag, inner) => format!("Cddl.tag({}L, {})", tag.0, to_raw(inner, expr)),
+        TypeRef::Choice(cs) if cs.iter().all(|c| matches!(c, TypeRef::Primitive(_))) => format!("Cddl.choiceToRaw({expr})"),
         TypeRef::Choice(_) => expr.to_owned(),
     }
 }
@@ -424,6 +425,11 @@ fn from_raw(ty: &TypeRef, raw: &str, at: &str, qual: Option<&str>) -> String {
         }
         TypeRef::Named(_) => format!("{}.fromRaw({raw})", java_type(ty, false, qual)),
         TypeRef::Tagged(tag, inner) => from_raw(inner, &format!("Cddl.untag({raw}, {}L, {at_lit})", tag.0), at, qual),
+        // A choice of primitives: each alternative's reader, in order.
+        TypeRef::Choice(cs) if cs.iter().all(|c| matches!(c, TypeRef::Primitive(_))) => {
+            let alts: Vec<String> = cs.iter().map(|c| format!("r -> {}", from_raw(c, "r", at, qual))).collect();
+            format!("Cddl.choice({raw}, {at_lit}, {})", alts.join(", "))
+        }
         TypeRef::Choice(_) => raw.to_owned(),
     }
 }
@@ -1528,7 +1534,11 @@ fn java_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint
             Primitive::Null | Primitive::Undefined => "Cddl.Null.NULL".into(),
         },
         TypeRef::Tagged(_, inner) => java_value(cx, inner, &Occurrence::Required, constraints, explicit, depth),
-        TypeRef::Choice(_) => "null".into(),
+        // A choice's first alternative (null isn't a value of it).
+        TypeRef::Choice(cs) => match cs.first() {
+            Some(first) => java_value(cx, first, &Occurrence::Required, &[], explicit, depth),
+            None => "null".into(),
+        },
         TypeRef::Named(n) => {
             let class = java_type_name(n);
             match cx.module.get(n) {
