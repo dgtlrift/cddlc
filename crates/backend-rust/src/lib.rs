@@ -258,6 +258,48 @@ fn emit_header(w: &mut IndentWriter, opts: &CodegenOptions) {
 
 // ── Struct ────────────────────────────────────────────────────────────────────
 
+/// The Rust type of a map's other entries (`* tstr => V`, dgtlrift/cddlc#82):
+/// a `BTreeMap` from text, or with `--no-std` a `heapless::LinearMap`.
+fn rest_type(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
+    let cap = capacity_value(
+        r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
+    if opts.no_std {
+        let val = match &r.val_ty {
+            TypeRef::Tagged(_, inner) => typeref_to_rust(inner, opts),
+            other => typeref_to_rust(other, opts),
+        };
+        format!("heapless::LinearMap<heapless::String<{}>, {val}, {cap}>", opts.max_str)
+    } else {
+        format!("std::collections::BTreeMap<String, {}>", rest_value_heap(&r.val_ty, opts))
+    }
+}
+
+/// A value of a map's other entries outside `--no-std`, as minicbor encodes it:
+/// a bstr is a `ByteVec`, a tagged value a `Tagged`.
+fn rest_value_heap(ty: &TypeRef, opts: &CodegenOptions) -> String {
+    match ty {
+        TypeRef::Tagged(tag, inner) => format!("minicbor::data::Tagged<{}, {}>", tag.0, rest_value_heap(inner, opts)),
+        other if is_bstr(other) => "minicbor::bytes::ByteVec".to_owned(),
+        other => typeref_to_rust(other, opts),
+    }
+}
+
+/// A test value for a map's other entries: one entry under the key `k`.
+fn rest_test_value(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
+    let val = primitive_default_expr(&r.val_ty, opts);
+    if opts.no_std {
+        format!(
+            "{{ let mut m = {}::new(); m.insert({}, {val}).expect(\"capacity\"); m }}",
+            rest_type(r, opts).split('<').next().unwrap_or_default(),
+            no_std_text("\"k\""),
+        )
+    } else {
+        format!("{{ let mut m = std::collections::BTreeMap::new(); m.insert(\"k\".to_string(), {val}.into()); m }}")
+    }
+}
+
 fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, s.doc.as_deref());
     if s.deprecated { w.line("#[deprecated]"); }
@@ -275,6 +317,10 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, modul
         emit_doc(w, f.doc.as_deref());
         let ty_str = field_type_str(&f.ty, &f.occurrence, opts);
         w.line(&format!("pub {}: {},", field_ident(&f.name), ty_str));
+    }
+    if let Some(r) = &s.rest {
+        w.line("/// The map's other entries.");
+        w.line(&format!("pub {}: {},", field_ident(&r.name), rest_type(r, opts)));
     }
     w.dedent();
     w.line("}");
@@ -294,6 +340,9 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, modul
                 _ => "Default::default()".into(),
             };
             w.line(&format!("{}: {val},", field_ident(&f.name)));
+        }
+        if let Some(r) = &s.rest {
+            w.line(&format!("{}: Default::default(),", field_ident(&r.name)));
         }
         w.dedent();
         w.line("}");
@@ -338,15 +387,18 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         .count();
     let has_optional = s.fields.iter().any(|f| matches!(f.occurrence, Occurrence::Optional));
 
+    let rest_len = s.rest.as_ref()
+        .map(|r| format!(" + self.{}.len() as u64", field_ident(&r.name)))
+        .unwrap_or_default();
     if !has_optional {
-        w.line(&format!("e.map({}u64)?;", req_count));
+        w.line(&format!("e.map({}u64{rest_len})?;", req_count));
     } else {
         let mut len_expr = format!("{}u64", req_count);
         for f in s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)) {
             let fname = field_ident(&f.name);
             len_expr.push_str(&format!(" + if self.{fname}.is_some() {{ 1 }} else {{ 0 }}"));
         }
-        w.line(&format!("e.map({})?;", len_expr));
+        w.line(&format!("e.map({}{rest_len})?;", len_expr));
     }
 
     // Emit fields — sorted if dCBOR
@@ -375,6 +427,19 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             w.line(&format!("e.str({:?})?;", f.name.as_str()));
             emit_encode_value(w, &f.ty, &field_access, &f.occurrence, opts, Some(module));
         }
+    }
+    // The other entries, after the named members.
+    if let Some(r) = &s.rest {
+        w.line(&format!("for (k, v) in self.{}.iter() {{", field_ident(&r.name)));
+        w.indent();
+        w.line("e.str(k)?;");
+        if opts.no_std {
+            emit_encode_typeref(w, &r.val_ty, "(*v)", opts, Some(module));
+        } else {
+            w.line("minicbor::Encode::encode(v, e, ctx)?;");
+        }
+        w.dedent();
+        w.line("}");
     }
 
     w.line("Ok(())");
@@ -526,6 +591,9 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         };
         w.line(&format!("let mut {}: Option<{}> = None;", field_local(&f.name), var_ty));
     }
+    if let Some(r) = &s.rest {
+        w.line(&format!("let mut rest = {}::new();", rest_type(r, opts).split('<').next().unwrap_or_default()));
+    }
     w.blank();
 
     // Decode map entries
@@ -554,8 +622,20 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.line("}");
     }
 
-    // Unknown fields — permissive: skip with no error
-    w.line("_ => { d.skip()?; }");
+    match &s.rest {
+        // Other keys are the map's other entries.
+        Some(r) if opts.no_std => {
+            w.line("_ => {");
+            w.indent();
+            w.line(&format!("let val = {};", decode_expr_for_in_module(&r.val_ty, opts, Some(module))));
+            w.line("rest.insert(cddlc_text(key)?, val).map_err(|_| DecodeError::message(\"map larger than its capacity\"))?;");
+            w.dedent();
+            w.line("}");
+        }
+        Some(_) => w.line("_ => { rest.insert(key.to_string(), d.decode()?); }"),
+        // Unknown fields — permissive: skip with no error
+        None => w.line("_ => { d.skip()?; }"),
+    }
     w.dedent();
     w.line("}"); // match key
     w.dedent();
@@ -584,6 +664,9 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
                 ));
             }
         }
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("{}: rest,", field_ident(&r.name)));
     }
     w.dedent();
     w.line("})");
@@ -1629,6 +1712,9 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
         };
         w.line(&format!("{fname}: {val},"));
     }
+    if let Some(r) = &s.rest {
+        w.line(&format!("{}: {},", field_ident(&r.name), rest_test_value(r, opts)));
+    }
     w.dedent();
     w.line("};");
     w.line("let mut buf = Vec::new();");
@@ -2290,6 +2376,16 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
         w.line(&format!("pub {fname}: {ty_str},"));
         field_types.push(ty_str);
     }
+    // The other entries: every key no named member takes.
+    if let Some(r) = &s.rest {
+        w.line("/// The map's other entries.");
+        w.line("#[serde(flatten)]");
+        w.line(&format!(
+            "pub {}: std::collections::BTreeMap<String, {}>,",
+            field_ident(&r.name),
+            typeref_to_rust(&r.val_ty, opts)
+        ));
+    }
     w.dedent();
     w.line("}");
     w.blank();
@@ -2763,6 +2859,13 @@ fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &Codege
             default_value_expr(&f.ty, &f.occurrence, opts)
         };
         w.line(&format!("{fname}: {val},"));
+    }
+    if let Some(r) = &s.rest {
+        let val = primitive_default_expr(&r.val_ty, opts);
+        w.line(&format!(
+            "{}: std::collections::BTreeMap::from([(\"k\".to_string(), {val})]),",
+            field_ident(&r.name)
+        ));
     }
     w.dedent();
     w.line("};");

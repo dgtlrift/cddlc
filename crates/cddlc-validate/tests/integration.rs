@@ -382,3 +382,19 @@ fn tables_validate_each_entry() {
     assert_ok(&m, "r", &json(r#"{"scores": {"a": 100}}"#));
     assert_fails(&m, "r", &json(r#"{"scores": {"a": 101}}"#));
 }
+
+#[test]
+fn mixed_maps_validate_other_entries() {
+    let m = lower("r = { id: uint, ? name: tstr, * tstr => uint }\n");
+    assert_ok(&m, "r", &json(r#"{"id": 1}"#));
+    assert_ok(&m, "r", &json(r#"{"id": 1, "name": "n", "x": 2, "y": 3}"#));
+    // A named member keeps its own type; other entries have the value type.
+    assert_fails(&m, "r", &json(r#"{"id": 1, "name": 5}"#));
+    let errors = assert_fails(&m, "r", &json(r#"{"id": 1, "x": "two"}"#));
+    assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "{x}");
+    assert_fails(&m, "r", &json(r#"{"x": 2}"#));
+
+    let m = lower("r = { id: uint, + tstr => uint }\n");
+    assert_fails(&m, "r", &json(r#"{"id": 1}"#));
+    assert_ok(&m, "r", &json(r#"{"id": 1, "x": 2}"#));
+}

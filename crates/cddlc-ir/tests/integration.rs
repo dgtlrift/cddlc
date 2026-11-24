@@ -761,8 +761,30 @@ fn table_member_and_constrained_value() {
 }
 
 #[test]
-fn mixed_map_is_unsupported() {
-    let parsed = parse_cddl("r = { a: uint, * tstr => any }\n", PathBuf::from("test.cddl")).unwrap();
-    let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect("mixed map").to_string();
-    assert!(err.contains("mixes named members with computed keys"), "{err}");
+fn mixed_map_has_rest() {
+    let m = compile("r = { a: uint, ? extra: tstr, * tstr => any }\n");
+    let Some(TypeDef::Struct(st)) = m.get("r") else { panic!("{:?}", m.get("r")) };
+    assert_eq!(st.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a", "extra"]);
+    let rest = st.rest.as_ref().expect("rest");
+    // A member called `extra` moves the other entries' name aside.
+    assert_eq!(rest.name, "extra_entries");
+    assert_eq!(rest.key_ty, TypeRef::Primitive(Primitive::Tstr));
+    assert_eq!(rest.val_ty, TypeRef::Primitive(Primitive::Any));
+
+    // A key alias defined later is text too.
+    let m = compile("r = { a: uint, + label => uint }\nlabel = tstr\n");
+    let Some(TypeDef::Struct(st)) = m.get("r") else { panic!() };
+    assert!(matches!(st.rest.as_ref().unwrap().occurrence, Occurrence::OneOrMore { .. }));
+}
+
+#[test]
+fn mixed_map_limits() {
+    for (src, want) in [
+        ("r = { a: uint, * int => any }\n", "other than tstr"),
+        ("r = { a: uint, * tstr => any, * int => any }\n", "more than one member with a computed key"),
+    ] {
+        let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
+        let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect(src).to_string();
+        assert!(err.contains(want), "{src}: {err}");
+    }
 }

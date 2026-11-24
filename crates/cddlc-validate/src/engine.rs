@@ -91,7 +91,7 @@ impl<'m> Ctx<'m> {
             TypeDef::Struct(s) => {
                 if let Some(payload) = self.unwrap_tag(s.tagged, value, path) {
                     match s.encoding {
-                        StructEncoding::Map   => self.check_struct(&s.fields, &s.name, payload, path),
+                        StructEncoding::Map   => self.check_struct(&s.fields, s.rest.as_ref(), &s.name, payload, path),
                         StructEncoding::Array => self.check_record(&s.fields, &s.name, payload, path),
                     }
                 }
@@ -121,7 +121,7 @@ impl<'m> Ctx<'m> {
         self.depth -= 1;
     }
 
-    fn check_struct(&mut self, fields: &[FieldDef], name: &str, value: &Value, path: &mut Vec<PathSeg>) {
+    fn check_struct(&mut self, fields: &[FieldDef], rest: Option<&cddlc_ir::MapRest>, name: &str, value: &Value, path: &mut Vec<PathSeg>) {
         let Value::Map(entries) = value else {
             self.err(path, format!("expected a map for struct '{name}', found {}", kind_name(value)));
             return;
@@ -143,10 +143,26 @@ impl<'m> Ctx<'m> {
             }
         }
 
-        for (k, _) in entries {
-            if !fields.iter().any(|f| field_key_matches(&f.key, k)) {
+        // Entries no named member takes are the map's other entries, when it
+        // has a member with a computed key (dgtlrift/cddlc#82).
+        let others: Vec<&(Value, Value)> = entries.iter()
+            .filter(|(k, _)| !fields.iter().any(|f| field_key_matches(&f.key, k)))
+            .collect();
+        let Some(rest) = rest else {
+            for (k, _) in others {
                 self.err(path, format!("unknown field {}", describe_key(k)));
             }
+            return;
+        };
+        check_cardinality(&rest.occurrence, others.len(), name, self, path);
+        for (k, v) in others {
+            path.push(PathSeg::Key(key_label(k)));
+            if let Some(e) = self.try_check(&rest.key_ty, k, path).into_iter().next() {
+                self.err(path, format!("unknown field {}: {}", describe_key(k), e.message));
+            } else {
+                self.check_typeref(&rest.val_ty, v, path);
+            }
+            path.pop();
         }
     }
 

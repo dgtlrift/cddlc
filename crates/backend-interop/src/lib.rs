@@ -216,10 +216,16 @@ fn write_struct(
     }
     // A record (RFC 8610 §3.4) is an array of the members' values, in order.
     let record = s.encoding == cddlc_ir::StructEncoding::Array;
+    // A map's other entries (dgtlrift/cddlc#82): one in the explicit vector,
+    // and in the default one when the map needs at least one.
+    let extra = match &s.rest {
+        Some(r) if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) => 1,
+        _ => 0,
+    };
     if record {
         enc.array(fields.len() as u64).ok()?;
     } else {
-        enc.map(fields.len() as u64).ok()?;
+        enc.map(fields.len() as u64 + extra).ok()?;
     }
 
     let mut field_values = Vec::new();
@@ -234,6 +240,10 @@ fn write_struct(
             }
             None => write_sample(enc, &f.ty, module, explicit, opts, depth + 1)?,
         }
+    }
+    if let (1, Some(r)) = (extra, &s.rest) {
+        enc.str("other-key").ok()?;
+        write_sample(enc, &r.val_ty, module, explicit, opts, depth + 1)?;
     }
     Some(field_values)
 }

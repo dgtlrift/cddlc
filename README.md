@@ -271,7 +271,8 @@ readings = [* sensor-reading]
 | Named structs | `foo = { field: type, ? opt: type }` | Optional fields, integer map keys |
 | Type choices (enums) | `status = "ok" / "warn" / "error"` | String, integer, or mixed variants |
 | Arrays | `readings = [* float32]`, `[+ T]`, `[n*m T]` | Capacity from pragma or `--max-array` |
-| Tables (open maps) | `props = { * tstr => any }`, `{ + uint => tstr }` | Any number of entries of the key and value types; a map that also has named members is not yet supported |
+| Tables (open maps) | `props = { * tstr => any }`, `{ + uint => tstr }` | Any number of entries of the key and value types |
+| Maps with other entries | `device = { id: uint, * tstr => tstr }` | Named members plus an `extra` member holding the other entries; their keys are text |
 | Type aliases | `device-id = tstr .size 16` | With optional constraints |
 | CBOR tags | `#6.1(uint)` | Tag verification on decode, emission on encode |
 | Generics | `pair<T> = [T, T]` | Monomorphised at use sites |
@@ -292,6 +293,7 @@ readings = [* sensor-reading]
 | Arrays / typed lists | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Record arrays (`[a: uint, b: tstr]`) | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Tables (`{ * tstr => V }`) | ✓ | ✓ | ✓ | ✓¹ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Maps with other entries (`{ id: uint, * tstr => V }`) | ✓ | ✓ | ✓ | ✓¹ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Type aliases | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | CBOR tags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Optional fields | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -306,6 +308,13 @@ readings = [* sensor-reading]
 In CBOR, Rust, Python, Go, C, C++ and C# tables take integer or text keys. JSON objects
 have text keys, and the TypeScript, Java and Lua value models read a map's keys as text, so
 there tables need `tstr` keys.
+
+A map with named members and other entries gets one more member, `extra` (or `extra_entries`
+when a member is already called `extra`), holding the other entries: a map from text key to
+value. Decoding puts every key that no named member has there; encoding writes them after the
+named members. Their keys must differ from the named members' keys: the Python, TypeScript,
+Go, Java, Lua and C# encoders (and C++ JSON) reject one that doesn't; the others write it
+as is. In C# JSON the values are `JsonElement`s (the serializer's extension data).
 
 ---
 
@@ -384,8 +393,9 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 - **Unwrapped groups** (`~group`) are not fully handled.
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
 - **Socket/plug rules** (`$socket /= T`) are not supported.
-- **Maps that mix named members with computed keys** (`{ a: uint, * tstr => any }`) are
-  rejected with an "unsupported" error; tables (`{ * tstr => uint }`) are supported.
+- **Maps with named members and other entries** need text keys for the other entries
+  (`{ a: uint, * tstr => any }`); other key types there (`{ 1 => int, * int => any }`), and
+  more than one member with a computed key, are rejected with an "unsupported" error.
 
 ### Validator gaps (`cddlc validate`)
 
