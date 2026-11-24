@@ -16,7 +16,7 @@ use std::collections::HashSet;
 
 use cddlc_ir::{
     AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
-    FieldDef, IrModule, LiteralValue, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    FieldDef, IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 /// Rust keywords (strict, reserved and edition-2024) that cannot be plain identifiers.
@@ -85,12 +85,10 @@ fn rust_primitive(p: &Primitive, opts: &CodegenOptions) -> String {
     }
 }
 
-/// The element type of the array type `name`, when `name` is one.
-fn array_element<'m>(name: &str, module: Option<&'m IrModule>) -> Option<&'m TypeRef> {
-    match module?.get(name)? {
-        TypeDef::Array(a) => Some(&a.element),
-        _ => None,
-    }
+/// Whether `name` is an array or table type, which with `--no-std` is encoded
+/// and decoded by its own functions.
+fn is_container(name: &str, module: Option<&IrModule>) -> bool {
+    matches!(module.and_then(|m| m.get(name)), Some(TypeDef::Array(_) | TypeDef::Map(_)))
 }
 
 /// The integer of an integer-literal enum variant (the `2` in `1 / 2 / 3`).
@@ -177,16 +175,14 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
     emit_header(&mut w, opts);
 
     // Each type definition
-    for (name, def) in &module.types {
+    for (_, def) in &module.types {
         w.blank();
         match def {
             TypeDef::Struct(s) => emit_struct(&mut w, s, opts, module),
             TypeDef::Enum(e)   => emit_enum(&mut w, e, opts),
             TypeDef::Array(a)  => emit_array(&mut w, a, opts, module),
             TypeDef::Alias(a)  => emit_alias(&mut w, a, opts),
-            TypeDef::Map(_)    => {
-                w.line(&format!("// Map type '{}' — use ArrayDef for open maps", name));
-            }
+            TypeDef::Map(m)    => emit_map(&mut w, m, opts, module),
         }
     }
 
@@ -968,6 +964,99 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module:
 /// crate's features, so it matches the struct fields that hold it. minicbor has no
 /// impls for heapless, so `encode_<name>` / `decode_<name>` write and read it
 /// element by element; a tagged element is tagged per item (dgtlrift/cddlc#65).
+/// A table (`{ * tstr => uint }`): a `BTreeMap`, or with `--no-std` a
+/// `heapless::LinearMap` with its own encode/decode functions (dgtlrift/cddlc#82).
+fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &IrModule) {
+    emit_doc(w, m.doc.as_deref());
+    if m.deprecated { w.line("#[deprecated]"); }
+    let type_name = to_pascal_case(&m.name);
+    let cap = capacity_value(
+        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
+    let plain = |ty: &TypeRef| match ty {
+        TypeRef::Tagged(_, inner) => typeref_to_rust(inner, opts),
+        other => typeref_to_rust(other, opts),
+    };
+    if !opts.no_std {
+        // minicbor's blanket impls encode the map; a bstr is a `ByteVec` (a
+        // `Vec<u8>` is an array of integers) and a tagged item checks its tag.
+        let heap = |ty: &TypeRef| match ty {
+            TypeRef::Tagged(tag, inner) => format!(
+                "minicbor::data::Tagged<{}, {}>",
+                tag.0,
+                if is_bstr(inner) { "minicbor::bytes::ByteVec".to_owned() } else { typeref_to_rust(inner, opts) }
+            ),
+            other if is_bstr(other) => "minicbor::bytes::ByteVec".to_owned(),
+            other => typeref_to_rust(other, opts),
+        };
+        w.line("#[allow(unexpected_cfgs)]");
+        w.line("#[cfg(not(feature = \"no-std\"))]");
+        w.line(&format!(
+            "pub type {type_name} = std::collections::BTreeMap<{}, {}>;",
+            heap(&m.key_ty), heap(&m.val_ty)
+        ));
+        w.line("#[allow(unexpected_cfgs)]");
+        w.line("#[cfg(feature = \"no-std\")]");
+        w.line(&format!(
+            "pub type {type_name} = heapless::LinearMap<{}, {}, {cap}>;",
+            plain(&m.key_ty), plain(&m.val_ty)
+        ));
+        return;
+    }
+
+    let snake = to_snake_case(&m.name);
+    w.line(&format!(
+        "pub type {type_name} = heapless::LinearMap<{}, {}, {cap}>;",
+        plain(&m.key_ty), plain(&m.val_ty)
+    ));
+    w.blank();
+    w.line(&format!("/// Writes a `{type_name}` as a CBOR map."));
+    w.line("#[allow(unused_variables)]");
+    w.line(&format!(
+        "pub fn encode_{snake}<C, W: Write>(val: &{type_name}, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {{"
+    ));
+    w.indent();
+    if let Some(tag) = m.tagged {
+        w.line(&format!("e.tag(minicbor::data::Tag::new({}))?;", tag.0));
+    }
+    w.line("e.map(val.len() as u64)?;");
+    w.line("for (key, value) in val.iter() {");
+    w.indent();
+    emit_encode_typeref(w, &m.key_ty, "(*key)", opts, Some(module));
+    emit_encode_typeref(w, &m.val_ty, "(*value)", opts, Some(module));
+    w.dedent();
+    w.line("}");
+    w.line("Ok(())");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("/// Reads a `{type_name}`; fails past its capacity of {cap}."));
+    w.line("#[allow(unused_variables)]");
+    w.line(&format!(
+        "pub fn decode_{snake}(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<{type_name}, DecodeError> {{"
+    ));
+    w.indent();
+    if let Some(tag) = m.tagged {
+        w.line(&format!("if d.tag()? != minicbor::data::Tag::new({}) {{ return Err(DecodeError::message(\"unexpected CBOR tag\")); }}", tag.0));
+    }
+    w.line("let len = d.map()?;");
+    w.line("let mut out = heapless::LinearMap::new();");
+    w.line("let mut i = 0u64;");
+    w.line("loop {");
+    w.indent();
+    w.line("match len { Some(n) if i >= n => break, None if d.datatype()? == minicbor::data::Type::Break => { d.skip()?; break }, _ => {} }");
+    w.line("i += 1;");
+    w.line(&format!("let key = {};", decode_expr_for_in_module(&m.key_ty, opts, Some(module))));
+    w.line(&format!("let value = {};", decode_expr_for_in_module(&m.val_ty, opts, Some(module))));
+    w.line("out.insert(key, value).map_err(|_| DecodeError::message(\"map larger than its capacity\"))?;");
+    w.dedent();
+    w.line("}");
+    w.line("Ok(out)");
+    w.dedent();
+    w.line("}");
+}
+
 fn emit_array_no_std(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&a.name);
     let snake = to_snake_case(&a.name);
@@ -1238,7 +1327,7 @@ fn emit_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: &Co
             w.line(&format!("{enc}?;"));
         }
         // minicbor can't encode a `heapless::Vec` (`--no-std`): the array's own function does.
-        TypeRef::Named(n) if opts.no_std && array_element(n, module).is_some() => {
+        TypeRef::Named(n) if opts.no_std && is_container(n, module) => {
             w.line(&format!("encode_{}(&{expr}, e, ctx)?;", to_snake_case(n)));
         }
         TypeRef::Named(_) => {
@@ -1305,9 +1394,7 @@ fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option
         }
         TypeRef::Named(n) => {
             // Array type aliases (Vec<T>) decode via minicbor's blanket impl
-            let is_array = module.and_then(|m| m.get(n))
-                .map(|def| matches!(def, TypeDef::Array(_)))
-                .unwrap_or(false);
+            let is_array = is_container(n, module);
             if is_array && opts.no_std {
                 // minicbor can't decode a `heapless::Vec`: the array's own function does.
                 format!("decode_{}(d, ctx)?", to_snake_case(n))
@@ -1479,7 +1566,7 @@ fn emit_roundtrip_tests(module: &IrModule, opts: &CodegenOptions) -> String {
             TypeDef::Enum(e)   => emit_enum_roundtrip(&mut w, e, opts),
             TypeDef::Alias(a)  => emit_alias_roundtrip(&mut w, a, opts),
             TypeDef::Array(a)  => emit_array_roundtrip(&mut w, a, opts),
-            TypeDef::Map(_)    => {}
+            TypeDef::Map(m)    => emit_map_roundtrip(&mut w, m, opts),
         }
         w.blank();
     }
@@ -1729,6 +1816,36 @@ fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOption
     }
 }
 
+fn emit_map_roundtrip(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    let type_name = to_pascal_case(&m.name);
+    let test_name = format!("roundtrip_{}", to_snake_case(&m.name));
+    let key = primitive_default_expr(&m.key_ty, opts);
+    let val = primitive_default_expr(&m.val_ty, opts);
+    w.line("#[allow(unexpected_cfgs)]");
+    w.line("#[cfg(not(feature = \"no-std\"))]");
+    w.line("#[test]");
+    w.line(&format!("fn {test_name}() {{"));
+    w.indent();
+    if opts.no_std {
+        let snake = to_snake_case(&m.name);
+        w.line(&format!("let mut original = {type_name}::new();"));
+        w.line(&format!("original.insert({key}, {val}).expect(\"capacity\");"));
+        w.line("let mut buf = Vec::new();");
+        w.line(&format!("encode_{snake}(&original, &mut minicbor::Encoder::new(&mut buf), &mut ()).expect(\"encode\");"));
+        w.line(&format!("let decoded = decode_{snake}(&mut minicbor::Decoder::new(&buf), &mut ()).expect(\"decode\");"));
+    } else {
+        // `.into()` makes a `ByteVec` or `Tagged` key or value from the plain one.
+        w.line(&format!("let mut original = {type_name}::new();"));
+        w.line(&format!("original.insert({key}.into(), {val}.into());"));
+        w.line("let mut buf = Vec::new();");
+        w.line("minicbor::encode(&original, &mut buf).expect(\"encode\");");
+        w.line(&format!("let decoded: {type_name} = minicbor::decode(&buf).expect(\"decode\");"));
+    }
+    w.line("assert_eq!(original, decoded);");
+    w.dedent();
+    w.line("}");
+}
+
 fn emit_array_roundtrip(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     // Arrays are type aliases — test via the element type directly
     let type_name = to_pascal_case(&a.name);
@@ -1964,16 +2081,14 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
         }
     }
 
-    for (name, def) in &module.types {
+    for (_, def) in &module.types {
         w.blank();
         match def {
             TypeDef::Struct(s) => emit_struct_json(&mut w, s, opts, module),
             TypeDef::Enum(e)   => emit_enum_json(&mut w, e, opts, module),
             TypeDef::Array(a)  => emit_array_json(&mut w, a, opts, module),
             TypeDef::Alias(a)  => emit_alias_json(&mut w, a, opts),
-            TypeDef::Map(_)    => {
-                w.line(&format!("// Map type '{}' — use ArrayDef for open maps", name));
-            }
+            TypeDef::Map(m)    => emit_map_json(&mut w, m, opts),
         }
     }
 
@@ -2603,7 +2718,7 @@ fn emit_roundtrip_tests_json(module: &IrModule, opts: &CodegenOptions) -> String
             TypeDef::Enum(e)   => emit_enum_roundtrip_json(&mut w, e, module),
             TypeDef::Alias(a)  => emit_alias_roundtrip_json(&mut w, a, opts),
             TypeDef::Array(a)  => emit_array_roundtrip_json(&mut w, a),
-            TypeDef::Map(_)    => {}
+            TypeDef::Map(m)    => emit_map_roundtrip_json(&mut w, m, opts),
         }
         w.blank();
     }
@@ -2728,6 +2843,43 @@ fn emit_alias_roundtrip_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenO
     w.line("}");
 
     let _ = opts;
+}
+
+/// A table in JSON: an object, through serde (dgtlrift/cddlc#82).
+fn emit_map_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    emit_doc(w, m.doc.as_deref());
+    if m.deprecated { w.line("#[deprecated]"); }
+    let type_name = to_pascal_case(&m.name);
+    let key = typeref_to_rust(&m.key_ty, opts);
+    let val = typeref_to_rust(&m.val_ty, opts);
+    w.line(&format!("pub type {type_name} = std::collections::BTreeMap<{key}, {val}>;"));
+    w.blank();
+    w.line(&format!("pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"));
+    w.line("    serde_json::to_vec(val).expect(\"encode\")");
+    w.line("}");
+    w.blank();
+    w.line(&format!("pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"));
+    w.line("    serde_json::from_slice(data)");
+    w.line("}");
+}
+
+fn emit_map_roundtrip_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    let type_name = to_pascal_case(&m.name);
+    let test_name = format!("roundtrip_{}", to_snake_case(&m.name));
+    w.line("#[test]");
+    w.line(&format!("fn {test_name}() {{"));
+    w.indent();
+    w.line(&format!("let mut original = {type_name}::new();"));
+    w.line(&format!(
+        "original.insert({}, {});",
+        primitive_default_expr(&m.key_ty, opts),
+        primitive_default_expr(&m.val_ty, opts)
+    ));
+    w.line(&format!("let buf = encode_{type_name}(&original);"));
+    w.line(&format!("let decoded = decode_{type_name}(&buf).expect(\"decode\");"));
+    w.line("assert_eq!(original, decoded);");
+    w.dedent();
+    w.line("}");
 }
 
 fn emit_array_roundtrip_json(w: &mut IndentWriter, a: &ArrayDef) {

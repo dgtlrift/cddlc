@@ -29,7 +29,7 @@ use crate::lower_constraints::{lower_type_op, lower_value};
 use crate::prelude::is_prelude;
 use crate::types::{
     AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
-    FieldDef, FieldKey, IrModule, LiteralValue, Occurrence,
+    FieldDef, FieldKey, IrModule, LiteralValue, MapDef, Occurrence,
     Primitive, Sources, StructDef, StructEncoding, TypeDef, TypeRef,
 };
 
@@ -388,6 +388,19 @@ impl<'m> LowerCtx<'m> {
         choices: &[GroupChoice],
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
+        // A map whose only member has a computed key (`{ * tstr => uint }`) is a
+        // table: any number of entries whose keys and values have the given
+        // types (RFC 8610 §3.5.1, dgtlrift/cddlc#82).
+        if let [gc] = choices {
+            if let [entry] = gc.entries.as_slice() {
+                if let MemberKind::KeyValue { key, value, .. } = &entry.node.kind {
+                    if let cddlc_parser::MemberKey::Type(key_ty) = &key.node {
+                        return self.lower_table(name, entry, key_ty, &value.node, meta);
+                    }
+                }
+            }
+        }
+
         // For now we take the first (and usually only) group choice.
         // Group choices (//= extensions) are handled by lower_group_extend.
         let fields = choices.iter()
@@ -404,6 +417,70 @@ impl<'m> LowerCtx<'m> {
             doc:        meta.doc.clone(),
             deprecated: meta.deprecated,
         }))
+    }
+
+    /// Lower `{ occ K => V }` to a [`MapDef`].
+    fn lower_table(
+        &mut self,
+        name:   &str,
+        entry:  &Spanned<cddlc_parser::MemberEntry>,
+        key_ty: &Type,
+        val_ty: &Type,
+        meta:   &PragmaMeta,
+    ) -> Result<TypeDef, IrError> {
+        let me = &entry.node;
+        // A `; @capacity` on the member wins over one on the rule.
+        let mut occ_meta = PragmaMeta::from_pragmas(&me.pragmas);
+        if occ_meta.capacity.is_none() {
+            occ_meta.capacity = meta.capacity;
+        }
+        let occurrence = self.lower_occurrence(
+            me.occurrence.as_ref().map(|o| &o.node),
+            name,
+            &occ_meta,
+        );
+        let (key_ty, key_cs) = self.lower_type_to_ref(key_ty, name)?;
+        let key_ty = self.constrained_alias(name, "key", key_ty, key_cs);
+        let (val_ty, val_cs) = self.lower_field_type(val_ty, name, "value")?;
+        let val_ty = self.constrained_alias(name, "value", val_ty, val_cs);
+        Ok(TypeDef::Map(MapDef {
+            name:       name.into(),
+            key_ty,
+            val_ty,
+            occurrence,
+            tagged:     meta.tag,
+            doc:        meta.doc.clone(),
+            deprecated: meta.deprecated,
+        }))
+    }
+
+    /// A map key or value type with control operators (`{ * tstr => uint .le 9 }`)
+    /// becomes a named alias (`<rule>-value`) that carries them, since a
+    /// [`MapDef`] holds bare types.
+    fn constrained_alias(
+        &mut self,
+        rule:        &str,
+        part:        &str,
+        ty:          TypeRef,
+        constraints: Vec<Constraint>,
+    ) -> TypeRef {
+        if constraints.is_empty() {
+            return ty;
+        }
+        let mut name: SmolStr = format!("{rule}-{part}").into();
+        while self.output.contains_key(&name) || self.known_rules.contains(&name) {
+            name = format!("{name}-type").into();
+        }
+        self.known_rules.insert(name.clone());
+        self.output.insert(name.clone(), TypeDef::Alias(AliasDef {
+            name:        name.clone(),
+            ty,
+            constraints,
+            tagged:      None,
+            doc:         None,
+            deprecated:  false,
+        }));
+        TypeRef::Named(name)
     }
 
     fn lower_group_as_struct(
@@ -443,6 +520,15 @@ impl<'m> LowerCtx<'m> {
         );
 
         match &me.kind {
+            MemberKind::KeyValue { key, .. }
+                if matches!(key.node, cddlc_parser::MemberKey::Type(_)) =>
+            {
+                Err(IrError::Unsupported {
+                    rule:   rule_name.into(),
+                    reason: "a map that mixes named members with computed keys \
+                             (`{ a: uint, * tstr => any }`)".into(),
+                })
+            }
             MemberKind::KeyValue { key, value, .. } => {
                 let field_name: SmolStr = match &key.node {
                     cddlc_parser::MemberKey::Bareword(id) => id.0.clone(),

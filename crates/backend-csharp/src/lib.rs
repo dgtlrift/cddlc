@@ -13,7 +13,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Constraint, EnumDef,
-    IrModule, LiteralValue, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct CSharpBackend;
@@ -159,7 +159,7 @@ fn emit_type(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
         TypeDef::Enum(e)   => emit_enum(w, e, opts),
         TypeDef::Array(a)  => emit_array(w, a, opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map(w, m, opts),
     }
 }
 
@@ -707,6 +707,86 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.line("}");
 }
 
+// ── Map ───────────────────────────────────────────────────────────────────────
+
+/// A table (`{ * tstr => uint }`): a class holding a `Dictionary` (dgtlrift/cddlc#82).
+fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    emit_doc_comment(w, m.doc.as_deref());
+    if m.deprecated { w.line("[Obsolete]"); }
+
+    let type_name = to_pascal_case(&m.name);
+    let key_ty    = cs_typeref(&m.key_ty, opts);
+    let val_ty    = cs_typeref(&m.val_ty, opts);
+
+    w.line(&format!("public sealed class {type_name}"));
+    w.line("{");
+    w.indent();
+
+    w.line(&format!("public Dictionary<{key_ty}, {val_ty}> Entries {{ get; }} = new();"));
+    w.blank();
+
+    if opts.is_json() {
+        w.line("public byte[] ToJson()");
+        w.indent();
+        w.line("=> JsonSerializer.SerializeToUtf8Bytes(Entries);");
+        w.dedent();
+        w.blank();
+        w.line(&format!("public static {type_name} FromJson(byte[] data)"));
+        w.line("{");
+        w.indent();
+        w.line(&format!("var entries = JsonSerializer.Deserialize<Dictionary<{key_ty}, {val_ty}>>(data)!;"));
+        w.line(&format!("var result = new {type_name}();"));
+        w.line("foreach (var kv in entries) result.Entries.Add(kv.Key, kv.Value);");
+        w.line("return result;");
+        w.dedent();
+        w.line("}");
+    } else {
+        w.line("public void Encode(CborWriter writer)");
+        w.line("{");
+        w.indent();
+        if let Some(tag) = m.tagged {
+            w.line(&format!("writer.WriteTag((CborTag){});", tag.0));
+        }
+        w.line("writer.WriteStartMap(Entries.Count);");
+        w.line("foreach (var kv in Entries)");
+        w.line("{");
+        w.indent();
+        emit_cs_encode_value(w, &m.key_ty, "kv.Key", &Occurrence::Required, opts);
+        emit_cs_encode_value(w, &m.val_ty, "kv.Value", &Occurrence::Required, opts);
+        w.dedent();
+        w.line("}");
+        w.line("writer.WriteEndMap();");
+        w.dedent();
+        w.line("}");
+        w.blank();
+
+        w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+        w.line("{");
+        w.indent();
+        if let Some(tag) = m.tagged {
+            w.line("var tag = reader.ReadTag();");
+            w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+        }
+        w.line(&format!("var result = new {type_name}();"));
+        w.line("reader.ReadStartMap();");
+        w.line("while (reader.PeekState() != CborReaderState.EndMap)");
+        w.line("{");
+        w.indent();
+        w.line(&format!("var key = {};", cs_decode_expr(&m.key_ty, opts)));
+        w.line(&format!("var value = {};", cs_decode_expr(&m.val_ty, opts)));
+        w.line("if (!result.Entries.TryAdd(key, value)) throw new CborContentException(\"Duplicate map key\");");
+        w.dedent();
+        w.line("}");
+        w.line("reader.ReadEndMap();");
+        w.line("return result;");
+        w.dedent();
+        w.line("}");
+    }
+
+    w.dedent();
+    w.line("}");
+}
+
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
@@ -1128,7 +1208,7 @@ fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
         TypeDef::Enum(e)   => emit_enum_tests(w, e, opts),
         TypeDef::Alias(a)  => emit_alias_tests(w, a, opts),
         TypeDef::Array(a)  => emit_array_tests(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map_tests(w, m, opts),
     }
 }
 
@@ -1300,6 +1380,36 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.indent();
     w.line(&format!("var original = new {type_name}();"));
     if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    w.dedent();
+    w.line("}");
+}
+
+fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    let type_name = to_pascal_case(&m.name);
+
+    w.line("[Fact]");
+    w.line(&format!("public void {type_name}_Roundtrip_Empty()"));
+    w.line("{");
+    w.indent();
+    w.line(&format!("var original = new {type_name}();"));
+    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    w.line("Assert.Empty(decoded.Entries);");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line("[Fact]");
+    w.line(&format!("public void {type_name}_Roundtrip_Entry()"));
+    w.line("{");
+    w.indent();
+    w.line(&format!("var original = new {type_name}();"));
+    w.line(&format!(
+        "original.Entries.Add({}, {});",
+        cs_type_default(&m.key_ty, opts),
+        cs_type_default(&m.val_ty, opts)
+    ));
+    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    w.line("Assert.Single(decoded.Entries);");
     w.dedent();
     w.line("}");
 }

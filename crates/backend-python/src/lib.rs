@@ -13,7 +13,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant,
-    IrModule, LiteralValue, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct PythonBackend;
@@ -281,7 +281,11 @@ fn module_tags(module: &IrModule) -> Vec<u64> {
                 out.extend(a.tagged.map(|t| t.0));
                 walk(&a.element, &mut out);
             }
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => {
+                out.extend(m.tagged.map(|t| t.0));
+                walk(&m.key_ty, &mut out);
+                walk(&m.val_ty, &mut out);
+            }
         }
     }
     out.sort_unstable();
@@ -295,7 +299,7 @@ fn emit_type(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
         TypeDef::Enum(e)   => emit_enum(w, e, opts),
         TypeDef::Array(a)  => emit_array(w, a, opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map(w, m, opts),
     }
 }
 
@@ -780,6 +784,53 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.dedent();
 }
 
+// ── Map ───────────────────────────────────────────────────────────────────────
+
+/// A table (`{ * tstr => uint }`): a dataclass holding a `dict` (dgtlrift/cddlc#82).
+fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
+    if m.deprecated { w.line("# @deprecated"); }
+
+    let class_name = to_pascal_case(&m.name);
+    let key_ty     = py_typeref(&m.key_ty, opts);
+    let val_ty     = py_typeref(&m.val_ty, opts);
+
+    w.line("@dataclass");
+    w.line(&format!("class {class_name}:"));
+    w.indent();
+    not_a_test(w, &class_name);
+    w.line(&format!("entries: dict[{key_ty}, {val_ty}] = field(default_factory=dict)"));
+    w.blank();
+
+    w.line("def _to_raw(self) -> Any:");
+    w.indent();
+    let raw = format!(
+        "{{{}: {} for key, value in self.entries.items()}}",
+        py_to_raw(&m.key_ty, "key", opts),
+        py_to_raw(&m.val_ty, "value", opts)
+    );
+    return_tagged(w, m.tagged, &raw, opts);
+    w.dedent();
+    w.blank();
+
+    w.line("@classmethod");
+    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.indent();
+    untag_raw(w, m.tagged, &class_name, opts);
+    w.line("if not isinstance(raw, dict):");
+    w.indent();
+    w.line(&format!("raise ValueError(\"{class_name}: expected a map\")"));
+    w.dedent();
+    let key = py_from_raw(&m.key_ty, "key", &format!("{class_name} key"), opts);
+    let val = py_from_raw(&m.val_ty, "value", &format!("{class_name} value"), opts);
+    w.line(&format!("return cls(entries={{{key}: {val} for key, value in raw.items()}})"));
+    w.dedent();
+    w.blank();
+    emit_encode_decode(w, &class_name);
+
+    w.dedent();
+}
+
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
@@ -1006,7 +1057,7 @@ fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts:
         TypeDef::Enum(e)   => emit_enum_tests(w, e, module, opts),
         TypeDef::Alias(a)  => emit_alias_tests(w, a, module, opts),
         TypeDef::Array(a)  => emit_array_tests(w, a, module, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map_tests(w, m, module, opts),
     }
 }
 
@@ -1155,6 +1206,30 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, module: &IrModule, opts:
     w.dedent();
 }
 
+fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, module: &IrModule, opts: &CodegenOptions) {
+    let class_name = to_pascal_case(&m.name);
+
+    w.line(&format!("class Test{class_name}:"));
+    w.indent();
+
+    w.line("def test_roundtrip_empty(self):");
+    w.indent();
+    w.line(&format!("original = {class_name}()"));
+    w.line(&format!("decoded = {class_name}.decode(original.encode())"));
+    w.line("assert decoded == original");
+    w.dedent();
+    w.blank();
+
+    w.line("def test_roundtrip_entries(self):");
+    w.indent();
+    w.line(&format!("original = {}", py_map_value(m, module, opts, true, 1)));
+    w.line(&format!("decoded = {class_name}.decode(original.encode())"));
+    w.line("assert decoded == original");
+    w.dedent();
+
+    w.dedent();
+}
+
 // ── Test value helpers ────────────────────────────────────────────────────────
 
 /// Nesting depth past which a named type's test value is not built further.
@@ -1236,10 +1311,18 @@ fn py_value(
                     .map(|v| py_variant_value(e, v, module, opts, depth))
                     .unwrap_or_else(|| "None".into()),
                 Some(TypeDef::Array(_)) => format!("{}()", to_pascal_case(n)),
-                Some(TypeDef::Map(_)) | None => "None".into(),
+                Some(TypeDef::Map(m)) => py_map_value(m, module, opts, explicit, depth),
+                None => "None".into(),
             }
         }
     }
+}
+
+/// A table with one entry.
+fn py_map_value(m: &MapDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> String {
+    let key = py_value(&m.key_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1);
+    let val = py_value(&m.val_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1);
+    format!("{}(entries={{{key}: {val}}})", to_pascal_case(&m.name))
 }
 
 /// A value just outside an alias's constraints, if there is a simple one.

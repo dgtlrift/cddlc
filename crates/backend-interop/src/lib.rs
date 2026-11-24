@@ -93,6 +93,7 @@ pub enum VectorShape {
     Enum,
     Alias,
     Array,
+    Map,
 }
 
 #[derive(Debug, Clone)]
@@ -157,7 +158,9 @@ fn collect_vectors(module: &IrModule, opts: &CodegenOptions) -> Vec<TestVector> 
             TypeDef::Array(a) => {
                 if let Some(v) = encode_array_empty(a, module, opts) { vecs.push(v); }
             }
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => {
+                if let Some(v) = encode_map_sample(m, module, opts) { vecs.push(v); }
+            }
         }
     }
     vecs
@@ -299,7 +302,7 @@ fn write_sample(
                 write_variant(enc, e.variants.first()?, module, opts, depth)
             }
             TypeDef::Array(a) => write_array(enc, a, module, explicit, opts, depth),
-            TypeDef::Map(_) => None,
+            TypeDef::Map(m) => write_map(enc, m, module, explicit, opts, depth),
         },
     }
 }
@@ -335,6 +338,33 @@ fn write_array(
     enc.array(min).ok()?;
     for _ in 0..min {
         write_sample(enc, &a.element, module, explicit, opts, depth + 1)?;
+    }
+    Some(())
+}
+
+/// Writes a table (`{ * tstr => uint }`) with one entry, or none when its
+/// occurrence allows at most zero (dgtlrift/cddlc#82).
+fn write_map(
+    enc:      &mut Enc,
+    m:        &cddlc_ir::MapDef,
+    module:   &IrModule,
+    explicit: bool,
+    opts:     &CodegenOptions,
+    depth:    usize,
+) -> Option<()> {
+    if let Some(tag) = m.tagged {
+        enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
+    }
+    let entries = match &m.occurrence {
+        // One sample key can't make more than one distinct entry.
+        Occurrence::Bounded { min, .. } if *min > 1 => return None,
+        Occurrence::Bounded { max: Some(0), .. } => 0,
+        _ => 1,
+    };
+    enc.map(entries).ok()?;
+    for _ in 0..entries {
+        write_sample(enc, &m.key_ty, module, explicit, opts, depth + 1)?;
+        write_sample(enc, &m.val_ty, module, explicit, opts, depth + 1)?;
     }
     Some(())
 }
@@ -437,6 +467,21 @@ fn encode_array_empty(a: &ArrayDef, module: &IrModule, opts: &CodegenOptions) ->
         shape:       VectorShape::Array,
         type_name:   to_pascal_case(&a.name),
         description: "minimal array".into(),
+        cbor_bytes:  buf,
+        fields:      vec![],
+    })
+}
+
+fn encode_map_sample(m: &cddlc_ir::MapDef, module: &IrModule, opts: &CodegenOptions) -> Option<TestVector> {
+    let mut buf = Vec::new();
+    let mut enc = Encoder::new(&mut buf);
+    write_map(&mut enc, m, module, false, opts, 0)?;
+    drop(enc);
+    Some(TestVector {
+        cddl_name:   m.name.to_string(),
+        shape:       VectorShape::Map,
+        type_name:   to_pascal_case(&m.name),
+        description: "one entry".into(),
         cbor_bytes:  buf,
         fields:      vec![],
     })

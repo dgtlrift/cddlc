@@ -107,15 +107,9 @@ impl<'m> Ctx<'m> {
                 }
             }
             TypeDef::Map(m) => {
-                // CDDL tables ({* K => V}) are not constructed by cddlc-ir's
-                // lowering pass today (nor fully handled by every codegen
-                // backend) — see cddlc-validate::lib docs. Fail clearly
-                // rather than silently mis-validating.
-                self.err(path, format!(
-                    "'{}' uses a CDDL table ({{* K => V}}), which this validator \
-                     does not yet support",
-                    m.name
-                ));
+                if let Some(payload) = self.unwrap_tag(m.tagged, value, path) {
+                    self.check_map(m, payload, path);
+                }
             }
             TypeDef::Alias(a) => {
                 if let Some(payload) = self.unwrap_tag(a.tagged, value, path) {
@@ -204,6 +198,34 @@ impl<'m> Ctx<'m> {
         for (i, item) in items.iter().enumerate() {
             path.push(PathSeg::Index(i));
             self.check_typeref(element, item, path);
+            path.pop();
+        }
+    }
+
+    /// A table (`{ * K => V }`): every entry's key is a `K` and value a `V`,
+    /// and the number of entries fits the occurrence (dgtlrift/cddlc#82).
+    fn check_map(&mut self, m: &cddlc_ir::MapDef, value: &Value, path: &mut Vec<PathSeg>) {
+        let Value::Map(entries) = value else {
+            self.err(path, format!("expected a map for '{}', found {}", m.name, kind_name(value)));
+            return;
+        };
+        match m.occurrence {
+            // `{ tstr => uint }` has exactly one entry; `?` at most one.
+            Occurrence::Required if entries.len() != 1 => {
+                self.err(path, format!("'{}' requires exactly 1 entry, found {}", m.name, entries.len()));
+            }
+            Occurrence::Optional if entries.len() > 1 => {
+                self.err(path, format!("'{}' allows at most 1 entry, found {}", m.name, entries.len()));
+            }
+            ref occ => check_cardinality(occ, entries.len(), &m.name, self, path),
+        }
+        for (k, v) in entries {
+            path.push(PathSeg::Key(key_label(k)));
+            let key_errs = self.try_check(&m.key_ty, k, path);
+            if let Some(e) = key_errs.into_iter().next() {
+                self.err(path, format!("invalid key: {}", e.message));
+            }
+            self.check_typeref(&m.val_ty, v, path);
             path.pop();
         }
     }
@@ -556,6 +578,16 @@ fn literal_eq(lit: &LiteralValue, value: &Value) -> bool {
 
 fn decode_base64url(s: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()
+}
+
+/// A map key as shown in an error path (`{x}`, `{3}`).
+fn key_label(v: &Value) -> String {
+    match v {
+        Value::Text(s) => s.clone(),
+        Value::Uint(n) => n.to_string(),
+        Value::Int(n)  => n.to_string(),
+        other => kind_name(other).to_owned(),
+    }
 }
 
 fn describe_key(v: &Value) -> String {

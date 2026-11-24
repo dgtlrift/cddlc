@@ -15,7 +15,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Capacity, Constraint, EnumDef,
-    IrModule, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    IrModule, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct CBackend;
@@ -246,7 +246,7 @@ fn emit_type_decl_h(w: &mut IndentWriter, def: &TypeDef, _mod_name: &str, opts: 
         TypeDef::Enum(e)   => emit_enum_decl(w, e, opts),
         TypeDef::Array(a)  => emit_array_decl(w, a, opts),
         TypeDef::Alias(a)  => emit_alias_decl(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map_decl(w, m, opts),
     }
 }
 
@@ -324,6 +324,27 @@ fn emit_array_decl(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.line(&format!("typedef struct {{"));
     w.indent();
     w.line(&format!("{elem_ty} items[{cap}];"));
+    w.line("size_t count;");
+    w.dedent();
+    w.line(&format!("}} {type_name}_t;"));
+}
+
+/// A table (`{ * tstr => uint }`): up to its capacity of key/value entries
+/// (dgtlrift/cddlc#82).
+fn emit_map_decl(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    emit_c_doc(w, m.doc.as_deref());
+    let type_name = to_snake_case(&m.name);
+    let cap = capacity_value(
+        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
+    w.line("typedef struct {");
+    w.indent();
+    w.line(&format!(
+        "struct {{ {} key; {} value; }} entries[{cap}];",
+        typeref_to_c(&m.key_ty, opts),
+        typeref_to_c(&m.val_ty, opts)
+    ));
     w.line("size_t count;");
     w.dedent();
     w.line(&format!("}} {type_name}_t;"));
@@ -504,7 +525,17 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
             emit_c_encode_field(w, &a.ty, &inner_expr, &Occurrence::Required, mod_name, opts);
             w.line("return NANOCBOR_OK;");
         }
-        TypeDef::Map(_) => {
+        TypeDef::Map(m) => {
+            if let Some(tag) = m.tagged {
+                w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
+            }
+            w.line("nanocbor_fmt_map(enc, val->count);");
+            w.line("for (size_t i = 0; i < val->count; i++) {");
+            w.indent();
+            emit_c_encode_field(w, &m.key_ty, "val->entries[i].key", &Occurrence::Required, mod_name, opts);
+            emit_c_encode_field(w, &m.val_ty, "val->entries[i].value", &Occurrence::Required, mod_name, opts);
+            w.dedent();
+            w.line("}");
             w.line("return NANOCBOR_OK;");
         }
     }
@@ -820,7 +851,34 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
             w.line("return NANOCBOR_OK;");
         }
 
-        TypeDef::Map(_) => {
+        TypeDef::Map(m) => {
+            if let Some(tag) = m.tagged {
+                w.line("{");
+                w.indent();
+                w.line("uint32_t tag;");
+                w.line("if (nanocbor_get_tag(dec, &tag) < 0) return -1;");
+                w.line(&format!("if (tag != {}) return -1;", tag.0));
+                w.dedent();
+                w.line("}");
+            }
+            let cap = capacity_value(
+                m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                opts.max_array,
+            );
+            w.line("nanocbor_value_t map;");
+            w.line("if (nanocbor_enter_map(dec, &map) < 0) return -1;");
+            w.line("out->count = 0;");
+            w.line("while (!nanocbor_at_end(&map)) {");
+            w.indent();
+            w.line(&format!(
+                "if (out->count >= {cap}) {{ if (cb && cb->on_error) cb->on_error(ctx, ({pfx}_field_err_t){{{pfx_upper}_ERR_OVERFLOW, \"{type_name}\", 0}}); return -1; }}"
+            ));
+            emit_c_decode_field(w, &m.key_ty, "out->entries[out->count].key", &[], "key", &pfx, &pfx_upper, "&map", opts);
+            emit_c_decode_field(w, &m.val_ty, "out->entries[out->count].value", &[], "value", &pfx, &pfx_upper, "&map", opts);
+            w.line("out->count++;");
+            w.dedent();
+            w.line("}");
+            w.line("nanocbor_leave_container(dec, &map);");
             w.line("return NANOCBOR_OK;");
         }
     }
@@ -1003,7 +1061,7 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
             TypeDef::Alias(a)  => emit_c_alias_test(&mut w, a, &pfx, opts),
             TypeDef::Array(a)  => emit_c_array_test(&mut w, a, &pfx, opts),
             TypeDef::Enum(e)   => emit_c_enum_test(&mut w, e, &pfx, opts),
-            TypeDef::Map(_)    => {}
+            TypeDef::Map(m)    => emit_c_map_test(&mut w, m, &pfx, opts),
         }
         w.blank();
     }
@@ -1171,6 +1229,37 @@ fn emit_c_array_test(w: &mut IndentWriter, a: &ArrayDef, pfx: &str, _opts: &Code
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
     w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, NULL, NULL) == 0);"));
     w.line("assert(decoded.count == original.count);");
+    w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
+    w.dedent();
+    w.line("}");
+}
+
+fn emit_c_map_test(w: &mut IndentWriter, m: &MapDef, pfx: &str, opts: &CodegenOptions) {
+    let type_name = to_snake_case(&m.name);
+    w.line(&format!("static void test_{pfx}_{type_name}_roundtrip(void) {{"));
+    w.indent();
+    w.line(&format!("{type_name}_t original = {{0}};"));
+    // One entry when the key is text and the value a scalar.
+    let value = c_default_value(&m.val_ty, opts);
+    let one = matches!(m.key_ty, TypeRef::Primitive(Primitive::Tstr)) && value.is_some();
+    if let (true, Some(v)) = (one, &value) {
+        w.line("original.entries[0].key = (cbor_str_t){ \"k\", 1 };");
+        w.line(&format!("original.entries[0].value = {v};"));
+        w.line("original.count = 1;");
+    }
+    w.line("nanocbor_encoder_t enc;");
+    w.line("nanocbor_encoder_init(&enc, buf, sizeof(buf));");
+    w.line(&format!("assert({pfx}_{type_name}_encode(&enc, &original) == 0);"));
+    w.line("size_t enc_len = nanocbor_encoded_len(&enc);");
+    w.line(&format!("{type_name}_t decoded = {{0}};"));
+    w.line("nanocbor_value_t dec;");
+    w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
+    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, NULL, NULL) == 0);"));
+    w.line("assert(decoded.count == original.count);");
+    if one {
+        w.line("assert(decoded.entries[0].key.len == 1 && memcmp(decoded.entries[0].key.ptr, \"k\", 1) == 0);");
+        w.line("assert(decoded.entries[0].value == original.entries[0].value);");
+    }
     w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
     w.dedent();
     w.line("}");
@@ -1436,6 +1525,22 @@ fn emit_array_decl_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOption
     w.line(&format!("}} {type_name}_t;"));
 }
 
+/// A table in JSON: entries keyed by text, as JSON objects are (dgtlrift/cddlc#82).
+fn emit_map_decl_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    emit_c_doc(w, m.doc.as_deref());
+    let type_name = to_snake_case(&m.name);
+    let cap = capacity_value(
+        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
+    w.line("typedef struct {");
+    w.indent();
+    w.line(&format!("struct {{ json_str_t key; {} value; }} entries[{cap}];", typeref_to_c_json(&m.val_ty)));
+    w.line("size_t count;");
+    w.dedent();
+    w.line(&format!("}} {type_name}_t;"));
+}
+
 fn emit_alias_decl_json(w: &mut IndentWriter, a: &AliasDef) {
     emit_c_doc(w, a.doc.as_deref());
     let type_name = to_snake_case(&a.name);
@@ -1454,7 +1559,7 @@ fn emit_type_decl_h_json(w: &mut IndentWriter, def: &TypeDef, _mod_name: &str, o
         TypeDef::Enum(e)   => emit_enum_decl_json(w, e),
         TypeDef::Array(a)  => emit_array_decl_json(w, a, opts),
         TypeDef::Alias(a)  => emit_alias_decl_json(w, a),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map_decl_json(w, m, opts),
     }
 }
 
@@ -1511,7 +1616,7 @@ fn emit_json_fn_decls(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts:
         TypeDef::Enum(e)   => (e.name.as_str(), format!("{}_t", to_snake_case(&e.name))),
         TypeDef::Array(a)  => (a.name.as_str(), format!("{}_t", to_snake_case(&a.name))),
         TypeDef::Alias(a)  => (a.name.as_str(), format!("{}_t", to_snake_case(&a.name))),
-        TypeDef::Map(_)    => return,
+        TypeDef::Map(m)    => (m.name.as_str(), format!("{}_t", to_snake_case(&m.name))),
     };
     let snake = name.replace('-', "_");
     let pfx   = format!("{mod_name}_{snake}");
@@ -1620,7 +1725,7 @@ fn emit_json_type_impl(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
         TypeDef::Enum(e)   => emit_json_enum_impl(w, e, mod_name, opts),
         TypeDef::Array(a)  => emit_json_array_impl(w, a, mod_name, opts),
         TypeDef::Alias(a)  => emit_json_alias_impl(w, a, mod_name, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_json_map_impl(w, m, mod_name, opts),
     }
 }
 
@@ -1771,6 +1876,11 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
     w.blank();
 }
 
+/// `expr` as a C identifier fragment: `items[out->count]` → `items_out_count_`.
+fn c_ident(expr: &str) -> String {
+    expr.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
+}
+
 fn json_decode_field(w: &mut IndentWriter, ty: &TypeRef, dest: &str, src: &str, mod_name: &str, _opts: &CodegenOptions) {
     match ty {
         TypeRef::Primitive(Primitive::Bool) =>
@@ -1783,13 +1893,16 @@ fn json_decode_field(w: &mut IndentWriter, ty: &TypeRef, dest: &str, src: &str, 
             w.line(&format!("out->{dest} = (float)cJSON_GetNumberValue({src});")),
         TypeRef::Primitive(Primitive::Float64 | Primitive::Float) =>
             w.line(&format!("out->{dest} = cJSON_GetNumberValue({src});")),
+        // Temporaries are named for `dest`, as an identifier.
         TypeRef::Primitive(Primitive::Tstr) => {
-            w.line(&format!("const char* _s_{dest} = cJSON_GetStringValue({src});"));
-            w.line(&format!("if (_s_{dest}) {{ strncpy(out->{dest}, _s_{dest}, sizeof(out->{dest}) - 1); }}"));
+            let v = c_ident(dest);
+            w.line(&format!("const char* _s_{v} = cJSON_GetStringValue({src});"));
+            w.line(&format!("if (_s_{v}) {{ strncpy(out->{dest}, _s_{v}, sizeof(out->{dest}) - 1); }}"));
         }
         TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
-            w.line(&format!("const char* _b64_{dest} = cJSON_GetStringValue({src});"));
-            w.line(&format!("if (_b64_{dest}) {{ size_t _bl; uint8_t* _bd = cddlc_b64url_decode(_b64_{dest}, &_bl); if(_bd) {{ memcpy(out->{dest}.data, _bd, _bl); out->{dest}.len = _bl; free(_bd); }} }}"));
+            let v = c_ident(dest);
+            w.line(&format!("const char* _b64_{v} = cJSON_GetStringValue({src});"));
+            w.line(&format!("if (_b64_{v}) {{ size_t _bl; uint8_t* _bd = cddlc_b64url_decode(_b64_{v}, &_bl); if(_bd) {{ memcpy(out->{dest}.data, _bd, _bl); out->{dest}.len = _bl; free(_bd); }} }}"));
         }
         TypeRef::Named(n) => {
             let snake = n.replace('-', "_");
@@ -1919,6 +2032,50 @@ fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, mod_name: &str, opts
     emit_json_encode_decode(w, &pfx, &ctype);
 }
 
+fn emit_json_map_impl(w: &mut IndentWriter, m: &MapDef, mod_name: &str, opts: &CodegenOptions) {
+    let snake = m.name.replace('-', "_");
+    let ctype = format!("{}_t", to_snake_case(&m.name));
+    let pfx   = format!("{mod_name}_{snake}");
+    let cap = capacity_value(
+        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
+
+    w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
+    w.indent();
+    w.line("cJSON* o = cJSON_CreateObject();");
+    w.line("if (!o) return NULL;");
+    w.line("for (size_t i = 0; i < obj->count; i++) {");
+    w.indent();
+    let val_expr = json_value_expr(&m.val_ty, "obj->entries[i].value", mod_name);
+    w.line(&format!("cJSON_AddItemToObject(o, obj->entries[i].key, {val_expr});"));
+    w.dedent();
+    w.line("}");
+    w.line("return o;");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.indent();
+    w.line("if (!cJSON_IsObject(j)) return false;");
+    w.line("out->count = 0;");
+    w.line("cJSON* item; cJSON_ArrayForEach(item, j) {");
+    w.indent();
+    w.line(&format!("if (out->count >= {cap}) return false;"));
+    w.line("strncpy(out->entries[out->count].key, item->string, sizeof(out->entries[out->count].key) - 1);");
+    json_decode_field(w, &m.val_ty, "entries[out->count].value", "item", mod_name, opts);
+    w.line("out->count++;");
+    w.dedent();
+    w.line("}");
+    w.line("return true;");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    emit_json_encode_decode(w, &pfx, &ctype);
+}
+
 fn emit_json_alias_impl(w: &mut IndentWriter, a: &AliasDef, mod_name: &str, opts: &CodegenOptions) {
     let snake      = a.name.replace('-', "_");
     let ctype      = format!("{}_t", to_snake_case(&a.name));
@@ -2035,7 +2192,7 @@ fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
             TypeDef::Enum(e)   => e.name.as_str(),
             TypeDef::Array(a)  => a.name.as_str(),
             TypeDef::Alias(a)  => a.name.as_str(),
-            TypeDef::Map(_)    => continue,
+            TypeDef::Map(m)    => m.name.as_str(),
         };
         let snake = tname.replace('-', "_");
         w.line(&format!("test_{mod_name}_{snake}();"));
@@ -2114,7 +2271,25 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.line("}");
             w.blank();
         }
-        TypeDef::Map(_) => {}
+        TypeDef::Map(m) => {
+            let snake = m.name.replace('-', "_");
+            let ctype = format!("{}_t", to_snake_case(&m.name));
+            let pfx   = format!("{mod_name}_{snake}");
+            w.line(&format!("static void test_{pfx}(void) {{"));
+            w.indent();
+            w.line(&format!("{ctype} original = {{0}};"));
+            w.line("strcpy(original.entries[0].key, \"k\");");
+            w.line("original.count = 1;");
+            w.line(&format!("char* encoded = {pfx}_encode(&original);"));
+            w.line("assert(encoded != NULL);");
+            w.line(&format!("{ctype} decoded = {{0}};"));
+            w.line(&format!("assert({pfx}_decode(encoded, &decoded));"));
+            w.line("assert(decoded.count == 1 && strcmp(decoded.entries[0].key, \"k\") == 0);");
+            w.line("free(encoded);");
+            w.dedent();
+            w.line("}");
+            w.blank();
+        }
     }
     let _ = opts;
 }

@@ -28,6 +28,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("choices",     include_str!("../schemas/choices.cddl")),
     ("prelude",     include_str!("../schemas/prelude.cddl")),
     ("records",     include_str!("../schemas/records.cddl")),
+    ("maps",        include_str!("../schemas/maps.cddl")),
 ];
 
 // ── Result types ──────────────────────────────────────────────────────────────
