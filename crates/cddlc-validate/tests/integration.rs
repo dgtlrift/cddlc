@@ -155,6 +155,34 @@ fn tagged_alias_cbor_checks_tag_number() {
     assert!(errors.iter().any(|e| e.message.contains("expected CBOR tag 1")), "{errors:?}");
 }
 
+/// CBOR has tags, so a tagged type requires one (dgtlrift/cddlc#87): at the
+/// root, on an alias, a struct, and a member.
+#[test]
+fn cbor_requires_the_tag() {
+    use cddlc_validate::{validate_from, Source};
+    let cbor = |v: ciborium::Value| Value::from(v);
+    let int = |n: u64| ciborium::Value::Integer(n.into());
+
+    let m = lower("r = #6.1(uint)\n");
+    assert!(validate_from(&m, None, &cbor(ciborium::Value::Tag(1, Box::new(int(5)))), Source::Cbor).is_ok());
+    let errors = validate_from(&m, None, &cbor(int(5)), Source::Cbor).unwrap_err();
+    assert!(errors.iter().any(|e| e.message.contains("expected CBOR tag 1, found an untagged uint")), "{errors:?}");
+    // JSON can't carry the tag.
+    assert!(validate_from(&m, None, &json("5"), Source::Json).is_ok());
+
+    let m = lower(TAGGED);
+    let untagged_struct = cbor(ciborium::Value::Map(vec![
+        (ciborium::Value::Text("id".into()), int(1)),
+        (ciborium::Value::Text("value".into()), ciborium::Value::Float(1.5)),
+    ]));
+    assert!(validate_from(&m, Some("tagged-sensor"), &untagged_struct, Source::Cbor).is_err());
+
+    let m = lower("r = { when: #6.1(uint) }\n");
+    let member = |v| cbor(ciborium::Value::Map(vec![(ciborium::Value::Text("when".into()), v)]));
+    assert!(validate_from(&m, None, &member(ciborium::Value::Tag(1, Box::new(int(5)))), Source::Cbor).is_ok());
+    assert!(validate_from(&m, None, &member(int(5)), Source::Cbor).is_err());
+}
+
 #[test]
 fn tagged_struct_cbor() {
     let m = lower(TAGGED);

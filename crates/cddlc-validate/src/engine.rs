@@ -19,6 +19,7 @@ pub fn validate_named(
     module:    &IrModule,
     type_name: &str,
     value:     &Value,
+    require_tags: bool,
 ) -> Result<(), Vec<ValidationError>> {
     if type_name.is_empty() {
         return Err(vec![ValidationError::new(
@@ -33,7 +34,7 @@ pub fn validate_named(
         )]);
     };
 
-    let mut ctx = Ctx { module, errors: Vec::new(), depth: 0 };
+    let mut ctx = Ctx { module, errors: Vec::new(), depth: 0, require_tags };
     let mut path = Vec::new();
     ctx.check_def(def, value, &mut path);
     if ctx.errors.is_empty() { Ok(()) } else { Err(ctx.errors) }
@@ -43,6 +44,8 @@ struct Ctx<'m> {
     module:  &'m IrModule,
     errors:  Vec<ValidationError>,
     depth:   usize,
+    /// CBOR input: a tagged type requires its tag.
+    require_tags: bool,
 }
 
 impl<'m> Ctx<'m> {
@@ -54,7 +57,7 @@ impl<'m> Ctx<'m> {
     /// alternative of a type choice / enum variant without polluting the
     /// caller's error list on failure).
     fn try_check(&self, tr: &TypeRef, value: &Value, path: &[PathSeg]) -> Vec<ValidationError> {
-        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth };
+        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth, require_tags: self.require_tags };
         let mut p = path.to_vec();
         sub.check_typeref(tr, value, &mut p);
         sub.errors
@@ -64,7 +67,7 @@ impl<'m> Ctx<'m> {
     /// constraints (the literal value that discriminates it from sibling
     /// variants sharing the same underlying primitive — see [`cddlc_ir::EnumVariant`]).
     fn try_check_variant(&self, variant: &cddlc_ir::EnumVariant, value: &Value, path: &[PathSeg]) -> Vec<ValidationError> {
-        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth };
+        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth, require_tags: self.require_tags };
         let mut p = path.to_vec();
         sub.check_typeref(&variant.ty, value, &mut p);
         sub.check_constraints(&variant.constraints, &variant.ty, value, &mut p);
@@ -268,8 +271,12 @@ impl<'m> Ctx<'m> {
                 self.err(path, format!("expected CBOR tag {}, found tag {n}", tag.0));
                 None
             }
-            // No native tag in the source (JSON, or an untagged CBOR item) —
-            // degrade and validate the payload directly. See lib.rs docs.
+            // CBOR: the tag is part of the type (RFC 8610 §3.6).
+            _ if self.require_tags => {
+                self.err(path, format!("expected CBOR tag {}, found an untagged {}", tag.0, kind_name(value)));
+                None
+            }
+            // JSON has no tags: validate the payload directly. See lib.rs docs.
             _ => Some(value),
         }
     }
