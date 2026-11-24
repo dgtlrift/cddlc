@@ -490,6 +490,32 @@ pub fn build_go(
     build_result(schema_name, out, files.len(), ms)
 }
 
+// ── Java build (mvn test) ─────────────────────────────────────────────────────
+
+/// Build and test a generated Maven project with `mvn test` (compiles the
+/// sources and runs the JUnit tests). The first run downloads dependencies.
+pub fn build_java(
+    work_dir:    &Path,
+    files:       &[GeneratedFile],
+    schema_name: &str,
+) -> BuildOutcome {
+    if let Err(reason) = require_tools(&["mvn"]) {
+        return BuildOutcome::Skipped { reason };
+    }
+
+    write_files(work_dir, files).expect("write files");
+
+    let project_dir = files.iter()
+        .find(|f| f.path.ends_with("pom.xml"))
+        .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
+        .unwrap_or_else(|| work_dir.to_path_buf());
+
+    let t0 = std::time::Instant::now();
+    let out = run_cmd(Command::new("mvn").args(["-B", "-ntp", "-q", "test"]).current_dir(&project_dir));
+    let ms = t0.elapsed().as_millis() as u64;
+    build_result(schema_name, out, files.len(), ms)
+}
+
 // ── Multi-schema runner ───────────────────────────────────────────────────────
 
 /// Run a build test for all reference schemas using one backend + build fn.

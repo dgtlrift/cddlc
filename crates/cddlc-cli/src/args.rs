@@ -85,9 +85,14 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub interop: bool,
 
+    /// Java: plain Java SE, or Jakarta EE (Bean Validation annotations, and
+    /// JSON-B serializers for JSON)
+    #[arg(long, value_enum, default_value = "se")]
+    pub java_flavor: JavaFlavor,
+
     /// Comma-separated list of languages for interop harnesses (default: all)
-    /// e.g. --interop-langs rust,python,nodejs,go
-    #[arg(long, default_value = "rust,c,cpp,csharp,nodejs,python,go")]
+    /// e.g. --interop-langs rust,python,nodejs,go,java
+    #[arg(long, default_value = "rust,c,cpp,csharp,nodejs,python,go,java")]
     pub interop_langs: String,
 
     /// Parse and analyze only — do not write output files
@@ -146,12 +151,22 @@ pub enum Lang {
     Python,
     Dart,
     Go,
+    Java,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fmt {
     Cbor,
     Json,
+}
+
+/// Java output flavor.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JavaFlavor {
+    /// Plain Java SE.
+    Se,
+    /// Jakarta EE: Bean Validation annotations, and JSON-B for JSON.
+    Ee,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +187,7 @@ impl From<Lang> for cddlc_codegen::Language {
             Lang::Python => cddlc_codegen::Language::Python,
             Lang::Dart   => cddlc_codegen::Language::Dart,
             Lang::Go     => cddlc_codegen::Language::Go,
+            Lang::Java   => cddlc_codegen::Language::Java,
         }
     }
 }
