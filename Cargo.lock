@@ -157,6 +157,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "backend-lua"
+version = "1.2.0"
+dependencies = [
+ "cddlc-codegen",
+ "cddlc-ir",
+ "cddlc-parser",
+]
+
+[[package]]
 name = "backend-nodejs"
 version = "1.2.0"
 dependencies = [
@@ -219,6 +228,7 @@ dependencies = [
  "backend-go",
  "backend-interop",
  "backend-java",
+ "backend-lua",
  "backend-nodejs",
  "backend-python",
  "backend-rust",

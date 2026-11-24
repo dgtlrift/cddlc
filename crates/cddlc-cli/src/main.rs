@@ -208,6 +208,10 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
             let backend = backend_java::JavaBackend;
             backend.generate(ir, &opts).map_err(|e| e.to_string())?
         }
+        args::Lang::Lua => {
+            let backend = backend_lua::LuaBackend;
+            backend.generate(ir, &opts).map_err(|e| e.to_string())?
+        }
     };
 
     std::fs::create_dir_all(&args.output)?;

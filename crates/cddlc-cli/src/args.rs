@@ -152,6 +152,7 @@ pub enum Lang {
     Dart,
     Go,
     Java,
+    Lua,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +189,7 @@ impl From<Lang> for cddlc_codegen::Language {
             Lang::Dart   => cddlc_codegen::Language::Dart,
             Lang::Go     => cddlc_codegen::Language::Go,
             Lang::Java   => cddlc_codegen::Language::Java,
+            Lang::Lua    => cddlc_codegen::Language::Lua,
         }
     }
 }
