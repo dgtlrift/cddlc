@@ -415,3 +415,17 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(!g.source.contains("\"freespace\""), "{}", g.source);
     assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
 }
+
+/// Issue #51: the C++ JSON CMake project pins nlohmann/json to a release
+/// archive and its hash instead of tracking `master`.
+#[test]
+fn test_json_cmake_pins_nlohmann() {
+    let parsed = parse_cddl("x = { a: uint }", PathBuf::from("test.cddl")).expect("parse");
+    let lowered = lower(&parsed.value, 16, 64).expect("lower");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..Default::default() };
+    let out = CppBackend.generate(&lowered.module, &opts).expect("generate");
+    let cmake = &out.files.iter().find(|f| f.path.ends_with("CMakeLists.txt")).expect("cmake").content;
+    assert!(cmake.contains("URL      https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz"), "{cmake}");
+    assert!(cmake.contains("URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa"), "{cmake}");
+    assert!(!cmake.contains("GIT_TAG        master"), "{cmake}");
+}
