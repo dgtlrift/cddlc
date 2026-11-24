@@ -8,7 +8,18 @@ From 1.1.0 on, release-plz writes this file from the conventional commit message
 
 ## [Unreleased]
 
-## [1.1.1](https://github.com/dgtlrift/cddlc/compare/v1.1.0...v1.1.1) - 2026-11-24
+## [1.2.0](https://github.com/dgtlrift/cddlc/compare/v1.1.0...v1.2.0) - 2026-11-24
+
+### Changed
+
+A minor release, not a patch: generated code changes its API or its dependencies, so code that calls it may need updating:
+
+- C++ enums are a `Kind kind` plus a `std::variant` payload; constructors of text, `nil` and integer-literal variants take no argument (`Status::make_Warn()`) (#49).
+- C++ with `--alloc heap` makes arrays `std::vector<T> items`, with no capacity limit (#50).
+- Python packages need cbor2 >= 6.0 and Python 3.11; struct fields are keyword-only (#48).
+- Rust `--no-std`: `tstr` is `heapless::String<N>` and `bstr` `heapless::Vec<u8, N>` (`N` from `--max-str`), arrays are always `heapless::Vec` with their own `encode_<name>` / `decode_<name>` functions, and heapless is a plain dependency (#65).
+- Rust JSON: integer-literal enum variants hold a marker type (`Priority::Variant2(PriorityVariant2)`) instead of a `u64` (#63).
+- Dependencies of generated projects: TypeScript moves to cborg 7, jest 30, TypeScript 6 and an explicit `@types/node`, and its `tsconfig` lists `"types": ["node", "jest"]`; Rust to minicbor 2.3 (was `>=2`), heapless 0.9 and base64 0.23; C JSON pins cJSON to a commit instead of `master`; C++ JSON pins nlohmann/json v3.12.0 (#51, #62).
 
 ### Fixed
 
@@ -39,35 +50,10 @@ From 1.1.0 on, release-plz writes this file from the conventional commit message
 
 ### Other
 
-- Merge pull request #68 from dgtlrift/fix-rust-no-std
-- Merge origin/main into fix-nodejs-optional-members
-- Merge origin/main into fix-rust-no-std
-- Merge pull request #66 from dgtlrift/fix-rust-json
-- remove the temporary release-plz dry run
-- TEMPORARY dry run on the PR branch, not a detached HEAD
-- TEMPORARY release-plz dry run on the re-pinned action (drop before merge)
-- *(deps)* re-pin generated-code and CI dependencies to current releases
-- Merge pull request #59 from dgtlrift/fix-cpp-json
-- Merge origin/main into fix-cpp-alloc-heap
-- Merge pull request #56 from dgtlrift/fix-nodejs-float-int-enum
-- Merge pull request #57 from dgtlrift/fix-cpp-enums
-- Merge pull request #55 from dgtlrift/fix-rust-tagged-members
-- Merge pull request #53 from dgtlrift/fix-cpp-json-pin-nlohmann
-- Merge remote-tracking branch 'origin/main' into fix-c-cpp-simple-values
-- Merge pull request #45 from dgtlrift/docs-cpp-readme
-- Merge pull request #44 from dgtlrift/fix-nodejs-float-enum
+- Build tests: new C JSON, C++ JSON, Rust JSON, Rust `--no-std` and Python JSON tests; the Python test runs pytest with the interpreter in `CDDLC_PYTHON` (or `python3`) and reports a skip without cbor2 >= 6 and pytest.
+- CI: `actions/checkout` v7; the release-plz action v0.5.148 with release-plz 0.4.3 (#62).
 - *(cpp)* rewrite the README from real generated output
-- Merge pull request #34 from dgtlrift/fix-cpp-alias-overloads
 - *(cli)* give each test a unique temp dir and remove it afterwards
-- Merge remote-tracking branch 'origin/main' into fix-nodejs-cbor-tags
-- Merge remote-tracking branch 'origin/main' into fix-optional-null-member
-- Merge remote-tracking branch 'origin/main' into fix-optional-null-member
-- Merge remote-tracking branch 'origin/main' into fix-size-on-uint
-- Merge remote-tracking branch 'origin/main' into fix-optional-null-member
-- Merge remote-tracking branch 'origin/main' into fix-size-on-uint
-- Merge remote-tracking branch 'origin/main' into fix-true-false-nil-members
-- Merge pull request #29 from dgtlrift/fix-nodejs-test-setup
-- Merge pull request #26 from dgtlrift/fix-nanocbor-macos
 - *(release)* release PRs only from scripts/release.sh; the workflow only releases
 
 ## [1.1.0] - 2026-11-02
