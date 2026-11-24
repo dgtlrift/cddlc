@@ -39,12 +39,13 @@ pub struct InteropLangs {
     pub nodejs: bool,
     pub python: bool,
     pub go:     bool,
+    pub java:   bool,
 }
 
 impl InteropLangs {
     /// Enable all languages.
     pub fn all() -> Self {
-        Self { rust: true, c: true, cpp: true, csharp: true, nodejs: true, python: true, go: true }
+        Self { rust: true, c: true, cpp: true, csharp: true, nodejs: true, python: true, go: true, java: true }
     }
 }
 
@@ -70,6 +71,7 @@ pub fn generate(
     if langs.nodejs { files.push(GeneratedFile { path: format!("{dir}/nodejs/interop.test.ts"),  content: emit_nodejs_harness(&vectors, name, opts) }); }
     if langs.python { files.push(GeneratedFile { path: format!("{dir}/python/test_interop.py"),  content: emit_python_harness(&vectors, name, opts) }); }
     if langs.go     { files.push(GeneratedFile { path: format!("{dir}/go/interop_test.go"),      content: emit_go_harness(&vectors, name, opts) }); }
+    if langs.java   { files.push(GeneratedFile { path: format!("{dir}/java/InteropTest.java"),   content: emit_java_harness(&vectors, name, opts) }); }
 
     files
 }
@@ -1163,5 +1165,89 @@ fn emit_go_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) 
         w.line("}");
         w.blank();
     }
+    format!("{}\n", w.finish().trim_end())
+}
+
+// ── Java harness ──────────────────────────────────────────────────────────────
+
+/// Java (SE or Jakarta EE): copy into the generated project's
+/// `src/test/java/<package>/` and run `mvn test`. Each test decodes a vector,
+/// checks its primitive members and the enum variant, and re-encodes it byte
+/// for byte.
+fn emit_java_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -> String {
+    use backend_java::{java_member_name, java_package_name, java_str, java_type_name};
+    let pkg = java_package_name(schema, opts.namespace.as_deref());
+    let mut w = IndentWriter::new(4);
+
+    for l in cddlc_codegen::header_lines(opts) {
+        w.line(&format!("// {l}"));
+    }
+    w.line("// interop test harness (Java)");
+    w.line(&format!("// Copy into the generated project (`{schema}-cbor/src/test/java/{}/`) and run `mvn test`.", pkg.replace('.', "/")));
+    w.blank();
+    w.line(&format!("package {pkg};"));
+    w.blank();
+    w.line("import static org.junit.jupiter.api.Assertions.assertArrayEquals;");
+    w.line("import static org.junit.jupiter.api.Assertions.assertEquals;");
+    w.blank();
+    w.line("import java.util.HexFormat;");
+    w.line("import org.junit.jupiter.api.Test;");
+    w.blank();
+    w.line("/** Decodes the shared vectors, checks their values and re-encodes them byte for byte. */");
+    w.line("class InteropTest {");
+    w.indent();
+    w.line("private static byte[] bytes(String hex) {");
+    w.line("    return HexFormat.of().parseHex(hex);");
+    w.line("}");
+    w.blank();
+
+    let mut used = std::collections::HashSet::new();
+    for v in vectors {
+        let class = java_type_name(&v.cddl_name);
+        let camel: String = {
+            let p = to_pascal_case(&v.cddl_name);
+            p.chars().take(1).flat_map(|c| c.to_lowercase()).chain(p.chars().skip(1)).collect()
+        };
+        let base = format!("{camel}{}", to_pascal_case(&v.description.replace(' ', "_")));
+        let mut name = base.clone();
+        let mut i = 2;
+        while !used.insert(name.clone()) {
+            name = format!("{base}{i}");
+            i += 1;
+        }
+        let hex = v.cbor_hex();
+        w.line("@Test");
+        w.line(&format!("void {name}() {{"));
+        w.indent();
+        w.line(&format!("{class} got = {class}.decode(bytes({}));", java_str(&hex)));
+        for f in &v.fields {
+            // An alias vector's one value is the alias's `value`.
+            let target = if v.shape == VectorShape::Alias { "got.value()".to_owned() } else { format!("got.{}()", java_member_name(&f.name)) };
+            let label = java_str(&f.name);
+            match &f.value {
+                FieldVal::Enum { kind, .. } if v.shape == VectorShape::Enum => {
+                    w.line(&format!("assertEquals({}, got.kind());", java_str(kind)));
+                }
+                FieldVal::Enum { .. } | FieldVal::Null => {}
+                FieldVal::Uint(n) => w.line(&format!("assertEquals({n}L, {target}, {label});")),
+                FieldVal::Int(n) => w.line(&format!("assertEquals({n}L, {target}, {label});")),
+                FieldVal::Bool(b) => w.line(&format!("assertEquals({b}, {target}, {label});")),
+                FieldVal::Text(t) => w.line(&format!("assertEquals({}, {target}, {label});", java_str(t))),
+                FieldVal::Float { value, .. } => w.line(&format!("assertEquals({value:?}, {target}, 1e-4, {label});")),
+                FieldVal::Bytes(b) => {
+                    let lit = if b.is_empty() { "new byte[0]".to_owned() } else {
+                        format!("new byte[] {{{}}}", b.iter().map(|x| format!("(byte) 0x{x:02x}")).collect::<Vec<_>>().join(", "))
+                    };
+                    w.line(&format!("assertArrayEquals({lit}, {target}, {label});"));
+                }
+            }
+        }
+        w.line(&format!("assertEquals({}, HexFormat.of().formatHex(got.encode()), \"re-encoded\");", java_str(&hex)));
+        w.dedent();
+        w.line("}");
+        w.blank();
+    }
+    w.dedent();
+    w.line("}");
     format!("{}\n", w.finish().trim_end())
 }

@@ -69,6 +69,7 @@ dependencies = [
  "backend-cpp",
  "backend-csharp",
  "backend-go",
+ "backend-java",
  "backend-nodejs",
  "backend-python",
  "backend-rust",
@@ -137,12 +138,22 @@ name = "backend-interop"
 version = "1.2.0"
 dependencies = [
  "backend-go",
+ "backend-java",
  "cddlc-codegen",
  "cddlc-ir",
  "cddlc-parser",
  "minicbor",
  "pretty_assertions",
  "smol_str",
+]
+
+[[package]]
+name = "backend-java"
+version = "1.2.0"
+dependencies = [
+ "cddlc-codegen",
+ "cddlc-ir",
+ "cddlc-parser",
 ]
 
 [[package]]
@@ -207,6 +218,7 @@ dependencies = [
  "backend-dart",
  "backend-go",
  "backend-interop",
+ "backend-java",
  "backend-nodejs",
  "backend-python",
  "backend-rust",

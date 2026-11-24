@@ -18,6 +18,7 @@ flowchart TD
     C --> D5["pytest\n(Python)"]
     C --> D6["dart test\n(Dart)"]
     C --> D7["go test\n(Go)"]
+    C --> D8["mvn test\n(Java SE / EE)"]
     classDef active fill:#d4edda,stroke:#28a745
 ```
 
@@ -55,6 +56,7 @@ cargo test -p backend-buildtest test_build_nodejs -- --ignored --nocapture
 cargo test -p backend-buildtest test_build_python -- --ignored --nocapture
 cargo test -p backend-buildtest test_build_dart   -- --ignored --nocapture
 cargo test -p backend-buildtest test_build_go     -- --ignored --nocapture
+cargo test -p backend-buildtest test_build_java   -- --ignored --nocapture   # also _json, _ee, _ee_json
 ```
 
 ### Toolchain requirements
@@ -69,6 +71,7 @@ cargo test -p backend-buildtest test_build_go     -- --ignored --nocapture
 | Python | `python3` 3.10+, `pip`, `pytest` |
 | Dart | `dart` SDK 3+ (or `flutter`) |
 | Go | `go` 1.21+; network (or a module cache) for `go mod tidy` |
+| Java | JDK 17+, `mvn`; network (or a local Maven repository) for dependencies |
 
 ## How the tests work
 

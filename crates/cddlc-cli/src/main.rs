@@ -41,6 +41,7 @@ fn parse_interop_langs(s: &str) -> backend_interop::InteropLangs {
             "nodejs" => langs.nodejs = true,
             "python" => langs.python = true,
             "go"     => langs.go     = true,
+            "java"   => langs.java   = true,
             _        => {}
         }
     }
@@ -123,6 +124,9 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
     if args.no_std && args.lang != args::Lang::Rust {
         return Err("--no-std is only valid with --lang rust".into());
     }
+    if args.java_flavor == args::JavaFlavor::Ee && args.lang != args::Lang::Java {
+        return Err("--java-flavor ee is only valid with --lang java".into());
+    }
 
     let lower_result = load_and_lower(
         &args.inputs, &args.include_dir, args.verbose, args.debug_parse,
@@ -150,6 +154,10 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
         max_array:   args.max_array,
         max_str:     args.max_str,
         provenance:  build_info::provenance(&args.inputs),
+        java_flavor: match args.java_flavor {
+            args::JavaFlavor::Se => cddlc_codegen::JavaFlavor::Se,
+            args::JavaFlavor::Ee => cddlc_codegen::JavaFlavor::Ee,
+        },
     };
 
     // Each type's and field's CDDL source, in its documentation (dgtlrift/cddlc#9),
@@ -194,6 +202,10 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
         }
         args::Lang::Go => {
             let backend = backend_go::GoBackend;
+            backend.generate(ir, &opts).map_err(|e| e.to_string())?
+        }
+        args::Lang::Java => {
+            let backend = backend_java::JavaBackend;
             backend.generate(ir, &opts).map_err(|e| e.to_string())?
         }
     };

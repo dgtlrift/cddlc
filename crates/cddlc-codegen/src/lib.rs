@@ -7,7 +7,7 @@ pub mod emit;
 
 pub use backend::{
     header_lines, header_text, AllocStrategy, Backend, CodegenError, CodegenOptions,
-    CodegenOutput, Format, GeneratedFile, Language, GENERATED,
+    CodegenOutput, Format, GeneratedFile, JavaFlavor, Language, GENERATED,
 };
 pub use emit::{
     capacity_value, constraint_to_c_check, constraint_to_cpp_check, constraint_to_rust_check,

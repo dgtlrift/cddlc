@@ -1,0 +1,17 @@
+[package]
+name        = "backend-java"
+version     = { workspace = true }
+edition     = "2021"
+description = "Java (SE and Jakarta EE) code-generation backend for cddlc (Jackson CBOR runtime)"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+name = "backend_java"
+path = "src/lib.rs"
+
+[dependencies]
+cddlc-ir      = { path = "../cddlc-ir" }
+cddlc-codegen = { path = "../cddlc-codegen" }
+
+[dev-dependencies]
+cddlc-parser  = { path = "../cddlc-parser" }

@@ -43,6 +43,7 @@ generated/
     nodejs/interop.test.ts
     python/test_interop.py
     go/interop_test.go
+    java/InteropTest.java
 ```
 
 ## What the vectors contain
@@ -114,6 +115,19 @@ cp generated/iot_sensor-interop/go/interop_test.go \
 cd generated/iot_sensor-cbor
 go mod tidy
 go test -run Interop ./...
+```
+
+### Java
+
+Copy the harness into the generated project's test sources and run Maven
+(the same harness works for Java SE and Jakarta EE output):
+
+```bash
+cp generated/iot_sensor-interop/java/InteropTest.java \
+   generated/iot_sensor-cbor/src/test/java/iot_sensor/
+
+cd generated/iot_sensor-cbor
+mvn test -Dtest=InteropTest
 ```
 
 ### C# / .NET

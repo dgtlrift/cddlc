@@ -13,7 +13,7 @@
 
 use backend_buildtest::{
     assert_all_ok, build_c, build_cpp, build_csharp, build_nodejs,
-    build_go, build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome, SCHEMAS,
+    build_go, build_java, build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome, SCHEMAS,
 };
 use backend_rust::RustBackend;
 use backend_c::CBackend;
@@ -22,6 +22,7 @@ use backend_csharp::CSharpBackend;
 use backend_nodejs::NodeJsBackend;
 use backend_python::PythonBackend;
 use backend_go::GoBackend;
+use backend_java::JavaBackend;
 use cddlc_codegen::CodegenOptions;
 
 fn work_dir(lang: &str) -> tempfile::TempDir {
@@ -493,6 +494,78 @@ fn test_build_go_json() {
     assert_all_ok(&outcomes);
 }
 
+/// Build and test all schemas using the Java backend (Java): `mvn test`.
+/// Requires: mvn and a JDK 17+ in PATH (and network, or a local Maven repository).
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_java -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_java() {
+    let tmp  = work_dir("java");
+    let opts = CodegenOptions {
+        format:      cddlc_codegen::Format::Cbor,
+        java_flavor: cddlc_codegen::JavaFlavor::Se,
+        ..CodegenOptions::default()
+    };
+    eprintln!("\n=== Java build test ===");
+    let outcomes = run_build_tests(&JavaBackend, |d, f, n| build_java(d, f, n), &opts, tmp.path());
+    print_summary("Java", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
+/// Build and test all schemas using the Java backend (Java JSON): `mvn test`.
+/// Requires: mvn and a JDK 17+ in PATH (and network, or a local Maven repository).
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_java_json -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_java_json() {
+    let tmp  = work_dir("java-json");
+    let opts = CodegenOptions {
+        format:      cddlc_codegen::Format::Json,
+        java_flavor: cddlc_codegen::JavaFlavor::Se,
+        ..CodegenOptions::default()
+    };
+    eprintln!("\n=== Java JSON build test ===");
+    let outcomes = run_build_tests(&JavaBackend, |d, f, n| build_java(d, f, n), &opts, tmp.path());
+    print_summary("Java JSON", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
+/// Build and test all schemas using the Java backend (Java EE): `mvn test`.
+/// Requires: mvn and a JDK 17+ in PATH (and network, or a local Maven repository).
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_java_ee -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_java_ee() {
+    let tmp  = work_dir("java-ee");
+    let opts = CodegenOptions {
+        format:      cddlc_codegen::Format::Cbor,
+        java_flavor: cddlc_codegen::JavaFlavor::Ee,
+        ..CodegenOptions::default()
+    };
+    eprintln!("\n=== Java EE build test ===");
+    let outcomes = run_build_tests(&JavaBackend, |d, f, n| build_java(d, f, n), &opts, tmp.path());
+    print_summary("Java EE", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
+/// Build and test all schemas using the Java backend (Java EE JSON): `mvn test`.
+/// Requires: mvn and a JDK 17+ in PATH (and network, or a local Maven repository).
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_java_ee_json -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_java_ee_json() {
+    let tmp  = work_dir("java-ee-json");
+    let opts = CodegenOptions {
+        format:      cddlc_codegen::Format::Json,
+        java_flavor: cddlc_codegen::JavaFlavor::Ee,
+        ..CodegenOptions::default()
+    };
+    eprintln!("\n=== Java EE JSON build test ===");
+    let outcomes = run_build_tests(&JavaBackend, |d, f, n| build_java(d, f, n), &opts, tmp.path());
+    print_summary("Java EE JSON", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
 /// Run all language build tests in sequence with a final summary table.
 /// Run: cargo test -p backend-buildtest --test build_validation test_build_all -- --ignored --nocapture
 #[test]
@@ -523,6 +596,7 @@ fn test_build_all() {
     run_lang!("Node.js", NodeJsBackend, |d, f, n| build_nodejs(d, f, n),  "nodejs");
     run_lang!("Python",  PythonBackend, |d, f, n| build_python(d, f, n),  "python");
     run_lang!("Go",      GoBackend,     |d, f, n| build_go(d, f, n),      "go");
+    run_lang!("Java",    JavaBackend,   |d, f, n| build_java(d, f, n),    "java");
 
     eprintln!("\n╔════════════╦═══════╦═══════╦═══════╗");
     eprintln!("║ Language   ║  OK   ║ SKIP  ║ FAIL  ║");

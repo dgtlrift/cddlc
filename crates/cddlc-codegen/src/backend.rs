@@ -35,6 +35,8 @@ pub struct CodegenOptions {
     /// line: the cddlc release, commit, branch and remote, and the inputs
     /// (dgtlrift/cddlc#10). See [`header_lines`].
     pub provenance:   Vec<String>,
+    /// Java: SE or Jakarta EE output.
+    pub java_flavor:  JavaFlavor,
 }
 
 /// The first line of every generated file.
@@ -71,6 +73,7 @@ impl Default for CodegenOptions {
             max_array:   16,
             max_str:     64,
             provenance:  Vec::new(),
+            java_flavor: JavaFlavor::Se,
         }
     }
 }
@@ -80,10 +83,19 @@ impl CodegenOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language { Rust, C, Cpp, CSharp, Python, Dart, Go }
+pub enum Language { Rust, C, Cpp, CSharp, Python, Dart, Go, Java }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocStrategy { Stack, Arena, Heap }
+
+/// Java: plain Java SE, or Jakarta EE (Bean Validation annotations, and JSON-B
+/// serializers for JSON).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JavaFlavor {
+    #[default]
+    Se,
+    Ee,
+}
 
 /// A generated source file.
 #[derive(Debug, Clone)]
