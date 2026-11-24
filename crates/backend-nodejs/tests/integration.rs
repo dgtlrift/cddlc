@@ -788,3 +788,13 @@ fn test_recursive_named_test_value_terminates() {
     let out = compile("node = { value: uint, next: node }");
     assert!(out.tests.contains("{} as Node"), "{}", out.tests);
 }
+
+/// Issue #38: a CBOR enum's float variant decodes from a number, and its
+/// roundtrip test carries a float value.
+#[test]
+fn test_cbor_float_enum_variant_decodes() {
+    let out = compile("level = float64 / \"off\"");
+    let src = &out.source;
+    assert!(src.contains("if (typeof inner === 'number') {\n    return { kind: \"Float64\", value: inner };"), "{src}");
+    assert!(out.tests.contains("{ kind: \"Float64\", value: 1.5 } as Level"), "{}", out.tests);
+}
