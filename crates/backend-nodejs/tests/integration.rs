@@ -712,7 +712,7 @@ fn test_cbor_tags_decode_through_cbor_tagged() {
     let src = &out.source;
     assert!(src.contains("export class CborTagged {"), "{src}");
     assert!(src.contains("const CBOR_DECODE_OPTIONS = { tags: cborTagDecoders([\n  1,\n  100,\n  200,\n]) };"), "{src}");
-    assert!(src.contains("return fromCborOuter(cborgDecode(data, CBOR_DECODE_OPTIONS));"), "{src}");
+    assert!(src.contains("return fromCborOuter(cborgDecode(data, cborDecodeOptions(data)));"), "{src}");
 
     // A top-level tag, a tagged member, and a tagged array are each unwrapped.
     assert!(src.contains("const map: unknown = expectTag(raw, 100, \"TaggedSensor\");"), "{src}");
@@ -795,6 +795,23 @@ fn test_recursive_named_test_value_terminates() {
 fn test_cbor_float_enum_variant_decodes() {
     let out = compile("level = float64 / \"off\"");
     let src = &out.source;
-    assert!(src.contains("if (typeof inner === 'number') {\n    return { kind: \"Float64\", value: inner };"), "{src}");
+    assert!(src.contains("if (inner instanceof CborFloat || typeof inner === 'number') {\n    return { kind: \"Float64\", value: Number(inner) };"), "{src}");
     assert!(out.tests.contains("{ kind: \"Float64\", value: 1.5 } as Level"), "{}", out.tests);
+}
+
+/// Issue #52: a module with a mixed integer/float enum decodes floats through a
+/// tokenizer that marks them, so `1.0` stays the float variant.
+#[test]
+fn test_mixed_int_float_enum_marks_floats() {
+    let mixed = compile("mixed = uint / float64");
+    let src = &mixed.source;
+    assert!(src.contains("import { encode as cborgEncode, decode as cborgDecode, Tokenizer, Token, Type } from 'cborg';"), "{src}");
+    assert!(src.contains("class FloatMarkingTokenizer {"), "{src}");
+    assert!(src.contains("return { ...CBOR_DECODE_OPTIONS, tokenizer: new FloatMarkingTokenizer(data) };"), "{src}");
+    assert!(src.contains("if (inner instanceof CborFloat || typeof inner === 'number') {"), "{src}");
+
+    // Without a mixed enum, decoding is unchanged and cborg's extras aren't imported.
+    let plain = compile("level = float64 / \"off\"");
+    assert!(!plain.source.contains("FloatMarkingTokenizer"), "{}", plain.source);
+    assert!(plain.source.contains("import { encode as cborgEncode, decode as cborgDecode } from 'cborg';"), "{}", plain.source);
 }
