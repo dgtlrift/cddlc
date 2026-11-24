@@ -13,7 +13,7 @@
 
 use backend_buildtest::{
     assert_all_ok, build_c, build_cpp, build_csharp, build_nodejs,
-    build_python, build_rust, run_build_tests, BuildOutcome, SCHEMAS,
+    build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome, SCHEMAS,
 };
 use backend_rust::RustBackend;
 use backend_c::CBackend;
@@ -322,6 +322,20 @@ fn test_build_rust() {
     eprintln!("\n=== Rust build test ===");
     let outcomes = run_build_tests(&RustBackend, |d, f, n| build_rust(d, f, n), &opts, tmp.path());
     print_summary("Rust", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
+/// Build all schemas with the Rust backend's `--no-std` output as `#![no_std]`,
+/// then run their tests.
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_rust_no_std -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_rust_no_std() {
+    let tmp  = work_dir("rust-no-std");
+    let opts = CodegenOptions { no_std: true, ..CodegenOptions::default() };
+    eprintln!("\n=== Rust no-std build test ===");
+    let outcomes = run_build_tests(&RustBackend, |d, f, n| build_rust_no_std(d, f, n), &opts, tmp.path());
+    print_summary("Rust no-std", &outcomes);
     assert_all_ok(&outcomes);
 }
 

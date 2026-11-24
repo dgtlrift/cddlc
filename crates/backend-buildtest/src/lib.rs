@@ -176,6 +176,45 @@ pub fn build_rust(
     build_result(schema_name, out, files.len(), ms)
 }
 
+/// Build a `--no-std` crate as `#![no_std]` (`--no-default-features --features
+/// no-std`), then run its tests with the default features.
+pub fn build_rust_no_std(
+    work_dir:    &Path,
+    files:       &[GeneratedFile],
+    schema_name: &str,
+) -> BuildOutcome {
+    if let Err(reason) = require_tools(&["cargo"]) {
+        return BuildOutcome::Skipped { reason };
+    }
+
+    write_files(work_dir, files).expect("write files");
+
+    let crate_dir = files.iter()
+        .find(|f| f.path.ends_with("Cargo.toml"))
+        .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
+        .unwrap_or_else(|| work_dir.to_path_buf());
+
+    let t0 = std::time::Instant::now();
+    let build = run_cmd(
+        Command::new("cargo")
+            .args(["build", "--no-default-features", "--features", "no-std"])
+            .current_dir(&crate_dir)
+    );
+    if !build.status.success() {
+        let (stdout, stderr) = format_output(&build);
+        return BuildOutcome::Failed {
+            schema:    schema_name.into(),
+            stdout:    format!("[cargo build --features no-std]\n{stdout}"),
+            stderr,
+            exit_code: build.status.code(),
+        };
+    }
+    let out = run_cmd(Command::new("cargo").arg("test").current_dir(&crate_dir));
+    let ms = t0.elapsed().as_millis() as u64;
+
+    build_result(schema_name, out, files.len(), ms)
+}
+
 // ── C build ───────────────────────────────────────────────────────────────────
 
 pub fn build_c(

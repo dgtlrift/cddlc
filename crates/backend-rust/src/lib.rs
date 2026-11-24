@@ -64,6 +64,35 @@ fn text_literal(v: &EnumVariant) -> Option<&str> {
     }
 }
 
+/// `--no-std`: a fixed-capacity `heapless::String` from the `&str` expression
+/// `expr`, for literals and test values known to fit.
+fn no_std_text(expr: &str) -> String {
+    format!("cddlc_text({expr}).expect(\"fits its capacity\")")
+}
+
+/// `--no-std`: a fixed-capacity `heapless::Vec<u8, N>` from the `&[u8]` expression `expr`.
+fn no_std_bytes(expr: &str) -> String {
+    format!("cddlc_bytes({expr}).expect(\"fits its capacity\")")
+}
+
+/// The Rust type of a primitive. `--no-std` holds text and bytes in
+/// fixed-capacity `heapless` collections of `--max-str` (dgtlrift/cddlc#65).
+fn rust_primitive(p: &Primitive, opts: &CodegenOptions) -> String {
+    match p {
+        Primitive::Tstr if opts.no_std => format!("heapless::String<{}>", opts.max_str),
+        Primitive::Bstr | Primitive::Any if opts.no_std => format!("heapless::Vec<u8, {}>", opts.max_str),
+        _ => primitive_to_rust(p, false).to_owned(),
+    }
+}
+
+/// The element type of the array type `name`, when `name` is one.
+fn array_element<'m>(name: &str, module: Option<&'m IrModule>) -> Option<&'m TypeRef> {
+    match module?.get(name)? {
+        TypeDef::Array(a) => Some(&a.element),
+        _ => None,
+    }
+}
+
 /// The integer of an integer-literal enum variant (the `2` in `1 / 2 / 3`).
 fn int_literal(v: &EnumVariant) -> Option<&LiteralValue> {
     match (&v.ty, literal_eq(&v.constraints)) {
@@ -81,7 +110,8 @@ fn variant_str(v: &EnumVariant) -> String {
 /// A Rust expression for a literal value, as an owned field value.
 fn literal_value_expr(lit: &LiteralValue, no_std: bool) -> String {
     match lit {
-        LiteralValue::Text(t) if no_std => format!("{t:?}"),
+        LiteralValue::Text(t) if no_std => no_std_text(&format!("{t:?}")),
+        LiteralValue::Bytes(b) if no_std => no_std_bytes(&format!("&{b:?}")),
         LiteralValue::Text(t) => format!("{t:?}.to_string()"),
         LiteralValue::Uint(n) => format!("{n}u64"),
         LiteralValue::Int(n)  => format!("{n}i64"),
@@ -152,7 +182,7 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
         match def {
             TypeDef::Struct(s) => emit_struct(&mut w, s, opts, module),
             TypeDef::Enum(e)   => emit_enum(&mut w, e, opts),
-            TypeDef::Array(a)  => emit_array(&mut w, a, opts),
+            TypeDef::Array(a)  => emit_array(&mut w, a, opts, module),
             TypeDef::Alias(a)  => emit_alias(&mut w, a, opts),
             TypeDef::Map(_)    => {
                 w.line(&format!("// Map type '{}' — use ArrayDef for open maps", name));
@@ -181,11 +211,25 @@ fn emit_header(w: &mut IndentWriter, opts: &CodegenOptions) {
     w.line("use minicbor::encode::Write;");
     w.blank();
 
-    // heapless import gated on the no-std feature
-    w.line("#[allow(unexpected_cfgs)]");
-    w.line("#[cfg(feature = \"no-std\")]");
-    w.line("use heapless::Vec as HVec;");
-    w.blank();
+    if opts.no_std {
+        // Text and bytes live in fixed-capacity heapless collections (dgtlrift/cddlc#65).
+        w.line("/// A `tstr` in a fixed-capacity string; fails if it is longer.");
+        w.line("#[doc(hidden)]");
+        w.line("pub fn cddlc_text<const N: usize>(s: &str) -> Result<heapless::String<N>, DecodeError> {");
+        w.indent();
+        w.line("heapless::String::try_from(s).map_err(|_| DecodeError::message(\"text longer than its capacity\"))");
+        w.dedent();
+        w.line("}");
+        w.blank();
+        w.line("/// A `bstr` in a fixed-capacity byte vector; fails if it is longer.");
+        w.line("#[doc(hidden)]");
+        w.line("pub fn cddlc_bytes<const N: usize>(b: &[u8]) -> Result<heapless::Vec<u8, N>, DecodeError> {");
+        w.indent();
+        w.line("heapless::Vec::from_slice(b).map_err(|_| DecodeError::message(\"byte string longer than its capacity\"))");
+        w.dedent();
+        w.line("}");
+        w.blank();
+    }
 
     // Error types
     w.line("/// Field-level decode error.");
@@ -264,12 +308,12 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, modul
     }
 
     w.blank();
-    emit_struct_encode(w, s, opts);
+    emit_struct_encode(w, s, opts, module);
     w.blank();
     emit_struct_decode(w, s, opts, module);
 }
 
-fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&s.name);
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<C> Encode<C> for {} {{", type_name));
@@ -318,12 +362,12 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             // Use (*v) to deref the `&T` produced by `Some(ref v)`.
             // Primitive encode calls (e.u64, e.f64, …) take T by value;
             // method calls on named types need explicit deref: (*v).encode().
-            emit_encode_typeref(w, &f.ty, "(*v)", opts);
+            emit_encode_typeref(w, &f.ty, "(*v)", opts, Some(module));
             w.dedent();
             w.line("}");
         } else {
             w.line(&format!("e.str({:?})?;", f.name.as_str()));
-            emit_encode_value(w, &f.ty, &field_access, &f.occurrence, opts);
+            emit_encode_value(w, &f.ty, &field_access, &f.occurrence, opts, Some(module));
         }
     }
 
@@ -454,7 +498,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         match &v.ty {
             TypeRef::Primitive(Primitive::Null) => w.line(&format!("{vname},")),
             TypeRef::Primitive(p) => {
-                let rt = primitive_to_rust(p, opts.no_std);
+                let rt = rust_primitive(p, opts);
                 w.line(&format!("{vname}({rt}),"));
             }
             TypeRef::Named(n) => {
@@ -495,9 +539,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                                    Primitive::Float64 | Primitive::Float16) => "0.0".into(),
                 TypeRef::Primitive(Primitive::Tstr) => {
                     let lit = variant_str(v);
-                    if opts.no_std { format!("{lit:?}") } else { format!("{lit:?}.to_string()") }
+                    if opts.no_std { no_std_text(&format!("{lit:?}")) } else { format!("{lit:?}.to_string()") }
                 }
-                TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "Vec::new()".into(),
+                TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "Default::default()".into(),
                 TypeRef::Named(n) => format!("{}::default()", to_pascal_case(n)),
                 _ => "Default::default()".into(),
             };
@@ -515,7 +559,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     emit_enum_decode(w, e, opts);
 }
 
-fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions) {
     let type_name = to_pascal_case(&e.name);
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<C> Encode<C> for {} {{", type_name));
@@ -536,19 +580,13 @@ fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
             TypeRef::Primitive(Primitive::Null) => {
                 w.line(&format!("{}::{} => {{ e.null()?; }}", type_vname, vname));
             }
+            // `heapless::String` / `heapless::Vec<u8, N>` (`--no-std`) have the
+            // same `as_str` / `as_slice` as `String` / `Vec<u8>`.
             TypeRef::Primitive(Primitive::Tstr) => {
-                if opts.no_std {
-                    w.line(&format!("{}::{}(s) => {{ e.str(s)?; }}", type_vname, vname));
-                } else {
-                    w.line(&format!("{}::{}(s) => {{ e.str(s.as_str())?; }}", type_vname, vname));
-                }
+                w.line(&format!("{}::{}(s) => {{ e.str(s.as_str())?; }}", type_vname, vname));
             }
             TypeRef::Primitive(Primitive::Bstr) => {
-                if opts.no_std {
-                    w.line(&format!("{}::{}(b) => {{ e.bytes(b)?; }}", type_vname, vname));
-                } else {
-                    w.line(&format!("{}::{}(b) => {{ e.bytes(b.as_slice())?; }}", type_vname, vname));
-                }
+                w.line(&format!("{}::{}(b) => {{ e.bytes(b.as_slice())?; }}", type_vname, vname));
             }
             TypeRef::Primitive(Primitive::Bool) => {
                 w.line(&format!("{}::{}(b) => {{ e.bool(*b)?; }}", type_vname, vname));
@@ -640,7 +678,7 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
             if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
                 let vname    = to_pascal_case(&v.name);
                 let cddl_str = variant_str(v);
-                let val: &str = if opts.no_std { "s" } else { "s.to_string()" };
+                let val: &str = if opts.no_std { "cddlc_text(s)?" } else { "s.to_string()" };
                 w.line(&format!("{:?} => Ok({}::{}({val})),", cddl_str, enum_name, vname));
             }
         }
@@ -759,11 +797,15 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
 // ── Array ─────────────────────────────────────────────────────────────────────
 
-fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
+fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, a.doc.as_deref());
     if a.deprecated { w.line("#[deprecated]"); }
 
     let type_name = to_pascal_case(&a.name);
+    if opts.no_std {
+        emit_array_no_std(w, a, opts, module);
+        return;
+    }
     // minicbor encodes a `Vec<u8>` element as an array of integers; `ByteVec` is a bstr.
     let heap_inner = |ty: &TypeRef| if is_bstr(ty) {
         "minicbor::bytes::ByteVec".to_owned()
@@ -797,6 +839,78 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
         "pub type {} = heapless::Vec<{}, {}>;",
         type_name, elem_ty, cap
     ));
+}
+
+/// `--no-std`: the array is always a fixed-capacity `heapless::Vec`, whatever the
+/// crate's features, so it matches the struct fields that hold it. minicbor has no
+/// impls for heapless, so `encode_<name>` / `decode_<name>` write and read it
+/// element by element; a tagged element is tagged per item (dgtlrift/cddlc#65).
+fn emit_array_no_std(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module: &IrModule) {
+    let type_name = to_pascal_case(&a.name);
+    let snake = to_snake_case(&a.name);
+    let elem = match &a.element {
+        TypeRef::Tagged(_, inner) => typeref_to_rust(inner, opts),
+        other => typeref_to_rust(other, opts),
+    };
+    let cap = capacity_value(
+        a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
+    w.line(&format!("pub type {type_name} = heapless::Vec<{elem}, {cap}>;"));
+    w.blank();
+    w.line(&format!("/// Writes a `{type_name}` as a CBOR array."));
+    w.line("#[allow(unused_variables)]");
+    w.line(&format!(
+        "pub fn encode_{snake}<C, W: Write>(val: &{type_name}, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {{"
+    ));
+    w.indent();
+    if let Some(tag) = a.tagged {
+        w.line(&format!("e.tag(minicbor::data::Tag::new({}))?;", tag.0));
+    }
+    w.line("e.array(val.len() as u64)?;");
+    w.line("for item in val.iter() {");
+    w.indent();
+    emit_encode_typeref(w, &a.element, "(*item)", opts, Some(module));
+    w.dedent();
+    w.line("}");
+    w.line("Ok(())");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("/// Reads a `{type_name}`; fails past its capacity of {cap}."));
+    w.line("#[allow(unused_variables)]");
+    w.line(&format!(
+        "pub fn decode_{snake}(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<{type_name}, DecodeError> {{"
+    ));
+    w.indent();
+    if let Some(tag) = a.tagged {
+        w.line(&format!("if d.tag()? != minicbor::data::Tag::new({}) {{ return Err(DecodeError::message(\"unexpected CBOR tag\")); }}", tag.0));
+    }
+    w.line("let len = d.array()?;");
+    w.line("let mut out = heapless::Vec::new();");
+    w.line("let mut i = 0u64;");
+    w.line("loop {");
+    w.indent();
+    w.line("match len { Some(n) if i >= n => break, None if d.datatype()? == minicbor::data::Type::Break => { d.skip()?; break }, _ => {} }");
+    w.line("i += 1;");
+    w.line(&format!("let item = {};", decode_expr_for_in_module(&a.element, opts, Some(module))));
+    w.line("out.push(item).map_err(|_| DecodeError::message(\"array longer than its capacity\"))?;");
+    w.dedent();
+    w.line("}");
+    w.line("Ok(out)");
+    w.dedent();
+    w.line("}");
+}
+
+/// A text or byte value of length `n`, for a size-constrained default or test value.
+fn sized_value(ty: &TypeRef, n: usize, opts: &CodegenOptions) -> Option<String> {
+    match ty {
+        TypeRef::Primitive(Primitive::Tstr) if opts.no_std => Some(no_std_text(&format!("{:?}", "a".repeat(n)))),
+        TypeRef::Primitive(Primitive::Tstr) => Some(format!("{:?}.to_string()", "a".repeat(n))),
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if opts.no_std => Some(no_std_bytes(&format!("&[0u8; {n}]"))),
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => Some(format!("vec![0u8; {n}]")),
+        _ => None,
+    }
 }
 
 /// Whether a type is a byte string (`bstr`, possibly tagged).
@@ -837,20 +951,9 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         // an empty value that fails constraint validation. Generate a custom Default
         // that satisfies the constraint instead.
         let size_default: Option<String> = a.constraints.iter().find_map(|c| match c {
-            Constraint::SizeExact(n) => match &a.ty {
-                TypeRef::Primitive(Primitive::Tstr) =>
-                    Some(format!("{:?}.to_string()", "a".repeat(*n))),
-                TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
-                    Some(format!("vec![0u8; {}]", n)),
-                _ => None,
-            },
-            Constraint::SizeRange { min: Some(n), .. } => match &a.ty {
-                TypeRef::Primitive(Primitive::Tstr) =>
-                    Some(format!("{:?}.to_string()", "a".repeat(*n))),
-                TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
-                    Some(format!("vec![0u8; {}]", n)),
-                _ => None,
-            },
+            Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. } => {
+                sized_value(&a.ty, *n, opts)
+            }
             _ => None,
         });
 
@@ -893,7 +996,7 @@ fn emit_tagged_newtype_encode(
     w.line("fn encode<W: Write>(&self, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {");
     w.indent();
     w.line(&format!("e.tag(minicbor::data::Tag::new({}))?;", tag.0));
-    emit_encode_value(w, inner, "self.0", &Occurrence::Required, opts);
+    emit_encode_value(w, inner, "self.0", &Occurrence::Required, opts, None);
     w.line("Ok(())");
     w.dedent();
     w.line("}");
@@ -941,7 +1044,7 @@ fn emit_constrained_newtype_encode(
     w.indent();
     w.line("fn encode<W: Write>(&self, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {");
     w.indent();
-    emit_encode_value(w, inner, "self.0", &Occurrence::Required, opts);
+    emit_encode_value(w, inner, "self.0", &Occurrence::Required, opts, None);
     w.line("Ok(())");
     w.dedent();
     w.line("}");
@@ -979,12 +1082,13 @@ fn emit_encode_value(
     expr:   &str,
     occ:    &Occurrence,
     opts:   &CodegenOptions,
+    module: Option<&IrModule>,
 ) {
     match occ {
         Occurrence::Optional => {
             w.line(&format!("if let Some(ref v) = {expr} {{"));
             w.indent();
-            emit_encode_typeref(w, ty, "(*v)", opts);
+            emit_encode_typeref(w, ty, "(*v)", opts, module);
             w.dedent();
             w.line("} else { e.null()?; }");
         }
@@ -994,21 +1098,25 @@ fn emit_encode_value(
             w.line(&format!("e.array({expr}.len() as u64)?;"));
             w.line(&format!("for item in {expr}.iter() {{"));
             w.indent();
-            emit_encode_typeref(w, ty, "item", opts);
+            emit_encode_typeref(w, ty, "item", opts, module);
             w.dedent();
             w.line("}");
         }
         Occurrence::Required => {
-            emit_encode_typeref(w, ty, expr, opts);
+            emit_encode_typeref(w, ty, expr, opts, module);
         }
     }
 }
 
-fn emit_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: &CodegenOptions) {
+fn emit_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: Option<&IrModule>) {
     match ty {
         TypeRef::Primitive(p) => {
             let enc = encode_call_for_primitive(p, expr);
             w.line(&format!("{enc}?;"));
+        }
+        // minicbor can't encode a `heapless::Vec` (`--no-std`): the array's own function does.
+        TypeRef::Named(n) if opts.no_std && array_element(n, module).is_some() => {
+            w.line(&format!("encode_{}(&{expr}, e, ctx)?;", to_snake_case(n)));
         }
         TypeRef::Named(_) => {
             w.line(&format!("{expr}.encode(e, ctx)?;"));
@@ -1017,7 +1125,7 @@ fn emit_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: &Co
             // A tagged member (`stamp: #6.1(uint)`) is written as tag + value,
             // like a tagged type (dgtlrift/cddlc#47).
             w.line(&format!("e.tag(minicbor::data::Tag::new({}))?;", tag.0));
-            emit_encode_typeref(w, inner, expr, opts);
+            emit_encode_typeref(w, inner, expr, opts, module);
         }
         TypeRef::Choice(_) => {
             // Can't determine variant at compile time — encode as-is
@@ -1067,6 +1175,8 @@ fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option
                     format!("d.str()?.to_string()"),
                 Primitive::Bstr | Primitive::Any if !opts.no_std =>
                     format!("d.bytes()?.to_vec()"),
+                Primitive::Tstr => "cddlc_text(d.str()?)?".into(),
+                Primitive::Bstr | Primitive::Any => "cddlc_bytes(d.bytes()?)?".into(),
                 _ => format!("d.{fn_name}()?"),
             }
         }
@@ -1075,7 +1185,10 @@ fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option
             let is_array = module.and_then(|m| m.get(n))
                 .map(|def| matches!(def, TypeDef::Array(_)))
                 .unwrap_or(false);
-            if is_array {
+            if is_array && opts.no_std {
+                // minicbor can't decode a `heapless::Vec`: the array's own function does.
+                format!("decode_{}(d, ctx)?", to_snake_case(n))
+            } else if is_array {
                 format!("d.decode()?")
             } else {
                 format!("{}::decode(d, ctx)?", to_pascal_case(n))
@@ -1152,7 +1265,7 @@ fn field_type_str(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Stri
 
 fn typeref_to_rust(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(p)  => primitive_to_rust(p, opts.no_std).to_owned(),
+        TypeRef::Primitive(p)  => rust_primitive(p, opts),
         TypeRef::Named(n)      => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => typeref_to_rust(inner, opts),
         TypeRef::Choice(cs)    => {
@@ -1196,13 +1309,22 @@ fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions) -> String {
         s.push_str("ciborium = \"0.2\"\n");
     } else {
         s.push_str("minicbor = { version = \"2.3\", features = [\"derive\"] }\n");
-        s.push_str("heapless = { version = \"0.9\", optional = true }\n");
+        if opts.no_std {
+            // `--no-std` types are heapless whatever the features (dgtlrift/cddlc#65).
+            s.push_str("heapless = \"0.9\"\n");
+        } else {
+            s.push_str("heapless = { version = \"0.9\", optional = true }\n");
+        }
         s.push('\n');
         s.push_str("[features]\n");
         // Outside no-std the types are `Vec` and `String`, which need minicbor's alloc.
         s.push_str("default = [\"alloc\"]\n");
         s.push_str("alloc   = [\"minicbor/alloc\"]\n");
-        s.push_str("no-std  = [\"heapless\"]\n");
+        if opts.no_std {
+            s.push_str("no-std  = []\n");
+        } else {
+            s.push_str("no-std  = [\"heapless\"]\n");
+        }
         s.push('\n');
         s.push_str("[dev-dependencies]\n");
         s.push_str("minicbor = { version = \"2.3\", features = [\"derive\", \"alloc\"] }\n");
@@ -1276,7 +1398,7 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
                 literal_value_expr(field_literal(f).expect("checked"), opts.no_std)
             }
             (Occurrence::Required, TypeRef::Named(n)) => {
-                if let Some(v) = tstr_test_value_for(n, module) {
+                if let Some(v) = tstr_test_value_for(n, module, opts) {
                     v
                 } else {
                     default_value_expr(&f.ty, &f.occurrence, opts)
@@ -1284,7 +1406,7 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
             }
             (Occurrence::Required, TypeRef::Tagged(_, inner)) => {
                 if let TypeRef::Named(n) = inner.as_ref() {
-                    if let Some(v) = tstr_test_value_for(n, module) {
+                    if let Some(v) = tstr_test_value_for(n, module, opts) {
                         v
                     } else {
                         default_value_expr(&f.ty, &f.occurrence, opts)
@@ -1310,7 +1432,7 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
     w.line("}");
 }
 
-fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions) {
+fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&e.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&e.name));
     let mut used_tests = HashSet::from([format!("{test_name}_default")]);
@@ -1335,7 +1457,11 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions
         let construct = match &v.ty {
             TypeRef::Primitive(Primitive::Tstr) => {
                 let s = variant_str(v);
-                format!("{}::{}({:?}.to_string())", type_name, vname, s)
+                if opts.no_std {
+                    format!("{}::{}({})", type_name, vname, no_std_text(&format!("{s:?}")))
+                } else {
+                    format!("{}::{}({:?}.to_string())", type_name, vname, s)
+                }
             }
             TypeRef::Primitive(Primitive::Uint) => {
                 let val = v.name.as_str().strip_prefix("Variant")
@@ -1398,7 +1524,7 @@ fn variant_test_name(test_name: &str, variant: &str, used: &mut HashSet<String>)
     name
 }
 
-fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, _opts: &CodegenOptions) {
+fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     if a.constraints.is_empty() && a.tagged.is_none() {
         return; // simple alias — no interesting test to write
     }
@@ -1440,13 +1566,7 @@ fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, _opts: &CodegenOptio
     for c in &a.constraints {
         match c {
             cddlc_ir::Constraint::SizeExact(n) => {
-                let valid_val = match &a.ty {
-                    TypeRef::Primitive(Primitive::Tstr) =>
-                        format!("{:?}.to_string()", "a".repeat(*n)),
-                    TypeRef::Primitive(Primitive::Bstr) =>
-                        format!("vec![0u8; {}]", n),
-                    _ => continue,
-                };
+                let Some(valid_val) = sized_value(&a.ty, *n, opts) else { continue };
                 w.blank();
                 w.line("#[test]");
                 w.line(&format!("fn {test_name}_valid_size() {{"));
@@ -1486,10 +1606,25 @@ fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, _opts: &CodegenOptio
     }
 }
 
-fn emit_array_roundtrip(w: &mut IndentWriter, a: &ArrayDef, _opts: &CodegenOptions) {
+fn emit_array_roundtrip(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     // Arrays are type aliases — test via the element type directly
     let type_name = to_pascal_case(&a.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&a.name));
+    if opts.no_std {
+        // A heapless array goes through its own encode/decode functions.
+        let snake = to_snake_case(&a.name);
+        w.line("#[test]");
+        w.line(&format!("fn {test_name}_empty() {{"));
+        w.indent();
+        w.line(&format!("let original: {type_name} = heapless::Vec::new();"));
+        w.line("let mut buf = Vec::new();");
+        w.line(&format!("encode_{snake}(&original, &mut minicbor::Encoder::new(&mut buf), &mut ()).expect(\"encode\");"));
+        w.line(&format!("let decoded = decode_{snake}(&mut minicbor::Decoder::new(&buf), &mut ()).expect(\"decode\");"));
+        w.line("assert_eq!(original, decoded);");
+        w.dedent();
+        w.line("}");
+        return;
+    }
 
     w.line("#[allow(unexpected_cfgs)]");
     w.line("#[cfg(not(feature = \"no-std\"))]");
@@ -1523,12 +1658,14 @@ fn default_value_expr(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> 
                 "Vec::new()".into()
             }
         }
-        Occurrence::Required => primitive_default_expr(ty),
+        Occurrence::Required => primitive_default_expr(ty, opts),
     }
 }
 
-fn primitive_default_expr(ty: &TypeRef) -> String {
+fn primitive_default_expr(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if opts.no_std => no_std_bytes("&[0xf6u8]"),
+        TypeRef::Primitive(Primitive::Tstr) if opts.no_std => no_std_text("\"hello\""),
         TypeRef::Primitive(p) => match p {
             Primitive::Bool               => "true".into(),
             Primitive::Null | Primitive::Undefined => "()".into(),
@@ -1540,14 +1677,14 @@ fn primitive_default_expr(ty: &TypeRef) -> String {
             Primitive::Tstr               => r#""hello".to_string()"#.into(),
         },
         TypeRef::Named(n)      => format!("{}::default()", to_pascal_case(n)),
-        TypeRef::Tagged(_, inner) => primitive_default_expr(inner),
+        TypeRef::Tagged(_, inner) => primitive_default_expr(inner, opts),
         TypeRef::Choice(cs)    => cs.first()
-            .map(primitive_default_expr)
+            .map(|c| primitive_default_expr(c, opts))
             .unwrap_or_else(|| "Default::default()".into()),
     }
 }
 
-fn tstr_test_value_for(type_name: &str, module: &IrModule) -> Option<String> {
+fn tstr_test_value_for(type_name: &str, module: &IrModule, opts: &CodegenOptions) -> Option<String> {
     match module.types.get(type_name)? {
         TypeDef::Alias(a) if matches!(&a.ty, TypeRef::Primitive(Primitive::Tstr)) => {
             let n = a.constraints.iter().find_map(|c| match c {
@@ -1555,8 +1692,7 @@ fn tstr_test_value_for(type_name: &str, module: &IrModule) -> Option<String> {
                 Constraint::SizeRange { min: Some(n), .. } => Some(*n),
                 _ => None,
             })?;
-            let s = "a".repeat(n);
-            Some(format!("{}({:?}.to_string())", to_pascal_case(type_name), s))
+            Some(format!("{}({})", to_pascal_case(type_name), sized_value(&a.ty, n, opts)?))
         }
         _ => None,
     }
