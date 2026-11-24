@@ -272,6 +272,22 @@ func decFloat64(r []byte, at string) (float64, error) {
 	return 0, mismatch(at, "a number", r)
 }
 
+// decChoice reads a choice of primitive types: the first alternative that
+// accepts r, as that alternative's Go type.
+func decChoice(r []byte, at string, alts ...func([]byte, string) (any, error)) (any, error) {
+	for _, alt := range alts {
+		if v, err := alt(r, at); err == nil {
+			return v, nil
+		}
+	}
+	return nil, fmt.Errorf("%s: no alternative of the choice matches %s", at, kindNames[kindOf(r)])
+}
+
+// asAny adapts a typed decoder to decChoice.
+func asAny[T any](dec func([]byte, string) (T, error)) func([]byte, string) (any, error) {
+	return func(r []byte, at string) (any, error) { return dec(r, at) }
+}
+
 func decFloat32(r []byte, at string) (float32, error) {
 	f, err := decFloat64(r, at)
 	return float32(f), err
@@ -711,6 +727,24 @@ fn enc_each(ty: &TypeRef, expr: &str) -> String {
     )
 }
 
+/// The runtime decoder for a primitive alternative of a choice.
+fn prim_decoder(ty: &TypeRef) -> Option<&'static str> {
+    Some(match ty {
+        TypeRef::Primitive(p) => match p {
+            Primitive::Uint => "decUint",
+            Primitive::Int => "decInt",
+            Primitive::Bool => "decBool",
+            Primitive::Float16 | Primitive::Float32 => "decFloat32",
+            Primitive::Float64 | Primitive::Float => "decFloat64",
+            Primitive::Tstr => "decText",
+            Primitive::Bstr => "decBytes",
+            Primitive::Null | Primitive::Undefined => "decNull",
+            Primitive::Any => return None,
+        },
+        _ => return None,
+    })
+}
+
 /// Statements setting `dst` (of type `go_type(ty)`) from the encoded `src`, each
 /// value's type checked; on failure the enclosing function returns the error.
 fn emit_decode(w: &mut IndentWriter, ty: &TypeRef, src: &str, dst: &str, at: &str) {
@@ -731,6 +765,22 @@ fn emit_decode(w: &mut IndentWriter, ty: &TypeRef, src: &str, dst: &str, at: &st
             w.indent();
             // `val`, not `x`: the destination is often a local named `x`.
             w.line(&format!("val, err := {f}({src}, {at_lit})"));
+            w.line("if err != nil {");
+            w.line("    return err");
+            w.line("}");
+            w.line(&format!("{dst} = val"));
+            w.dedent();
+            w.line("}");
+        }
+        // A choice of primitives: each alternative's decoder, in order, so a
+        // value comes back as its alternative's type (an `int` as int64).
+        TypeRef::Choice(alts) if alts.iter().all(|a| prim_decoder(a).is_some()) => {
+            let decs: Vec<String> = alts.iter()
+                .map(|a| format!("asAny({})", prim_decoder(a).unwrap()))
+                .collect();
+            w.line("{");
+            w.indent();
+            w.line(&format!("val, err := decChoice({src}, {at_lit}, {})", decs.join(", ")));
             w.line("if err != nil {");
             w.line("    return err");
             w.line("}");
@@ -1575,6 +1625,10 @@ fn typed_literal(p: &Primitive, lit: &LiteralValue) -> Option<String> {
 fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: &IrModule, explicit: bool, depth: usize) -> String {
     match occ {
         Occurrence::Optional if !explicit => return "nil".into(),
+        // A choice's field is `*any`, so its pointer must be one too.
+        Occurrence::Optional if matches!(ty, TypeRef::Choice(_)) => {
+            return format!("ptr[any]({})", go_value(ty, &Occurrence::Required, constraints, module, explicit, depth));
+        }
         Occurrence::Optional => return format!("ptr({})", go_value(ty, &Occurrence::Required, constraints, module, explicit, depth)),
         Occurrence::ZeroOrMore { .. } | Occurrence::Bounded { .. } => return format!("[]{}{{}}", go_type(ty)),
         Occurrence::OneOrMore { .. } => {
@@ -1617,7 +1671,11 @@ fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: 
             Primitive::Null | Primitive::Undefined => "Null{}".into(),
         },
         TypeRef::Tagged(_, inner) => go_value(inner, &Occurrence::Required, constraints, module, explicit, depth),
-        TypeRef::Choice(_) => "nil".into(),
+        // A choice's first alternative (nil would be null, not a valid value).
+        TypeRef::Choice(alts) => match alts.first() {
+            Some(first) => go_value(first, &Occurrence::Required, &[], module, explicit, depth),
+            None => "nil".into(),
+        },
         TypeRef::Named(n) => {
             let tn = to_pascal_case(n);
             if depth > MAX_FIXTURE_DEPTH {

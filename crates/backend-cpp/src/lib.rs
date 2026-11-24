@@ -638,9 +638,20 @@ fn emit_cpp_encode_field(
             w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
             emit_cpp_encode_field(w, inner, expr, &Occurrence::Required, opts);
         }
-        TypeRef::Choice(_) => {
-            w.line(&format!("encode(enc, {expr});"));
-        }
+        TypeRef::Choice(cs) => match prim_choice(cs, opts) {
+            // Whichever alternative the variant holds.
+            Some(alts) => {
+                for (i, (p, t)) in alts.iter().enumerate() {
+                    let kw = if i == 0 { "if" } else { "else if" };
+                    w.line(&format!("{kw} (const auto *_c = std::get_if<{t}>(&{expr})) {{"));
+                    w.indent();
+                    w.line(&format!("{};", cpp_encode_call(p, "(*_c)")));
+                    w.dedent();
+                    w.line("}");
+                }
+            }
+            None => w.line(&format!("encode(enc, {expr});")),
+        },
     }
 }
 
@@ -935,9 +946,28 @@ fn emit_cpp_decode_field(
             emit_cpp_decode_field(w, inner, dest, constraints, field_name, dec_expr, opts);
             w.line("}");
         }
-        TypeRef::Choice(_) => {
-            w.line(&format!("nanocbor_skip({dec_expr}); // choice"));
-        }
+        TypeRef::Choice(cs) => match prim_choice(cs, opts) {
+            // The first alternative that reads the item, tried on a copy of the
+            // decoder so a failed attempt consumes nothing.
+            Some(alts) => {
+                w.line("{");
+                w.indent();
+                w.line("bool _matched = false;");
+                for (p, t) in &alts {
+                    w.line("if (!_matched) {");
+                    w.indent();
+                    w.line(&format!("nanocbor_value_t _probe = *({dec_expr});"));
+                    w.line(&format!("{t} _v{{}};"));
+                    w.line(&format!("if ({} >= 0) {{ *({dec_expr}) = _probe; {dest} = _v; _matched = true; }}", cpp_decode_call(p, "_v", "&_probe")));
+                    w.dedent();
+                    w.line("}");
+                }
+                w.line("if (!_matched) return -1;");
+                w.dedent();
+                w.line("}");
+            }
+            None => w.line(&format!("nanocbor_skip({dec_expr}); // choice")),
+        },
     }
 }
 
@@ -1246,10 +1276,31 @@ fn cpp_typeref(ty: &TypeRef, opts: &CodegenOptions) -> String {
         TypeRef::Primitive(p)     => cpp_primitive(p, opts).to_owned(),
         TypeRef::Named(n)         => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => cpp_typeref(inner, opts),
-        TypeRef::Choice(cs)       => cs.first()
-            .map(|c| cpp_typeref(c, opts))
-            .unwrap_or_else(|| "std::monostate".into()),
+        TypeRef::Choice(cs) => match prim_choice(cs, opts) {
+            Some(alts) => format!(
+                "std::variant<{}>",
+                alts.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+            None => cs.first()
+                .map(|c| cpp_typeref(c, opts))
+                .unwrap_or_else(|| "std::monostate".into()),
+        },
     }
+}
+
+/// A choice of primitives with distinct C++ types (`int / float`), which is a
+/// `std::variant` of them: each alternative and its C++ type. `None` for any
+/// other choice, which keeps its first alternative's type.
+fn prim_choice(cs: &[TypeRef], opts: &CodegenOptions) -> Option<Vec<(Primitive, String)>> {
+    let mut alts: Vec<(Primitive, String)> = Vec::new();
+    for c in cs {
+        let TypeRef::Primitive(p) = c else { return None };
+        if matches!(p, Primitive::Any) { return None; }
+        let t = cpp_primitive(p, opts).to_owned();
+        if alts.iter().any(|(_, u)| *u == t) { return None; }
+        alts.push((p.clone(), t));
+    }
+    (alts.len() > 1).then_some(alts)
 }
 
 fn cpp_primitive<'a>(p: &Primitive, _opts: &CodegenOptions) -> &'a str {

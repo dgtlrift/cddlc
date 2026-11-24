@@ -1386,6 +1386,10 @@ fn ts_json_decode_expr(ty: &TypeRef, raw_expr: &str, at: &str, opts: &CodegenOpt
             format!("{df}(new TextEncoder().encode(JSON.stringify({raw_expr})))")
         }
         TypeRef::Tagged(_, inner) => ts_json_decode_expr(inner, raw_expr, at, opts),
+        TypeRef::Choice(cs) if cs.iter().all(|c| matches!(c, TypeRef::Primitive(_))) => {
+            let alts: Vec<String> = cs.iter().map(|c| ts_json_decode_expr(c, "_c", at, opts)).collect();
+            choice_expr(raw_expr, &alts, at)
+        }
         TypeRef::Choice(_) => format!("{raw_expr} as unknown"),
     }
 }
@@ -1508,8 +1512,24 @@ fn ts_convert_expr(ty: &TypeRef, raw_expr: &str, opts: &CodegenOptions) -> Strin
             let untagged = format!("expectTag({raw_expr}, {}, 'tagged value')", tag.0);
             ts_convert_expr(inner, &untagged, opts)
         }
+        TypeRef::Choice(cs) if cs.iter().all(|c| matches!(c, TypeRef::Primitive(_))) => {
+            let alts: Vec<String> = cs.iter().map(|c| ts_convert_expr(c, "_c", opts)).collect();
+            choice_expr(raw_expr, &alts, "choice")
+        }
         TypeRef::Choice(_) => format!("{raw_expr} as unknown"),
     }
+}
+
+/// A choice of primitives read from `raw_expr`: the first alternative whose
+/// converter (each an expression over `_c`) accepts it.
+fn choice_expr(raw_expr: &str, alts: &[String], at: &str) -> String {
+    let tries: String = alts.iter()
+        .map(|a| format!("try {{ return {a}; }} catch {{ /* next alternative */ }} "))
+        .collect();
+    format!(
+        "((_c: unknown) => {{ {tries}throw new Error({:?}); }})({raw_expr})",
+        format!("{at}: no alternative of the choice matches")
+    )
 }
 
 fn ts_convert_primitive(p: &Primitive, expr: &str) -> String {
@@ -2026,6 +2046,8 @@ fn ts_test_value(
             TypeRef::Named(name) => ts_named_value(name, module, opts, explicit, depth),
             // A tagged member (`timestamp: #6.1(uint)`) holds its inner type's value.
             TypeRef::Tagged(_, inner) => ts_test_value(inner, occ, module, opts, explicit, depth),
+            // A choice's first alternative (null isn't a value of it).
+            TypeRef::Choice(cs) if !cs.is_empty() => ts_test_value(&cs[0], occ, module, opts, explicit, depth),
             _ => "null".into(),
         },
     }

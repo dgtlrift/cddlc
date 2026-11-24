@@ -520,10 +520,33 @@ fn emit_c_encode_field(
             w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
             emit_c_encode_field(w, inner, expr, occ, mod_name, opts);
         }
-        TypeRef::Choice(_) => {
-            w.line("/* choice encode */");
-        }
+        TypeRef::Choice(cs) => match prim_choice_c(cs) {
+            // A tagged union: the alternative `kind` names.
+            Some(alts) => {
+                w.line(&format!("switch ({expr}.kind) {{"));
+                for (i, p) in alts.iter().enumerate() {
+                    w.line(&format!("case {i}: {}; break;", c_encode_call(p, &format!("{expr}.as.alt{i}"))));
+                }
+                w.line("default: return -1;");
+                w.line("}");
+            }
+            None => w.line("/* choice encode */"),
+        },
     }
+}
+
+/// A choice of primitives with distinct C types (`int / float`), which is a
+/// tagged union `{ uint8_t kind; union { alt0; alt1; ... } as; }`. `None` for
+/// any other choice, which keeps its first alternative's type.
+fn prim_choice_c(cs: &[TypeRef]) -> Option<Vec<Primitive>> {
+    let mut alts: Vec<Primitive> = Vec::new();
+    for c in cs {
+        let TypeRef::Primitive(p) = c else { return None };
+        if matches!(p, Primitive::Any) { return None; }
+        if alts.iter().any(|q| primitive_to_c(q) == primitive_to_c(p)) { return None; }
+        alts.push(p.clone());
+    }
+    (alts.len() > 1).then_some(alts)
 }
 
 fn c_encode_call(p: &Primitive, expr: &str) -> String {
@@ -801,9 +824,30 @@ fn emit_c_decode_field(
             w.dedent();
             w.line("}");
         }
-        TypeRef::Choice(_) => {
-            w.line(&format!("nanocbor_skip({dec_expr}); /* choice — skip */"));
-        }
+        TypeRef::Choice(cs) => match prim_choice_c(cs) {
+            // The first alternative that reads the item, tried on a copy of the
+            // decoder so a failed attempt consumes nothing.
+            Some(alts) => {
+                w.line("{");
+                w.indent();
+                w.line("bool _matched = false;");
+                for (i, p) in alts.iter().enumerate() {
+                    w.line("if (!_matched) {");
+                    w.indent();
+                    w.line(&format!("nanocbor_value_t _probe = *({dec_expr});"));
+                    w.line(&format!(
+                        "if ({} >= 0) {{ *({dec_expr}) = _probe; {dest}.kind = {i}; _matched = true; }}",
+                        c_decode_call_expr(p, &format!("{dest}.as.alt{i}"), "&_probe")
+                    ));
+                    w.dedent();
+                    w.line("}");
+                }
+                w.line("if (!_matched) return -1;");
+                w.dedent();
+                w.line("}");
+            }
+            None => w.line(&format!("nanocbor_skip({dec_expr}); /* choice — skip */")),
+        },
     }
 }
 
@@ -937,6 +981,7 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
     // Static buffers for any size-constrained tstr named fields, and for inline Tstr/Bstr/Any fields
     for f in &s.fields {
         if matches!(f.occurrence, Occurrence::Optional) { continue; }
+        if is_prim_choice_c(&f.ty) { continue; }
         let fname = to_snake_case(&f.name);
         if let TypeRef::Named(n) = &f.ty {
             if let Some(n) = tstr_size_constraint_for(n, module) {
@@ -962,6 +1007,8 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
     // Fill in default values for each field
     for f in &s.fields {
         if matches!(f.occurrence, Occurrence::Optional) { continue; }
+        // A choice's zeroed union is its first alternative's zero.
+        if is_prim_choice_c(&f.ty) { continue; }
         let fname = to_snake_case(&f.name);
         if let TypeRef::Named(n) = &f.ty {
             if let Some(n) = tstr_size_constraint_for(n, module) {
@@ -1117,14 +1164,32 @@ fn c_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String
     }
 }
 
+/// Whether `ty` (or the type a tag wraps) is a choice of primitives held in a
+/// tagged union.
+fn is_prim_choice_c(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Tagged(_, inner) => is_prim_choice_c(inner),
+        TypeRef::Choice(cs) => prim_choice_c(cs).is_some(),
+        _ => false,
+    }
+}
+
 fn typeref_to_c(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(p)    => primitive_to_c(p).to_owned(),
         TypeRef::Named(n)        => format!("{}_t", to_snake_case(n)),
         TypeRef::Tagged(_, inner) => typeref_to_c(inner, opts),
-        TypeRef::Choice(cs)      => cs.first()
-            .map(|c| typeref_to_c(c, opts))
-            .unwrap_or_else(|| "void*".into()),
+        TypeRef::Choice(cs) => match prim_choice_c(cs) {
+            Some(alts) => {
+                let members: String = alts.iter().enumerate()
+                    .map(|(i, p)| format!("{} alt{i}; ", primitive_to_c(p)))
+                    .collect();
+                format!("struct {{ uint8_t kind; union {{ {members}}} as; }}")
+            }
+            None => cs.first()
+                .map(|c| typeref_to_c(c, opts))
+                .unwrap_or_else(|| "void*".into()),
+        },
     }
 }
 
