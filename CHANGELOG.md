@@ -8,11 +8,11 @@ From 1.1.0 on, release-plz writes this file from the conventional commit message
 
 ## [Unreleased]
 
-## [1.1.1](https://github.com/dgtlrift/cddlc/compare/v1.1.0...v1.1.1) - 2026-11-24
+## [1.2.0](https://github.com/dgtlrift/cddlc/compare/v1.1.0...v1.2.0) - 2026-11-24
 
 ### Changed
 
-Generated code changed in ways callers may notice:
+A minor release, not a patch: code generated for C++ and Python changes its API, so code that calls it may need updating:
 
 - C++ enums are a `Kind kind` plus a `std::variant` payload; constructors of text, `nil` and integer-literal variants take no argument (`Status::make_Warn()`) (#49).
 - C++ with `--alloc heap` makes arrays `std::vector<T> items`, with no capacity limit (#50).
