@@ -1,0 +1,27 @@
+# TEMPORARY: proves the re-pinned release-plz action and engine on a Linux runner
+# without releasing anything. Removed before this PR is merged.
+name: Release-plz dry run
+
+on:
+  pull_request:
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: release-plz release-pr (dry run)
+        uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b
+        with:
+          command: release-pr
+          version: 0.4.3
+          dry_run: true
+          verbose: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
