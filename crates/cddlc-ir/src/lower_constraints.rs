@@ -105,10 +105,15 @@ fn lower_range(
             let c = match (min_lit, hi) {
                 (Some(LiteralValue::Uint(lo)), LiteralValue::Uint(hi)) =>
                     Constraint::ValueRangeUint { min: Some(lo), max: Some(hi), inclusive },
-                (Some(LiteralValue::Uint(lo)), LiteralValue::Int(hi)) =>
-                    Constraint::ValueRangeInt  { min: Some(lo as i64), max: Some(hi), inclusive },
+                // A uint lower bound with a negative upper one: nothing is in it.
+                (Some(LiteralValue::Uint(lo)), LiteralValue::Int(hi)) => match i64::try_from(lo) {
+                    Ok(lo) => Constraint::ValueRangeInt { min: Some(lo), max: Some(hi), inclusive },
+                    Err(_) => empty_uint_range(),
+                },
+                // An upper bound past i64::MAX bounds no 64-bit int: leave it open
+                // rather than wrap it negative (dgtlrift/cddlc#72).
                 (Some(LiteralValue::Int(lo)),  LiteralValue::Uint(hi)) =>
-                    Constraint::ValueRangeInt  { min: Some(lo), max: Some(hi as i64), inclusive },
+                    Constraint::ValueRangeInt  { min: Some(lo), max: i64::try_from(hi).ok(), inclusive },
                 (Some(LiteralValue::Int(lo)),  LiteralValue::Int(hi)) =>
                     Constraint::ValueRangeInt  { min: Some(lo), max: Some(hi), inclusive },
                 (Some(LiteralValue::Float(lo)), LiteralValue::Float(hi)) =>
@@ -250,6 +255,27 @@ fn lower_size(operand: &Type2, rule_name: &str) -> Result<Vec<Constraint>, IrErr
 
 // ── Numeric bound helpers ─────────────────────────────────────────────────────
 
+/// `<= n`: an int range when `n` fits an i64, else a uint range.
+fn uint_upper(n: u64) -> Constraint {
+    match i64::try_from(n) {
+        Ok(n) => Constraint::ValueRangeInt { min: None, max: Some(n), inclusive: true },
+        Err(_) => Constraint::ValueRangeUint { min: None, max: Some(n), inclusive: true },
+    }
+}
+
+/// `>= n`: an int range when `n` fits an i64, else a uint range.
+fn uint_lower(n: u64) -> Constraint {
+    match i64::try_from(n) {
+        Ok(n) => Constraint::ValueRangeInt { min: Some(n), max: None, inclusive: true },
+        Err(_) => Constraint::ValueRangeUint { min: Some(n), max: None, inclusive: true },
+    }
+}
+
+/// A range no value is in (`uint .gt 18446744073709551615`).
+fn empty_uint_range() -> Constraint {
+    Constraint::ValueRangeUint { min: Some(u64::MAX), max: Some(u64::MAX), inclusive: false }
+}
+
 enum BoundSide { Lt, Le, Gt, Ge }
 
 fn numeric_bound(
@@ -259,20 +285,21 @@ fn numeric_bound(
 ) -> Result<Vec<Constraint>, IrError> {
     let v = require_literal(operand, rule_name, "numeric bound")?;
 
-    // Normalise: a positive uint literal used as a bound on an int-typed alias
-    // should produce ValueRangeInt so the two constraints are the same variant
-    // and can be merged by backends.  We always produce Int for values that fit.
+    // Normalise: a uint literal that fits an i64 becomes ValueRangeInt, so it
+    // merges with int bounds in the backends; one past i64::MAX stays
+    // ValueRangeUint instead of wrapping negative (dgtlrift/cddlc#72).
     let c = match (v, &side) {
-        // Uint bounds — emit as Int when the value fits, otherwise keep Uint
-        (Value::Uint(n), BoundSide::Lt) if *n > 0 =>
-            Constraint::ValueRangeInt  { min: None,              max: Some((*n as i64) - 1), inclusive: true },
-        (Value::Uint(n), BoundSide::Le) =>
-            Constraint::ValueRangeInt  { min: None,              max: Some(*n as i64),        inclusive: true },
-        (Value::Uint(n), BoundSide::Gt) =>
-            Constraint::ValueRangeInt  { min: Some((*n as i64) + 1), max: None,              inclusive: true },
-        (Value::Uint(n), BoundSide::Ge) =>
-            Constraint::ValueRangeInt  { min: Some(*n as i64),   max: None,                  inclusive: true },
+        // Nothing is below 0 (for a uint) or above u64::MAX: an empty range.
+        (Value::Uint(0), BoundSide::Lt) =>
+            Constraint::ValueRangeInt  { min: None, max: Some(-1), inclusive: true },
+        (Value::Uint(n), BoundSide::Gt) if *n == u64::MAX => empty_uint_range(),
+        (Value::Uint(n), BoundSide::Lt) => uint_upper(*n - 1),
+        (Value::Uint(n), BoundSide::Le) => uint_upper(*n),
+        (Value::Uint(n), BoundSide::Gt) => uint_lower(*n + 1),
+        (Value::Uint(n), BoundSide::Ge) => uint_lower(*n),
         // Int bounds
+        // Nothing is below i64::MIN: an empty range rather than an overflow.
+        (Value::Int(n),  BoundSide::Lt) if *n == i64::MIN => empty_uint_range(),
         (Value::Int(n),  BoundSide::Lt) => Constraint::ValueRangeInt  { min: None,            max: Some(*n - 1), inclusive: true },
         (Value::Int(n),  BoundSide::Le) => Constraint::ValueRangeInt  { min: None,            max: Some(*n),     inclusive: true },
         (Value::Int(n),  BoundSide::Gt) => Constraint::ValueRangeInt  { min: Some(*n + 1),    max: None,         inclusive: true },

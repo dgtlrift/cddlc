@@ -798,14 +798,21 @@ fn go_check(c: &Constraint, p: &Primitive, x: &str) -> Option<String> {
         Constraint::ValueRangeInt { min, max, inclusive } if int_like || is_float(p) => {
             let le = if *inclusive { "<=" } else { "<" };
             let mut parts = Vec::new();
-            // A uint is never below a negative bound, and Go rejects the comparison.
+            // A uint is never below a negative bound, and Go rejects the comparison;
+            // no uint is at or below a negative upper bound.
             if let Some(lo) = min.filter(|lo| !(is_uint && *lo <= 0)) { parts.push(format!("{x} >= {lo}")); }
-            if let Some(hi) = max.filter(|hi| !(is_uint && *hi < 0)) { parts.push(format!("{x} {le} {hi}")); }
+            match max {
+                Some(hi) if is_uint && *hi < 0 => return Some("false".into()),
+                Some(hi) => parts.push(format!("{x} {le} {hi}")),
+                None => {}
+            }
             (!parts.is_empty()).then(|| parts.join(" && "))
         }
         Constraint::ValueRangeUint { min, max, inclusive } if int_like || is_float(p) => {
             let le = if *inclusive { "<=" } else { "<" };
             let mut parts = Vec::new();
+            // No int64 reaches a lower bound past its range.
+            if min.is_some_and(|lo| matches!(p, Primitive::Int) && lo > i64::MAX as u64) { return Some("false".into()); }
             if let Some(lo) = min.filter(|lo| *lo > 0) { parts.push(format!("{x} >= {lo}")); }
             // An int64 can't exceed a bound past its range, and Go rejects the comparison.
             if let Some(hi) = max.filter(|hi| is_uint || is_float(p) || *hi <= i64::MAX as u64) {
@@ -1591,6 +1598,10 @@ fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: 
                 (Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. }, Primitive::Bstr | Primitive::Any) => return format!("make([]byte, {n})"),
                 (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) => return format!("int64({lo})"),
                 (Constraint::ValueRangeUint { min: Some(lo), .. }, Primitive::Uint) => return format!("uint64({lo})"),
+                // Only an upper bound: the largest value under it.
+                (Constraint::ValueRangeInt { min: None, max: Some(hi), inclusive }, Primitive::Int) => {
+                    return format!("int64({})", if *inclusive { *hi } else { hi - 1 });
+                }
                 _ => {}
             }
         }

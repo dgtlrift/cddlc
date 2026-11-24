@@ -491,14 +491,20 @@ fn java_check(c: &Constraint, p: &Primitive, x: &str) -> Option<String> {
             let le = if *inclusive { "<=" } else { "<" };
             let mut parts = Vec::new();
             if let Some(lo) = min.filter(|lo| !(is_uint && *lo <= 0)) { parts.push(cmp(">=", lo as i128)); }
-            // A uint is never below a negative bound; a negative upper bound on a
-            // uint is a bound past i64 the IR wrapped (dgtlrift/cddlc#72), so skip it.
-            if let Some(hi) = max.filter(|hi| !(is_uint && *hi < 0)) { parts.push(cmp(le, hi as i128)); }
+            // No uint is at or below a negative upper bound.
+            match max {
+                Some(hi) if is_uint && *hi < 0 => return Some("false".into()),
+                Some(hi) => parts.push(cmp(le, *hi as i128)),
+                None => {}
+            }
             join(parts)
         }
         Constraint::ValueRangeUint { min, max, inclusive } if numeric => {
             let le = if *inclusive { "<=" } else { "<" };
             let mut parts = Vec::new();
+            // No long reaches a lower bound past its range; every long is below such
+            // an upper bound.
+            if min.is_some_and(|lo| matches!(p, Primitive::Int) && lo > i64::MAX as u64) { return Some("false".into()); }
             if let Some(lo) = min.filter(|lo| *lo > 0) { parts.push(cmp(">=", lo as i128)); }
             if let Some(hi) = max.filter(|hi| is_uint || is_float(p) || *hi <= i64::MAX as u64) { parts.push(cmp(le, hi as i128)); }
             join(parts)
@@ -1426,6 +1432,10 @@ fn java_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint
                 (Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. }, Primitive::Bstr | Primitive::Any) => return format!("new byte[{n}]"),
                 (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) => return long_lit(*lo as i128),
                 (Constraint::ValueRangeUint { min: Some(lo), .. }, Primitive::Uint) => return long_lit(*lo as i128),
+                // Only an upper bound: the largest value under it.
+                (Constraint::ValueRangeInt { min: None, max: Some(hi), inclusive }, Primitive::Int) => {
+                    return long_lit(if *inclusive { *hi as i128 } else { *hi as i128 - 1 });
+                }
                 _ => {}
             }
         }
