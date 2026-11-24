@@ -587,11 +587,35 @@ fn emit_struct_encode_cbor(
         w.line(&format!("enc.tag({});", tag.0));
     }
 
-    w.line(&format!("enc.startMap({});", fields.len()));
+    // An absent optional member is left out of the map, and the map header
+    // counts only the members written, as in the other backends (dgtlrift/cddlc#64).
+    let optional: Vec<String> = fields.iter()
+        .filter(|f| matches!(f.occurrence, Occurrence::Optional))
+        .map(|f| to_snake_case(&f.name))
+        .collect();
+    let required = fields.len() - optional.len();
+    if optional.is_empty() {
+        w.line(&format!("enc.startMap({required});"));
+    } else {
+        let present: Vec<String> = optional.iter()
+            .map(|p| format!("(val.{p} !== undefined ? 1 : 0)"))
+            .collect();
+        w.line(&format!("enc.startMap({required} + {});", present.join(" + ")));
+    }
     for f in &fields {
         let prop = to_snake_case(&f.name);
-        w.line(&format!("enc.text({:?});", f.name.as_str()));
-        emit_ts_encode_value(w, &f.ty, &format!("val.{prop}"), &f.occurrence, opts);
+        let expr = format!("val.{prop}");
+        if matches!(f.occurrence, Occurrence::Optional) {
+            w.line(&format!("if ({expr} !== undefined) {{"));
+            w.indent();
+            w.line(&format!("enc.text({:?});", f.name.as_str()));
+            emit_ts_encode_primitive_or_named(w, &f.ty, &expr, opts);
+            w.dedent();
+            w.line("}");
+        } else {
+            w.line(&format!("enc.text({:?});", f.name.as_str()));
+            emit_ts_encode_value(w, &f.ty, &expr, &f.occurrence, opts);
+        }
     }
     w.line("enc.endMap();");
     w.line("return enc.finish();");
