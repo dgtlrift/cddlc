@@ -155,6 +155,7 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
         max_array:   args.max_array,
         max_str:     args.max_str,
         provenance:  build_info::provenance(&args.inputs),
+        boilerplate: build_info::boilerplate(&args.inputs),
         java_flavor: match args.java_flavor {
             args::JavaFlavor::Se => cddlc_codegen::JavaFlavor::Se,
             args::JavaFlavor::Ee => cddlc_codegen::JavaFlavor::Ee,

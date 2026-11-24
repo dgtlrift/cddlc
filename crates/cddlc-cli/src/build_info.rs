@@ -19,13 +19,38 @@ pub const LONG_VERSION: &str = concat!(
     "\nremote: ", env!("CDDLC_BUILD_REMOTE"),
 );
 
-/// The lines after `@generated` in every generated file's header: no timestamp, so the
-/// output depends only on the inputs and this cddlc.
+/// The lines after `@generated` in every generated file's header: which cddlc made
+/// it, and from which sources. No timestamp, so the output depends only on the
+/// inputs and this cddlc.
 pub fn provenance(inputs: &[std::path::PathBuf]) -> Vec<String> {
-    let inputs: Vec<String> = inputs.iter().map(|p| p.display().to_string()).collect();
-    vec![
+    let mut lines = vec![
         format!("cddlc {RELEASE} ({COMMIT})"),
         format!("branch {BRANCH}, {REMOTE}"),
-        format!("from {}", inputs.join(", ")),
-    ]
+    ];
+    for p in inputs {
+        lines.push(match std::fs::read(p) {
+            Ok(bytes) => format!("source {} (sha256 {}, {} bytes)", p.display(), sha256_hex(&bytes), bytes.len()),
+            Err(_) => format!("source {}", p.display()),
+        });
+    }
+    lines
+}
+
+/// The comment block at the top of each input, for every generated file's header;
+/// an input whose block matches an earlier one's adds nothing.
+pub fn boilerplate(inputs: &[std::path::PathBuf]) -> Vec<String> {
+    let mut blocks: Vec<Vec<String>> = Vec::new();
+    for p in inputs {
+        let Ok(src) = std::fs::read_to_string(p) else { continue };
+        let block = cddlc_codegen::cddl_boilerplate(&src);
+        if !block.is_empty() && !blocks.contains(&block) {
+            blocks.push(block);
+        }
+    }
+    blocks.join(&String::new())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }

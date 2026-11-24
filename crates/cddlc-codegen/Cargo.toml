@@ -17,3 +17,4 @@ smol_str  = "0.2"
 cddlc-parser = { path = "../cddlc-parser" }
 cddlc-ir     = { path = "../cddlc-ir" }
 backend-rust = { path = "../backend-rust" }
+serde_json   = { workspace = true }
