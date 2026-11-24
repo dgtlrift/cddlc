@@ -370,6 +370,19 @@ device-id = tstr .size 16
     assert!(g.source.contains("nanocbor_fmt_tag") || g.source.contains("1"));
 }
 
+/// Issue #35: a member pinned to a literal gets that literal as its test value,
+/// so the roundtrip passes its own decoder's check.
+#[test]
+fn test_literal_members_use_their_literal_in_tests() {
+    let g = compile("rec = { always: true, never: false, version: 1, kind: \"kernel\" }");
+    let t = &g.tests;
+    assert!(t.contains("original.always = true;"), "{t}");
+    assert!(t.contains("original.never = false;"), "{t}");
+    assert!(t.contains("original.version = 1U;"), "{t}");
+    assert!(t.contains("static const char _kind_str[] = \"kernel\";"), "{t}");
+    assert!(t.contains("original.kind.len = 6;"), "{t}");
+}
+
 /// Issue #36: a text enum is written and read as its CDDL literal, not a string
 /// rebuilt from the PascalCase variant name (`FreeSpace` -> "freespace").
 #[test]

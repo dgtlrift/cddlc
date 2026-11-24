@@ -943,7 +943,8 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
         }
         match effective_primitive(&f.ty) {
             Some(Primitive::Tstr) => {
-                w.line(&format!("static const char _{fname}_str[] = \"hello\";"));
+                let text = text_literal_of(f).unwrap_or("hello");
+                w.line(&format!("static const char _{fname}_str[] = {text:?};"));
             }
             Some(Primitive::Bstr | Primitive::Any) => {
                 w.line(&format!("static const uint8_t _{fname}_cbor[1] = {{0xf6}};"));
@@ -968,8 +969,9 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
         }
         match effective_primitive(&f.ty) {
             Some(Primitive::Tstr) => {
+                let len = text_literal_of(f).map_or(5, str::len);
                 w.line(&format!("original.{fname}.ptr = _{fname}_str;"));
-                w.line(&format!("original.{fname}.len = 5; /* \"hello\" */"));
+                w.line(&format!("original.{fname}.len = {len};"));
                 continue;
             }
             Some(Primitive::Bstr | Primitive::Any) => {
@@ -979,7 +981,9 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
             }
             _ => {}
         }
-        let val = c_default_value(&f.ty, opts);
+        // A member pinned to one value (`always: true`, `version: 1`) must use it, or
+        // its own decoder rejects the roundtrip (dgtlrift/cddlc#35).
+        let val = scalar_literal_of(f).or_else(|| c_default_value(&f.ty, opts));
         if let Some(v) = val {
             w.line(&format!("original.{fname} = {v};"));
         }
@@ -1143,6 +1147,24 @@ fn tstr_size_constraint_for(type_name: &str, module: &IrModule) -> Option<usize>
         }
         _ => None,
     }
+}
+
+/// The text a `tstr` member is pinned to (`kind: "kernel"`), if any.
+fn text_literal_of(f: &cddlc_ir::FieldDef) -> Option<&str> {
+    f.constraints.iter().find_map(|c| match c {
+        Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => Some(t.as_str()),
+        _ => None,
+    })
+}
+
+/// The C value of a bool or integer member pinned to one literal, if any.
+fn scalar_literal_of(f: &cddlc_ir::FieldDef) -> Option<String> {
+    f.constraints.iter().find_map(|c| match c {
+        Constraint::Eq(cddlc_ir::LiteralValue::Bool(b)) => Some(b.to_string()),
+        Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => Some(format!("{n}U")),
+        Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => Some(format!("{n}")),
+        _ => None,
+    })
 }
 
 fn c_default_value(ty: &TypeRef, _opts: &CodegenOptions) -> Option<String> {
