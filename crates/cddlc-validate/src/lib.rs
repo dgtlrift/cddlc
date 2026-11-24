@@ -26,7 +26,18 @@ pub use value::Value;
 
 use cddlc_ir::IrModule;
 
-/// Validate a decoded [`Value`] against the named type in `module`.
+/// Where a [`Value`] was decoded from, which decides how tags are checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// JSON has no tags: a tagged type matches its untagged payload.
+    Json,
+    /// CBOR: a tagged type requires its tag (RFC 8610 §3.6).
+    Cbor,
+}
+
+/// Validate a decoded [`Value`] against the named type in `module`, as
+/// [`validate_from`] with [`Source::Json`]: tags are checked when present, and
+/// an untagged value matches a tagged type.
 ///
 /// Pass `type_name = None` to validate against the schema's declared root
 /// type ([`IrModule::root`]).
@@ -35,6 +46,17 @@ pub fn validate(
     type_name: Option<&str>,
     value:     &Value,
 ) -> Result<(), Vec<ValidationError>> {
+    validate_from(module, type_name, value, Source::Json)
+}
+
+/// Validate a decoded [`Value`] against the named type in `module`. With
+/// [`Source::Cbor`], a value of a tagged type must carry its tag.
+pub fn validate_from(
+    module:    &IrModule,
+    type_name: Option<&str>,
+    value:     &Value,
+    source:    Source,
+) -> Result<(), Vec<ValidationError>> {
     let root = type_name.unwrap_or(module.root.as_str());
-    engine::validate_named(module, root, value)
+    engine::validate_named(module, root, value, source == Source::Cbor)
 }
