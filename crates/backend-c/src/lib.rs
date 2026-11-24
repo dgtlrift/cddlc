@@ -1194,7 +1194,9 @@ set(CMAKE_C_STANDARD 11)
 include(FetchContent)
 FetchContent_Declare(cjson
     GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
-    GIT_TAG        master
+    # Pinned: v1.7.19 (the latest release) needs CMake < 4; later master commits
+    # raise its cmake_minimum_required and fix several memory-safety bugs.
+    GIT_TAG        6d9f2443ab071f86e5d9b43025a40929ec41c46c
 )
 set(ENABLE_CJSON_TEST   OFF CACHE BOOL "" FORCE)
 set(ENABLE_CJSON_UTILS  OFF CACHE BOOL "" FORCE)

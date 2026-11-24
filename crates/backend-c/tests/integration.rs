@@ -393,3 +393,15 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(!g.source.contains("\"freespace\""), "{}", g.source);
     assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
 }
+
+/// The C JSON CMake project pins cJSON to a commit instead of tracking `master`.
+#[test]
+fn test_json_cmake_pins_cjson() {
+    let parsed = cddlc_parser::parse_cddl("x = { a: uint }", std::path::PathBuf::from("test.cddl")).expect("parse");
+    let lowered = cddlc_ir::lower(&parsed.value, 16, 64).expect("lower");
+    let opts = cddlc_codegen::CodegenOptions { format: cddlc_codegen::Format::Json, ..Default::default() };
+    let out = cddlc_codegen::Backend::generate(&backend_c::CBackend, &lowered.module, &opts).expect("generate");
+    let cmake = &out.files.iter().find(|f| f.path.ends_with("CMakeLists.txt")).expect("cmake").content;
+    assert!(cmake.contains("GIT_TAG        6d9f2443ab071f86e5d9b43025a40929ec41c46c"), "{cmake}");
+    assert!(!cmake.contains("GIT_TAG        master"), "{cmake}");
+}

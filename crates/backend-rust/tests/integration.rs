@@ -77,8 +77,10 @@ fn test_cargo_toml_crate_name() {
 
 #[test]
 fn test_cargo_toml_minicbor_version_range() {
+    // Caret 2.3: new 2.x releases, never an incompatible 3.0.
     let g = compile("device-id = uint");
-    assert!(g.cargo_toml.contains(">=2"));
+    assert!(g.cargo_toml.contains("minicbor = { version = \"2.3\""), "{}", g.cargo_toml);
+    assert!(!g.cargo_toml.contains(">="), "{}", g.cargo_toml);
 }
 
 #[test]

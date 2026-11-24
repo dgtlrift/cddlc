@@ -1181,14 +1181,14 @@ fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions) -> String {
     if opts.is_json() {
         s.push_str("serde      = { version = \"1\", features = [\"derive\"] }\n");
         s.push_str("serde_json = \"1\"\n");
-        s.push_str("base64     = \"0.22\"\n");
+        s.push_str("base64     = \"0.23\"\n");
         s.push('\n');
         s.push_str("[dev-dependencies]\n");
         s.push_str("# The round-trip tests also go through CBOR.\n");
         s.push_str("ciborium = \"0.2\"\n");
     } else {
-        s.push_str("minicbor = { version = \">=2\", features = [\"derive\"] }\n");
-        s.push_str("heapless = { version = \"0.8\", optional = true }\n");
+        s.push_str("minicbor = { version = \"2.3\", features = [\"derive\"] }\n");
+        s.push_str("heapless = { version = \"0.9\", optional = true }\n");
         s.push('\n');
         s.push_str("[features]\n");
         // Outside no-std the types are `Vec` and `String`, which need minicbor's alloc.
@@ -1197,7 +1197,7 @@ fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions) -> String {
         s.push_str("no-std  = [\"heapless\"]\n");
         s.push('\n');
         s.push_str("[dev-dependencies]\n");
-        s.push_str("minicbor = { version = \">=2\", features = [\"derive\", \"alloc\"] }\n");
+        s.push_str("minicbor = { version = \"2.3\", features = [\"derive\", \"alloc\"] }\n");
     }
     if opts.dcbor {
         s.push('\n');
