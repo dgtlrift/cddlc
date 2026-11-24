@@ -25,3 +25,6 @@ cddlc-validate  = { path = "../cddlc-validate" }
 clap          = { version = "4", features = ["derive"] }
 serde_json    = { workspace = true }
 ciborium      = { workspace = true }
+
+[dev-dependencies]
+tempfile      = { workspace = true }

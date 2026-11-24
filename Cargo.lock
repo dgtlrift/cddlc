@@ -211,6 +211,7 @@ dependencies = [
  "ciborium",
  "clap",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
