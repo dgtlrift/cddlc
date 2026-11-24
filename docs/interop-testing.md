@@ -44,6 +44,7 @@ generated/
     python/test_interop.py
     go/interop_test.go
     java/InteropTest.java
+    lua/interop_spec.lua
 ```
 
 ## What the vectors contain
@@ -128,6 +129,18 @@ cp generated/iot_sensor-interop/java/InteropTest.java \
 
 cd generated/iot_sensor-cbor
 mvn test -Dtest=InteropTest
+```
+
+### Lua
+
+Copy the harness into the generated package's specs and run busted:
+
+```bash
+cp generated/iot_sensor-interop/lua/interop_spec.lua \
+   generated/iot_sensor-cbor/spec/
+
+cd generated/iot_sensor-cbor
+busted spec/interop_spec.lua
 ```
 
 ### C# / .NET

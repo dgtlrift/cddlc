@@ -66,7 +66,7 @@ const LUA_KEYWORDS: &[&str] = &[
 ];
 
 /// Member names that would hide a type's functions on an instance.
-const RESERVED_MEMBERS: &[&str] = &["new", "validate", "encode", "decode", "to_raw", "from_raw", "kind", "value"];
+const RESERVED_MEMBERS: &[&str] = &["new", "validate", "encode", "decode", "to_raw", "from_raw"];
 
 /// The Lua module name: `--namespace` when given, else the module name, each
 /// dotted part a lowercase identifier (`simple-values` → `simple_values`).
