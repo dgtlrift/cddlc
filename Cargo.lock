@@ -69,7 +69,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "backend-buildtest"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "backend-c",
  "backend-cpp",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "backend-c"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-codegen",
  "cddlc-ir",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "backend-cpp"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "backend-c",
  "cddlc-codegen",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "backend-csharp"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-codegen",
  "cddlc-ir",
@@ -119,7 +119,7 @@ dependencies = [
 
 [[package]]
 name = "backend-dart"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-codegen",
  "cddlc-ir",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "backend-interop"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-codegen",
  "cddlc-ir",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "backend-nodejs"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-codegen",
  "cddlc-ir",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "backend-python"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-codegen",
  "cddlc-ir",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "backend-rust"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-codegen",
  "cddlc-ir",
@@ -190,11 +190,11 @@ dependencies = [
 
 [[package]]
 name = "cddlc"
-version = "1.1.0"
+version = "1.1.1"
 
 [[package]]
 name = "cddlc-cli"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "backend-c",
  "backend-cpp",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "cddlc-codegen"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "backend-rust",
  "cddlc-ir",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "cddlc-ir"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-parser",
  "indexmap",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "cddlc-parser"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cddlc-ir",
  "indexmap",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "cddlc-validate"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "base64",
  "cddlc-ir",
