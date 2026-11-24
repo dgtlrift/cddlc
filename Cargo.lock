@@ -70,6 +70,7 @@ dependencies = [
  "backend-csharp",
  "backend-go",
  "backend-java",
+ "backend-lua",
  "backend-nodejs",
  "backend-python",
  "backend-rust",
@@ -139,6 +140,7 @@ version = "1.2.0"
 dependencies = [
  "backend-go",
  "backend-java",
+ "backend-lua",
  "cddlc-codegen",
  "cddlc-ir",
  "cddlc-parser",
