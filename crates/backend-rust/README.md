@@ -37,7 +37,7 @@ flowchart LR
 
 | Option | Generated code change |
 |---|---|
-| `--no-std` | Adds `#![no_std]` + `extern crate alloc;`; uses `heapless::Vec` for arrays and `heapless::String` for `tstr` |
+| `--no-std` | Builds as `#![no_std]` under the crate's `no-std` feature, with no allocator. `tstr` is `heapless::String<N>` and `bstr` is `heapless::Vec<u8, N>`, with `N` from `--max-str`; arrays are `heapless::Vec<T, N>`, with `N` from `@capacity` or `--max-array`, and get their own `encode_<name>` / `decode_<name>` functions, since minicbor has no heapless support. Decoding fails on a value longer than its capacity. |
 | `--dcbor` | Struct encode sorts map keys before writing (deterministic CBOR per RFC 8949 §4.2) |
 | `--alloc stack` | Arrays backed by `heapless::Vec<T, N>` |
 | `--alloc heap` | Arrays use `std::vec::Vec<T>` |

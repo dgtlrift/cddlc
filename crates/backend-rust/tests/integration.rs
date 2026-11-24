@@ -125,11 +125,12 @@ fn test_no_std_is_feature_gated() {
     assert!(!g.lib_rs.contains("#![no_std]"));
 }
 
+/// Without `--no-std` the crate names no heapless type and imports nothing from it.
 #[test]
-fn test_heapless_import_is_cfg_gated() {
+fn test_std_output_has_no_heapless_import() {
     let g = compile("device-id = uint");
-    assert!(g.lib_rs.contains("#[cfg(feature = \"no-std\")]"));
-    assert!(g.lib_rs.contains("use heapless"));
+    assert!(!g.lib_rs.contains("use heapless"), "{}", g.lib_rs);
+    assert!(g.cargo_toml.contains("heapless = { version = \"0.8\", optional = true }"), "{}", g.cargo_toml);
 }
 
 // ── Default derives ───────────────────────────────────────────────────────────
@@ -607,4 +608,38 @@ fn test_tagged_member_writes_and_checks_tag() {
     assert!(lib.contains("let val = { if d.tag()? != minicbor::data::Tag::new(1) { return Err(DecodeError::message(\"unexpected CBOR tag\")); } d.u64()? };"), "{lib}");
     // A repeated tagged member's items each carry the tag.
     assert!(lib.contains("pub type ReadingTimes = Vec<minicbor::data::Tagged<1, u64>>;"), "{lib}");
+}
+
+fn no_std_opts() -> CodegenOptions {
+    CodegenOptions { no_std: true, ..CodegenOptions::default() }
+}
+
+/// Issue #65: `--no-std` text and bytes are fixed-capacity heapless collections
+/// (no undeclared `'b` lifetime), decoded through the capacity-checking helpers.
+#[test]
+fn test_no_std_text_and_bytes_are_heapless() {
+    let g = compile_with_opts("msg = { name: tstr, blob: bstr, ? unit: tstr }", no_std_opts());
+    assert!(!g.lib_rs.contains("'b str") && !g.lib_rs.contains("'b [u8]"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("pub name: heapless::String<64>,"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("pub blob: heapless::Vec<u8, 64>,"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("let val = cddlc_text(d.str()?)?;"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("let val = cddlc_bytes(d.bytes()?)?;"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("pub fn cddlc_text<const N: usize>(s: &str)"), "{}", g.lib_rs);
+    assert!(g.roundtrip_rs.contains("cddlc_text(\"hello\").expect(\"fits its capacity\")"), "{}", g.roundtrip_rs);
+    // heapless is a plain dependency: the types use it whatever the features.
+    assert!(g.cargo_toml.contains("heapless = \"0.8\"\n"), "{}", g.cargo_toml);
+}
+
+/// Issue #65: a `--no-std` array is always a heapless Vec with its own
+/// encode/decode functions, which a struct holding it calls.
+#[test]
+fn test_no_std_array_has_own_functions() {
+    let g = compile_with_opts("readings = [* reading]\nreading = { v: uint }\nmsg = { r: readings }", no_std_opts());
+    assert!(g.lib_rs.contains("pub type Readings = heapless::Vec<Reading, 16>;"), "{}", g.lib_rs);
+    assert!(!g.lib_rs.contains("pub type Readings = Vec<"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("pub fn encode_readings<C, W: Write>(val: &Readings"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("pub fn decode_readings(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<Readings, DecodeError>"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("encode_readings(&self.r, e, ctx)?;"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("let val = decode_readings(d, ctx)?;"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("out.push(item).map_err(|_| DecodeError::message(\"array longer than its capacity\"))?;"), "{}", g.lib_rs);
 }
