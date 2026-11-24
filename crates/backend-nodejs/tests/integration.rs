@@ -816,6 +816,18 @@ fn test_mixed_int_float_enum_marks_floats() {
     assert!(plain.source.contains("import { encode as cborgEncode, decode as cborgDecode } from 'cborg';"), "{}", plain.source);
 }
 
+/// Issue #64: an absent optional member is left out of the CBOR map, and the map
+/// header counts only the members written.
+#[test]
+fn test_cbor_optional_member_omitted_when_absent() {
+    let g = compile("reading = { id: uint, ? unit: tstr, ? note: tstr }");
+    assert!(g.source.contains("enc.startMap(1 + (val.unit !== undefined ? 1 : 0) + (val.note !== undefined ? 1 : 0));"), "{}", g.source);
+    assert!(g.source.contains("if (val.unit !== undefined) {\n    enc.text(\"unit\");"), "{}", g.source);
+    assert!(!g.source.contains("enc.null()"), "{}", g.source);
+    let fixed = compile("reading = { id: uint }");
+    assert!(fixed.source.contains("enc.startMap(1);"), "{}", fixed.source);
+}
+
 /// The generated package targets cborg 7, jest 30 and TypeScript 6. TypeScript 6
 /// includes no `@types` packages unless listed, and cborg 7 hands a tag decoder
 /// a function that decodes the tagged content.
