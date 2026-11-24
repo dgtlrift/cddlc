@@ -87,7 +87,7 @@ struct Device {
 ```
 
 - **Structs** are plain aggregates. Optional members are `std::optional<T>`;
-  repeated members are `std::array<T, N>`.
+  repeated members are `std::array<T, N>` (`std::vector<T>` with `--alloc heap`).
 - **`tstr` and `bstr`** are `std::string_view`: zero-copy views into the buffer
   being decoded, so that buffer must outlive the decoded value.
 - **Aliases** are each their own struct holding `value`, so two aliases of the
@@ -100,8 +100,9 @@ struct Device {
   Valued variants (`uint`, `int`, `bool`, floats, `tstr`, `bstr`, named types)
   take their value: for `level = uint / "off"`, `Level::make_Uint(5)`. Decoding
   picks the variant by the CBOR type it reads, matching literals first.
-- **Arrays** are a struct with `std::array<T, N> items` and `std::size_t count`.
-  `N` comes from `; @capacity` or `--max-array`.
+- **Arrays** are a struct with `std::array<T, N> items` and `std::size_t count`;
+  `N` comes from `; @capacity` or `--max-array`. With `--alloc heap` they are a
+  struct with `std::vector<T> items` and no capacity limit.
 - Doc comments and `; @doc` pragmas become `///` comments.
 
 ### Functions
@@ -193,11 +194,9 @@ nanocbor (or nlohmann/json) on the first configure.
 ## Known gaps
 
 - **nanocbor only**: `--runtime` is accepted, but only nanocbor is wired up.
-- **`--alloc` is ignored**: arrays are always `std::array<T, N>` plus a count.
 - **`nil` enum variants** are written as their CDDL text, as in the other
   backends, not as CBOR null.
 - **`.regexp`** constraints need a user-supplied `@regex-hook`.
-- **nlohmann/json is fetched from `master`**, not a pinned version.
 
 ## License
 

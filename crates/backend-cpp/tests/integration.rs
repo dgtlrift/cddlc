@@ -438,6 +438,22 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
 }
 
+/// Issue #50: `--alloc heap` makes arrays `std::vector`s with no capacity limit;
+/// the default keeps a fixed-capacity `std::array` plus a count.
+#[test]
+fn test_alloc_heap_uses_vector() {
+    let heap = CodegenOptions { alloc: cddlc_codegen::AllocStrategy::Heap, ..Default::default() };
+    let g = compile_with_opts("nums = [* uint]", heap);
+    assert!(g.header.contains("std::vector<uint64_t> items{};"), "{}", g.header);
+    assert!(!g.header.contains("std::size_t count"), "{}", g.header);
+    assert!(g.source.contains("nanocbor_fmt_array(enc, val.items.size());"), "{}", g.source);
+    assert!(g.source.contains("out.items.push_back(item);"), "{}", g.source);
+
+    let fixed = compile("nums = [* uint]");
+    assert!(fixed.header.contains("std::array<uint64_t, 16> items{};"), "{}", fixed.header);
+    assert!(fixed.header.contains("std::size_t count{0};"), "{}", fixed.header);
+}
+
 /// Issue #51: the C++ JSON CMake project pins nlohmann/json to a release
 /// archive and its hash instead of tracking `master`.
 #[test]

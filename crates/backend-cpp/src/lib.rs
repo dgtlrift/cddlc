@@ -167,6 +167,7 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("#include <variant>");
     w.line("#include <string_view>");
     w.line("#include <array>");
+    w.line("#include <vector>");
     w.line("#include <cstring>");
     w.line("#include <nanocbor/nanocbor.h>");
     w.blank();
@@ -341,6 +342,12 @@ fn emit_enum_hpp(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     w.line("};");
 }
 
+/// `--alloc heap`: arrays are `std::vector`s; `stack` and `arena` keep a
+/// fixed-capacity `std::array` plus a count.
+fn is_heap(opts: &CodegenOptions) -> bool {
+    matches!(opts.alloc, cddlc_codegen::AllocStrategy::Heap)
+}
+
 /// The C++ payload type of an enum variant, or `None` for a variant that carries
 /// no value: a text literal, `nil`, or an integer literal (dgtlrift/cddlc#49).
 fn cpp_variant_payload(v: &EnumVariant, opts: &CodegenOptions) -> Option<String> {
@@ -391,6 +398,15 @@ fn emit_array_hpp(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     );
     w.line(&format!("struct {type_name} {{"));
     w.indent();
+    if is_heap(opts) {
+        // `--alloc heap`: no capacity limit (dgtlrift/cddlc#50).
+        w.line(&format!("std::vector<{elem_ty}> items{{}};"));
+        w.blank();
+        w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{ return items == o.items; }}"));
+        w.dedent();
+        w.line("};");
+        return;
+    }
     w.line(&format!("std::array<{elem_ty}, {cap}> items{{}};"));
     w.line("std::size_t count{0};");
     w.blank();
@@ -569,10 +585,17 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             if let Some(tag) = a.tagged {
                 w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
             }
-            w.line("nanocbor_fmt_array(enc, val.count);");
-            w.line("for (std::size_t i = 0; i < val.count; i++) {");
-            w.indent();
-            emit_cpp_encode_field(w, &a.element, "val.items[i]", &Occurrence::Required, opts);
+            if is_heap(opts) {
+                w.line("nanocbor_fmt_array(enc, val.items.size());");
+                w.line("for (const auto &item : val.items) {");
+                w.indent();
+                emit_cpp_encode_field(w, &a.element, "item", &Occurrence::Required, opts);
+            } else {
+                w.line("nanocbor_fmt_array(enc, val.count);");
+                w.line("for (std::size_t i = 0; i < val.count; i++) {");
+                w.indent();
+                emit_cpp_encode_field(w, &a.element, "val.items[i]", &Occurrence::Required, opts);
+            }
             w.dedent();
             w.line("}");
             w.line("return NANOCBOR_OK;");
@@ -703,6 +726,21 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             );
             w.line("nanocbor_value_t arr;");
             w.line("if (nanocbor_enter_array(dec, &arr) < 0) return -1;");
+            if is_heap(opts) {
+                w.line("out.items.clear();");
+                w.line("while (!nanocbor_at_end(&arr)) {");
+                w.indent();
+                w.line(&format!("{} item{{}};", cpp_typeref(&a.element, opts)));
+                emit_cpp_decode_field(w, &a.element, "item", &[], "item", "&arr", opts);
+                w.line("out.items.push_back(item);");
+                w.dedent();
+                w.line("}");
+                w.line("nanocbor_leave_container(dec, &arr);");
+                w.line("return NANOCBOR_OK;");
+                w.dedent();
+                w.line("}");
+                return;
+            }
             w.line("out.count = 0;");
             w.line(&format!("while (!nanocbor_at_end(&arr) && out.count < {cap}) {{"));
             w.indent();
@@ -1189,6 +1227,8 @@ fn cpp_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Stri
     let base = cpp_typeref(ty, opts);
     match occ {
         Occurrence::Optional => format!("std::optional<{base}>"),
+        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. } | Occurrence::Bounded { .. }
+            if is_heap(opts) => format!("std::vector<{base}>"),
         Occurrence::ZeroOrMore { capacity } | Occurrence::OneOrMore { capacity }
         | Occurrence::Bounded { capacity, .. } => {
             let cap = capacity_value(capacity, opts.max_array);
