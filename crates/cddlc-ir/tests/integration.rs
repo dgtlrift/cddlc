@@ -556,6 +556,70 @@ fn test_true_false_nil_members_lower_to_bool_and_null() {
     assert!(s.fields[3].constraints.is_empty());
 }
 
+fn alias_constraints(src: &str, name: &str) -> Vec<Constraint> {
+    let m = compile(src);
+    let Some(TypeDef::Alias(a)) = m.get(name) else { panic!("expected alias {name}") };
+    a.constraints.clone()
+}
+
+/// Issue #72: a numeric bound past i64::MAX stays unsigned instead of wrapping
+/// negative; bounds that fit an i64 are still int ranges.
+#[test]
+fn test_numeric_bound_past_i64_max_is_unsigned() {
+    assert_eq!(
+        alias_constraints("a = uint .le 18446744073709551615", "a"),
+        vec![Constraint::ValueRangeUint { min: None, max: Some(u64::MAX), inclusive: true }]
+    );
+    assert_eq!(
+        alias_constraints("a = uint .ge 9223372036854775808", "a"),
+        vec![Constraint::ValueRangeUint { min: Some(1 << 63), max: None, inclusive: true }]
+    );
+    assert_eq!(
+        alias_constraints("a = uint .lt 18446744073709551615", "a"),
+        vec![Constraint::ValueRangeUint { min: None, max: Some(u64::MAX - 1), inclusive: true }]
+    );
+    assert_eq!(
+        alias_constraints("a = uint .gt 9223372036854775807", "a"),
+        vec![Constraint::ValueRangeUint { min: Some(1 << 63), max: None, inclusive: true }]
+    );
+    // Fits an i64: unchanged.
+    assert_eq!(
+        alias_constraints("a = uint .le 9223372036854775807", "a"),
+        vec![Constraint::ValueRangeInt { min: None, max: Some(i64::MAX), inclusive: true }]
+    );
+    assert_eq!(
+        alias_constraints("a = uint .lt 10", "a"),
+        vec![Constraint::ValueRangeInt { min: None, max: Some(9), inclusive: true }]
+    );
+}
+
+/// Issue #72: the edges — nothing is below 0 or above u64::MAX — lower without
+/// an error or an overflow.
+#[test]
+fn test_numeric_bound_edges() {
+    assert_eq!(
+        alias_constraints("a = int .lt 0", "a"),
+        vec![Constraint::ValueRangeInt { min: None, max: Some(-1), inclusive: true }]
+    );
+    assert_eq!(
+        alias_constraints("a = uint .gt 18446744073709551615", "a"),
+        vec![Constraint::ValueRangeUint { min: Some(u64::MAX), max: Some(u64::MAX), inclusive: false }]
+    );
+}
+
+/// Issue #72: a range whose upper bound is past i64::MAX doesn't wrap.
+#[test]
+fn test_range_upper_bound_past_i64_max() {
+    assert_eq!(
+        alias_constraints("a = -5..18446744073709551615", "a"),
+        vec![Constraint::ValueRangeInt { min: Some(-5), max: None, inclusive: true }]
+    );
+    assert_eq!(
+        alias_constraints("a = 9223372036854775808..18446744073709551615", "a"),
+        vec![Constraint::ValueRangeUint { min: Some(1 << 63), max: Some(u64::MAX), inclusive: true }]
+    );
+}
+
 fn member_constraints(src: &str) -> Vec<Constraint> {
     let m = compile(src);
     let Some(TypeDef::Struct(s)) = m.get("msg") else { panic!("expected struct msg") };

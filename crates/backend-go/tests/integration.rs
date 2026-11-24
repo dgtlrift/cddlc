@@ -156,3 +156,13 @@ fn test_tests_compare_decoded_values() {
     assert!(g.tests.contains("roundtrip(t, S{A: uint64(42), B: ptr(\"hello\")}, DecodeS)"), "{}", g.tests);
     assert!(g.tests.contains("if !reflect.DeepEqual(got, orig) {"), "{}", g.tests);
 }
+
+/// Issue #72: a bound past i64::MAX reaches the backend unsigned.
+#[test]
+fn test_uint_bound_past_i64_max() {
+    let g = compile("big = uint .ge 9223372036854775808\nall = uint .le 18446744073709551615\nnone = int .ge 9223372036854775808");
+    assert!(g.source.contains("if !(x >= 9223372036854775808) {"), "{}", g.source);
+    assert!(g.source.contains("if !(x <= 18446744073709551615) {"), "{}", g.source);
+    // No int64 is that large.
+    assert!(g.source.contains("func (v None) Validate() error {\n\tx := int64(v)\n\tif !(false) {"), "{}", g.source);
+}

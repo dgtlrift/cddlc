@@ -164,3 +164,12 @@ fn test_ee_json_uses_jsonp_and_jsonb() {
     assert!(st.contains("@jakarta.json.bind.annotation.JsonbTypeAdapter(Status.JsonbAdapter.class)"), "{st}");
     assert!(p.file("RoundtripTest.java").contains("assertEquals(new String(encoded, StandardCharsets.UTF_8), json);"));
 }
+
+/// Issue #72: a bound past i64::MAX reaches the backend unsigned and is
+/// compared unsigned, written in hex.
+#[test]
+fn test_uint_bound_past_i64_max() {
+    let p = se("big = uint .ge 9223372036854775808\nall = uint .le 18446744073709551615");
+    assert!(p.file("Big.java").contains("if (!(Long.compareUnsigned(this.value, 0x8000000000000000L) >= 0))"), "{}", p.file("Big.java"));
+    assert!(p.file("All.java").contains("Long.compareUnsigned(this.value, 0xffffffffffffffffL) <= 0"), "{}", p.file("All.java"));
+}

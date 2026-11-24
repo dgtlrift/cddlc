@@ -134,7 +134,6 @@ that JSON-B writes and reads the same JSON.
   `validate()`) counts UTF-8 bytes; they differ for non-ASCII text.
 - **JSON `bstr` / `tstr` choices**: in JSON a byte string is text, so an enum
   with both a `bstr` and a `tstr` variant decodes such text as the `tstr` one.
-- **Numeric bounds past `i64::MAX`** are mis-lowered by the IR (#72).
 
 ## License
 
