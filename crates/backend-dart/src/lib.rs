@@ -245,7 +245,9 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
     w.line("});");
     w.blank();
 
-    if opts.is_json() {
+    if s.encoding == cddlc_ir::StructEncoding::Array {
+        emit_record_codec(w, module, s, &class_name, opts);
+    } else if opts.is_json() {
         emit_struct_from_json(w, module, s, &class_name, opts);
         w.blank();
         emit_struct_to_json(w, module, s, opts);
@@ -260,6 +262,104 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
         emit_struct_to_cbor(w, module, s, opts);
     }
 
+    w.dedent();
+    w.line("}");
+}
+
+/// A record's encode / decode (RFC 8610 §3.4): a list of the members' values, in
+/// order. Optional members come last: those present are written up to the
+/// first absent one, and one set after an absent one is an error.
+fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
+    let json = opts.is_json();
+    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let total = s.fields.len();
+    let want = if required == total { required.to_string() } else { format!("{required} to {total}") };
+
+    // Decode
+    if json {
+        w.line(&format!("static {class_name} decode(String s) => {class_name}.fromJson(jsonDecode(s));"));
+        w.blank();
+        w.line(&format!("factory {class_name}.fromJson(dynamic raw) {{"));
+        w.indent();
+        w.line(&format!("if (raw is! List) throw FormatException('{class_name}: expected an array');"));
+        w.line("final a = raw;");
+    } else {
+        w.line(&format!("static {class_name} decode(Uint8List bytes) => {class_name}._fromCborList(cbor.decode(bytes) as CborList);"));
+        w.blank();
+        w.line(&format!("factory {class_name}._fromCborList(CborList a) {{"));
+        w.indent();
+        if let Some(tag) = s.tagged {
+            w.line(&format!("_untag({}, a, '{class_name}');", tag.0));
+        }
+    }
+    w.line(&format!("if (a.length < {required} || a.length > {total}) {{"));
+    w.line(&format!("  throw FormatException('{class_name}: expected {want} items, got ${{a.length}}');"));
+    w.line("}");
+    w.line(&format!("return {class_name}("));
+    w.indent();
+    for (i, f) in s.fields.iter().enumerate() {
+        let fname = dart_field(&f.name);
+        let item = format!("a[{i}]");
+        let conv = if json { json_from_expr(&f.ty, &item, module, opts) } else { cbor_from_expr(&f.ty, &item, module, opts) };
+        if f.occurrence.is_required() {
+            w.line(&format!("{fname}: {conv},"));
+        } else {
+            w.line(&format!("{fname}: a.length > {i} ? {conv} : null,"));
+        }
+    }
+    w.dedent();
+    w.line(");");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    // Encode
+    let optional: Vec<_> = s.fields.iter().filter(|f| !f.occurrence.is_required()).collect();
+    let (list_ty, method) = if json { ("dynamic", "List<dynamic> toJson()") } else { ("CborValue", "CborValue _toCborValue([List<int> tags = const []])") };
+    if json {
+        w.line("String encode() => jsonEncode(toJson());");
+    } else {
+        w.line("Uint8List encode() => Uint8List.fromList(cbor.encode(_toCborValue()));");
+    }
+    w.blank();
+    w.line(&format!("{method} {{"));
+    w.indent();
+    w.line(&format!("final items = <{list_ty}>["));
+    w.indent();
+    for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
+        let fname = dart_field(&f.name);
+        let v = if json { json_to_expr(&f.ty, &fname, module, opts) } else { cbor_to_expr(&f.ty, &fname, module, opts) };
+        w.line(&format!("{v},"));
+    }
+    w.dedent();
+    w.line("];");
+    if !optional.is_empty() {
+        w.line("var gap = false;");
+        for f in &optional {
+            let fname = dart_field(&f.name);
+            let v = if json { json_to_expr(&f.ty, &format!("{fname}!"), module, opts) } else { cbor_to_expr(&f.ty, &format!("{fname}!"), module, opts) };
+            w.line(&format!("if ({fname} != null) {{"));
+            w.indent();
+            w.line(&format!(
+                "if (gap) throw StateError('{class_name}.{}: set, but an optional member before it isn\\'t');",
+                f.name
+            ));
+            w.line(&format!("items.add({v});"));
+            w.dedent();
+            w.line("} else {");
+            w.line("  gap = true;");
+            w.line("}");
+        }
+    }
+    if json {
+        w.line("return items;");
+    } else {
+        let tags = match s.tagged {
+            Some(tag) => add_tag("tags", tag.0),
+            None      => "tags".to_owned(),
+        };
+        w.line(&format!("return CborList(items, tags: {tags});"));
+    }
     w.dedent();
     w.line("}");
 }
@@ -723,6 +823,9 @@ fn emit_tests(module: &IrModule, lib_name: &str, opts: &CodegenOptions) -> Strin
 
     if opts.is_json() {
         w.line("import 'dart:convert';");
+        if module_uses_bstr(module) {
+            w.line("import 'dart:typed_data';");
+        }
     } else {
         w.line("import 'dart:typed_data';");
     }
@@ -903,6 +1006,9 @@ fn json_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                     let cls = to_pascal_case(n);
                     format!("{cls}.fromJson({expr})")
                 }
+                Some(TypeDef::Struct(st)) if st.encoding == cddlc_ir::StructEncoding::Array => {
+                    format!("{}.fromJson({expr})", to_pascal_case(n))
+                }
                 Some(TypeDef::Struct(_)) | None => {
                     let cls = to_pascal_case(n);
                     format!("{cls}.fromJson({expr} as Map<String, dynamic>)")
@@ -964,6 +1070,9 @@ fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                 Some(TypeDef::Enum(_)) => {
                     let cls = to_pascal_case(n);
                     format!("{cls}._fromCborValue({expr})")
+                }
+                Some(TypeDef::Struct(st)) if st.encoding == cddlc_ir::StructEncoding::Array => {
+                    format!("{}._fromCborList({expr} as CborList)", to_pascal_case(n))
                 }
                 Some(TypeDef::Struct(_)) | None => {
                     let cls = to_pascal_case(n);

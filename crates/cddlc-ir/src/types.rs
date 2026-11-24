@@ -139,11 +139,25 @@ impl TypeDef {
 pub struct StructDef {
     pub name:       SmolStr,
     pub fields:     Vec<FieldDef>,
+    /// A map (`{ a: uint }`), or an array of positional members, a record
+    /// (`[a: uint, b: tstr]`, `[uint, tstr]`; RFC 8610 §3.4).
+    pub encoding:   StructEncoding,
     pub tagged:     Option<CborTag>,
     /// Emit map keys in sorted order on encode (dCBOR / deterministic mode).
     pub dcbor:      bool,
     pub doc:        Option<String>,
     pub deprecated: bool,
+}
+
+/// How a [`StructDef`] is encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StructEncoding {
+    /// A map: each member is a key/value pair.
+    #[default]
+    Map,
+    /// An array: the members' values in order, keys left out. Optional
+    /// members may only come last, and are left off the end when absent.
+    Array,
 }
 
 #[derive(Debug, Clone)]
