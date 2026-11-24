@@ -1126,9 +1126,10 @@ project({name}_json CXX)
 set(CMAKE_CXX_STANDARD 17)
 
 include(FetchContent)
+# nlohmann/json v3.12.0 release archive, pinned by hash (dgtlrift/cddlc#51)
 FetchContent_Declare(nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        master
+    URL      https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+    URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
 )
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
