@@ -728,11 +728,9 @@ fn emit_cpp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
                     w.line(&format!("assert(std::abs(decoded.{fname} - {f}) < 1e-6);")),
                 FieldVal::Text(s) =>
                     w.line(&format!("assert(decoded.{fname} == std::string_view({:?}));", s)),
-                // A C++ enum holds a text variant as its `std::string_view`.
-                FieldVal::Enum { text, .. } =>
-                    w.line(&format!(
-                        "assert(std::get_if<std::string_view>(&decoded.value) && *std::get_if<std::string_view>(&decoded.value) == std::string_view({text:?}));"
-                    )),
+                // A C++ enum records its variant in `kind`.
+                FieldVal::Enum { kind, .. } =>
+                    w.line(&format!("assert(decoded.kind == {}::Kind::{kind});", to_pascal_case(&v.type_name))),
                 _ => {}
             }
         }

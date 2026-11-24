@@ -447,7 +447,7 @@ fn test_cpp_harness_compares_members_directly() {
     let h = gen("sensor = { id: uint }\nmodel = \"free-space\" / \"other\"").4;
     assert!(h.contains("assert(decoded.id == 0ULL);"), "{h}");
     assert!(!h.contains("std::get<uint64_t>"), "{h}");
-    assert!(h.contains("*std::get_if<std::string_view>(&decoded.value) == std::string_view(\"free-space\")"), "{h}");
+    assert!(h.contains("assert(decoded.kind == Model::Kind::FreeSpace);"), "{h}");
 }
 
 /// CBOR text-string key: 0x60 + length, then the bytes (short keys only).
