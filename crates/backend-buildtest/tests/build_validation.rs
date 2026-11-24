@@ -353,6 +353,21 @@ fn test_build_cpp() {
     assert_all_ok(&outcomes);
 }
 
+/// Build and test all schemas using the C++ backend's JSON output (nlohmann/json,
+/// fetched by CMake), running the generated roundtrip tests (dgtlrift/cddlc#54).
+/// Requires: cmake, a C++17 compiler
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_cpp_json -- --exact --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_cpp_json() {
+    let tmp  = work_dir("cpp-json");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    eprintln!("\n=== C++ JSON build test ===");
+    let outcomes = run_build_tests(&CppBackend, |d, f, n| build_cpp(d, f, n), &opts, tmp.path());
+    print_summary("C++ JSON", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
 /// Build and test all schemas using the C# backend (runs `dotnet test`).
 /// Requires: dotnet in PATH
 /// Run: cargo test -p backend-buildtest --test build_validation test_build_csharp -- --ignored --nocapture

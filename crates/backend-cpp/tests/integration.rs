@@ -467,3 +467,42 @@ fn test_json_cmake_pins_nlohmann() {
     assert!(cmake.contains("URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa"), "{cmake}");
     assert!(!cmake.contains("GIT_TAG        master"), "{cmake}");
 }
+
+/// Generate C++ JSON output and return (header, source, tests).
+fn compile_json_cpp(src: &str) -> (String, String, String) {
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
+    let lowered = lower(&parsed.value, 16, 64).expect("lower");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..Default::default() };
+    let out = CppBackend.generate(&lowered.module, &opts).expect("generate");
+    let get = |suffix: &str| out.files.iter().find(|f| f.path.ends_with(suffix)).expect(suffix).content.clone();
+    (get(".hpp"), get(&format!("src/test.cpp")), get("test_roundtrip.cpp"))
+}
+
+/// Issue #54: C++ JSON members of an enum, array, struct or nil type convert
+/// through the right representation, and tests compare the decoded value.
+#[test]
+fn test_json_named_members_convert_by_kind() {
+    let (h, src, tests) = compile_json_cpp(
+        "rec = { status: status, sensors: sensors, inner: sensor, ? gone: nil }\n\
+         status = \"ok\" / \"warn\"\n\
+         sensors = [* sensor]\n\
+         sensor = { id: uint }",
+    );
+    // A text enum is a std::string: no encode()/decode() calls on it.
+    assert!(src.contains("j[\"status\"] = this->status;"), "{src}");
+    assert!(src.contains("out.status = j.at(\"status\").get<std::string>();"), "{src}");
+    // An array goes through its free functions.
+    assert!(src.contains("j[\"sensors\"] = nlohmann::json::parse(encode_Sensors(this->sensors));"), "{src}");
+    assert!(src.contains("out.sensors = decode_Sensors(json_bytes(j.at(\"sensors\")));"), "{src}");
+    // A struct is decoded from one serialization, not two temporaries.
+    assert!(src.contains("out.inner = Sensor::decode(json_bytes(j.at(\"inner\")));"), "{src}");
+    assert!(!src.contains(".dump().begin(), "), "{src}");
+    // A present nil is JSON null.
+    assert!(src.contains("j[\"gone\"] = nullptr;"), "{src}");
+    // Array elements convert one by one.
+    assert!(src.contains("for (const auto& item : val) arr.push_back(nlohmann::json::parse(item.encode()));"), "{src}");
+    // Tests compare values.
+    assert!(h.contains("bool operator==(const Rec &o) const { return status == o.status && sensors == o.sensors && inner == o.inner && gone == o.gone; }"), "{h}");
+    assert!(tests.contains("assert(decoded == original);"), "{tests}");
+    assert!(!tests.contains("(void)decoded;"), "{tests}");
+}
