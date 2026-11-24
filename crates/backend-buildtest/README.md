@@ -17,6 +17,7 @@ flowchart TD
     C --> D4["npm install + jest\n(Node.js/TypeScript)"]
     C --> D5["pytest\n(Python)"]
     C --> D6["dart test\n(Dart)"]
+    C --> D7["go test\n(Go)"]
     classDef active fill:#d4edda,stroke:#28a745
 ```
 
@@ -53,6 +54,7 @@ cargo test -p backend-buildtest test_build_csharp -- --ignored --nocapture
 cargo test -p backend-buildtest test_build_nodejs -- --ignored --nocapture
 cargo test -p backend-buildtest test_build_python -- --ignored --nocapture
 cargo test -p backend-buildtest test_build_dart   -- --ignored --nocapture
+cargo test -p backend-buildtest test_build_go     -- --ignored --nocapture
 ```
 
 ### Toolchain requirements
@@ -66,6 +68,7 @@ cargo test -p backend-buildtest test_build_dart   -- --ignored --nocapture
 | Node.js | `node` 18+, `npm` |
 | Python | `python3` 3.10+, `pip`, `pytest` |
 | Dart | `dart` SDK 3+ (or `flutter`) |
+| Go | `go` 1.21+; network (or a module cache) for `go mod tidy` |
 
 ## How the tests work
 

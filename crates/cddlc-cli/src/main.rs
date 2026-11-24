@@ -40,6 +40,7 @@ fn parse_interop_langs(s: &str) -> backend_interop::InteropLangs {
             "csharp" => langs.csharp = true,
             "nodejs" => langs.nodejs = true,
             "python" => langs.python = true,
+            "go"     => langs.go     = true,
             _        => {}
         }
     }
@@ -189,6 +190,10 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
         }
         args::Lang::Dart => {
             let backend = backend_dart::DartBackend;
+            backend.generate(ir, &opts).map_err(|e| e.to_string())?
+        }
+        args::Lang::Go => {
+            let backend = backend_go::GoBackend;
             backend.generate(ir, &opts).map_err(|e| e.to_string())?
         }
     };

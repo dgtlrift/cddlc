@@ -42,6 +42,7 @@ generated/
     csharp/InteropTests.cs
     nodejs/interop.test.ts
     python/test_interop.py
+    go/interop_test.go
 ```
 
 ## What the vectors contain
@@ -100,6 +101,19 @@ npm install && npm run build
 
 cp ../iot_sensor-interop/nodejs/interop.test.ts .
 npx jest interop.test.ts
+```
+
+### Go
+
+Copy the harness into the generated module and run `go test`:
+
+```bash
+cp generated/iot_sensor-interop/go/interop_test.go \
+   generated/iot_sensor-cbor/
+
+cd generated/iot_sensor-cbor
+go mod tidy
+go test -run Interop ./...
 ```
 
 ### C# / .NET
