@@ -220,10 +220,10 @@ fn test_rust_has_test_fn() {
 }
 
 #[test]
-fn test_rust_decodes_hex() {
+fn test_rust_decodes_inline_bytes() {
     let rust = rust("sensor = { id: uint }");
-    assert!(rust.contains("hex::decode"));
-    assert!(rust.contains("::decode("));
+    assert!(rust.contains("let bytes: &[u8] = &[0xa1, "));
+    assert!(rust.contains("minicbor::decode(bytes)"));
 }
 
 #[test]
@@ -236,7 +236,7 @@ fn test_rust_asserts_field_values() {
 fn test_rust_reencodes_and_compares() {
     let rust = rust("sensor = { id: uint }");
     assert!(rust.contains("reencoded"));
-    assert!(rust.contains("hex::encode"));
+    assert!(rust.contains("assert_eq!(reencoded, bytes);"));
 }
 
 // ── C harness ─────────────────────────────────────────────────────────────────
@@ -453,4 +453,48 @@ fn test_cpp_harness_compares_members_directly() {
 /// CBOR text-string key: 0x60 + length, then the bytes (short keys only).
 fn key(s: &str) -> String {
     format!("{:02x}{}", 0x60 + s.len(), hex_of(s))
+}
+
+/// Issue #43: a float32 member's vector is a CBOR float32 holding a value
+/// float32 represents exactly; a float64 member stays float64.
+#[test]
+fn test_float32_member_vector_is_float32() {
+    let vecs = compile("r = { a: float32, b: float64 }");
+    let explicit = vecs.iter().find(|v| v.description == "explicit values").unwrap();
+    // fa 3fc00000 = float32 1.5; fb 40091eb851eb851f = float64 3.14
+    assert!(explicit.cbor_hex().contains(&format!("{}fa3fc00000", key("a"))), "{}", explicit.cbor_hex());
+    assert!(explicit.cbor_hex().contains(&format!("{}fb40091eb851eb851f", key("b"))), "{}", explicit.cbor_hex());
+}
+
+/// Issue #43: the Rust harness needs nothing beyond the generated crate:
+/// inline bytes, minicbor's decode/encode, and variant/field checks that compile.
+#[test]
+fn test_rust_harness_uses_crate_api() {
+    let h = rust("sensor = { id: uint, type: tstr }\nmodel = \"free-space\" / \"other\"\nkey = bstr .size 2");
+    assert!(!h.contains("hex::"), "{h}");
+    assert!(h.contains("let decoded: Sensor = minicbor::decode(bytes).expect(\"decode\");"), "{h}");
+    assert!(h.contains("assert_eq!(decoded.id as u64, 0);"), "{h}");
+    assert!(h.contains("assert_eq!(decoded.r#type, \"\");"), "keyword field: {h}");
+    assert!(h.contains("assert!(matches!(decoded, Model::FreeSpace { .. }));"), "{h}");
+    assert!(!h.contains("decoded.value"), "aliases are checked by re-encoding: {h}");
+    assert!(h.contains("let reencoded = minicbor::to_vec(&decoded).expect(\"encode\");"), "{h}");
+}
+
+/// Issue #43: the C harness uses the C backend's names, derived from the
+/// CDDL name (`device-id` -> `device_id_t`, `DEVICE_ID_...`).
+#[test]
+fn test_c_harness_uses_c_names() {
+    let h = c("device-info = { id: uint }\nlink-mode = \"free-space\" / \"other\"");
+    assert!(h.contains("device_info_t decoded = {0};"), "{h}");
+    assert!(h.contains("assert(test_device_info_decode(&dec, &decoded, NULL, NULL) == 0);"), "{h}");
+    assert!(h.contains("assert(decoded.tag == LINK_MODE_FREESPACE);"), "{h}");
+}
+
+/// Issue #43: the TypeScript harness lives in the generated package's tests/
+/// and compares an alias's value directly.
+#[test]
+fn test_nodejs_harness_imports_package_source() {
+    let h = nodejs("sensor = { id: uint }\nlabel = tstr");
+    assert!(h.contains("from '../src/test.js';"), "{h}");
+    assert!(h.contains("expect(decoded).toEqual(\"\");"), "{h}");
 }

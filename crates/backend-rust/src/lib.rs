@@ -20,33 +20,18 @@ use cddlc_ir::{
 };
 
 /// Rust keywords (strict, reserved and edition-2024) that cannot be plain identifiers.
-const RUST_KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-    "extern", "false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "match", "mod",
-    "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
-    "trait", "true", "type", "unsafe", "use", "where", "while", "abstract", "become", "box",
-    "do", "final", "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
-];
 
-/// A valid Rust identifier for a CDDL field name: keywords become raw identifiers
-/// (`type` → `r#type`), except those that cannot be raw (`self`, `Self`, `super`,
-/// `crate`), which get a trailing underscore. Serde derives strip the `r#`, and the
-/// JSON backend adds an explicit rename whenever the identifier differs.
 /// The decoder's local variable for a field: prefixed, so a field named like one of the
 /// decoder's own locals (`d`, `ctx`, `len`, `i`, `key`, `val`) can't shadow it.
 fn field_local(name: &str) -> String {
     format!("f_{}", field_ident(name).trim_start_matches("r#"))
 }
 
+/// A valid Rust identifier for a CDDL field name (see [`cddlc_codegen::rust_field_ident`]).
+/// Serde derives strip the `r#`, and the JSON backend adds an explicit rename
+/// whenever the identifier differs.
 fn field_ident(name: &str) -> String {
-    let snake = to_snake_case(name);
-    if !RUST_KEYWORDS.contains(&snake.as_str()) {
-        snake
-    } else if matches!(snake.as_str(), "self" | "Self" | "super" | "crate") {
-        format!("{snake}_")
-    } else {
-        format!("r#{snake}")
-    }
+    cddlc_codegen::rust_field_ident(name)
 }
 
 /// The literal a field or variant must equal (`cat: "kernel"` lowers to `.eq "kernel"`).

@@ -251,6 +251,29 @@ pub fn enum_variant_text(v: &cddlc_ir::EnumVariant) -> String {
     }
 }
 
+const RUST_KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+    "extern", "false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "match", "mod",
+    "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
+    "trait", "true", "type", "unsafe", "use", "where", "while", "abstract", "become", "box",
+    "do", "final", "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
+];
+
+/// A valid Rust identifier for a CDDL field name: snake_case, with keywords made
+/// raw identifiers (`type` → `r#type`), except those that cannot be raw (`self`,
+/// `Self`, `super`, `crate`), which get a trailing underscore. Shared by the Rust
+/// backend and the Rust interop harness so both name fields the same way.
+pub fn rust_field_ident(name: &str) -> String {
+    let snake = to_snake_case(name);
+    if !RUST_KEYWORDS.contains(&snake.as_str()) {
+        snake
+    } else if matches!(snake.as_str(), "self" | "Self" | "super" | "crate") {
+        format!("{snake}_")
+    } else {
+        format!("r#{snake}")
+    }
+}
+
 use cddlc_ir::Capacity;
 
 pub fn capacity_value(cap: &Capacity, default: usize) -> usize {
