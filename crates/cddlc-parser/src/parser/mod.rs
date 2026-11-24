@@ -601,10 +601,16 @@ fn parse_tagged(input: &mut &str) -> ModalResult<Type2> {
     })
 }
 
+/// `#mt` or `#mt.ai` (RFC 8610 §3.6); a bare `#` is any data item.
 fn parse_major_type(input: &mut &str) -> ModalResult<Type2> {
     literal("#").parse_next(input)?;
     if let Ok(d) = one_of::<_, _, ()>(['0','1','2','3','4','5','6','7']).parse_next(input) {
-        Ok(Type2::MajorType(d as u8 - b'0'))
+        let mut info = None;
+        if input.starts_with('.') && input[1..].starts_with(|c: char| c.is_ascii_digit()) {
+            *input = &input[1..];
+            info = Some(parse_uint_literal(input)?);
+        }
+        Ok(Type2::MajorType(d as u8 - b'0', info))
     } else {
         Ok(Type2::Any)
     }
@@ -854,10 +860,16 @@ fn try_parse_key_value(input: &mut &str) -> ModalResult<Option<MemberKind>> {
 
     // Skip whitespace between key and operator — critical for `field : type`
     ws0(input);
+    // A cut (`"a" ^ => uint`, RFC 8610 §3.5.4) comes before `=>`.
+    let caret = input.starts_with('^');
+    if caret {
+        *input = &input[1..];
+        ws0(input);
+    }
     let (cut, found) = if input.starts_with("=>") {
         let _ = literal::<_, _, ContextError>("=>").parse_next(input)?;
         (true, true)
-    } else if input.starts_with(':') && !input.starts_with("::") {
+    } else if !caret && input.starts_with(':') && !input.starts_with("::") {
         let _ = literal::<_, _, ContextError>(":").parse_next(input)?;
         (false, true)
     } else {

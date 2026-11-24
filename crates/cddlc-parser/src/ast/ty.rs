@@ -144,8 +144,9 @@ pub enum Type2 {
         inner:  Box<Spanned<Type>>,
     },
 
-    /// Major-type shorthand: `#N` (e.g. `#1` = uint major, `#2` = bstr)
-    MajorType(u8),
+    /// Major type, and optionally its additional information: `#0` (an
+    /// unsigned integer), `#7.25` (a half-precision float). RFC 8610 §3.6.
+    MajorType(u8, Option<u64>),
 
     /// The `#` catch-all (any CBOR data item)
     Any,

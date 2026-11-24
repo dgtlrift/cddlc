@@ -671,6 +671,26 @@ fn prelude_types_lower_to_their_definitions() {
     assert_eq!(ty("unsigned"), TypeRef::Choice(vec![p(Primitive::Uint), tag(2, p(Primitive::Bstr))]));
 }
 
+// ── Major types (dgtlrift/cddlc#89) ──────────────────────────────────────────
+
+#[test]
+fn major_types_lower_to_their_types() {
+    let alias = |src: &str| match compile(src).get("r") {
+        Some(TypeDef::Alias(a)) => (a.ty.clone(), a.constraints.clone()),
+        other => panic!("{src}: {other:?}"),
+    };
+    assert_eq!(alias("r = #0\n"), (TypeRef::Primitive(Primitive::Uint), vec![]));
+    assert_eq!(alias("r = #1\n").1, vec![Constraint::ValueRangeInt { min: None, max: Some(-1), inclusive: true }]);
+    assert_eq!(alias("r = #3\n").0, TypeRef::Primitive(Primitive::Tstr));
+    assert_eq!(alias("r = #7.25\n").0, TypeRef::Primitive(Primitive::Float16));
+    assert_eq!(alias("r = #7.22\n").0, TypeRef::Primitive(Primitive::Null));
+    assert_eq!(alias("r = #4\n").0, TypeRef::Primitive(Primitive::Any));
+    // As a member, with its constraint.
+    let Some(TypeDef::Struct(s)) = compile("r = { n: #1 }\n").get("r").cloned() else { panic!() };
+    assert_eq!(s.fields[0].ty, TypeRef::Primitive(Primitive::Int));
+    assert_eq!(s.fields[0].constraints, vec![Constraint::ValueRangeInt { min: None, max: Some(-1), inclusive: true }]);
+}
+
 // ── Record arrays (dgtlrift/cddlc#81) ────────────────────────────────────────
 
 fn record(m: &IrModule, name: &str) -> (Vec<String>, cddlc_ir::StructEncoding) {
