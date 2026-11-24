@@ -42,6 +42,7 @@ fn parse_interop_langs(s: &str) -> backend_interop::InteropLangs {
             "python" => langs.python = true,
             "go"     => langs.go     = true,
             "java"   => langs.java   = true,
+            "lua"    => langs.lua    = true,
             _        => {}
         }
     }

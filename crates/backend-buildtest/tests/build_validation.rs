@@ -13,7 +13,7 @@
 
 use backend_buildtest::{
     assert_all_ok, build_c, build_cpp, build_csharp, build_nodejs,
-    build_go, build_java, build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome, SCHEMAS,
+    build_go, build_java, build_lua, build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome, SCHEMAS,
 };
 use backend_rust::RustBackend;
 use backend_c::CBackend;
@@ -23,6 +23,7 @@ use backend_nodejs::NodeJsBackend;
 use backend_python::PythonBackend;
 use backend_go::GoBackend;
 use backend_java::JavaBackend;
+use backend_lua::LuaBackend;
 use cddlc_codegen::CodegenOptions;
 
 fn work_dir(lang: &str) -> tempfile::TempDir {
@@ -566,6 +567,34 @@ fn test_build_java_ee_json() {
     assert_all_ok(&outcomes);
 }
 
+/// Build and test all schemas using the Lua backend (Lua): busted.
+/// Requires: busted (on PATH or in ~/.luarocks/bin) and Lua 5.3+.
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_lua -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_lua() {
+    let tmp  = work_dir("lua");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Cbor, ..CodegenOptions::default() };
+    eprintln!("\n=== Lua build test ===");
+    let outcomes = run_build_tests(&LuaBackend, |d, f, n| build_lua(d, f, n), &opts, tmp.path());
+    print_summary("Lua", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
+/// Build and test all schemas using the Lua backend (Lua JSON): busted.
+/// Requires: busted (on PATH or in ~/.luarocks/bin) and Lua 5.3+.
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_lua_json -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_lua_json() {
+    let tmp  = work_dir("lua-json");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    eprintln!("\n=== Lua JSON build test ===");
+    let outcomes = run_build_tests(&LuaBackend, |d, f, n| build_lua(d, f, n), &opts, tmp.path());
+    print_summary("Lua JSON", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
 /// Run all language build tests in sequence with a final summary table.
 /// Run: cargo test -p backend-buildtest --test build_validation test_build_all -- --ignored --nocapture
 #[test]
@@ -597,6 +626,7 @@ fn test_build_all() {
     run_lang!("Python",  PythonBackend, |d, f, n| build_python(d, f, n),  "python");
     run_lang!("Go",      GoBackend,     |d, f, n| build_go(d, f, n),      "go");
     run_lang!("Java",    JavaBackend,   |d, f, n| build_java(d, f, n),    "java");
+    run_lang!("Lua",     LuaBackend,    |d, f, n| build_lua(d, f, n),     "lua");
 
     eprintln!("\n╔════════════╦═══════╦═══════╦═══════╗");
     eprintln!("║ Language   ║  OK   ║ SKIP  ║ FAIL  ║");

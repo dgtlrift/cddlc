@@ -103,8 +103,8 @@ fn test_emits_all_files_with_all_langs() {
     let parsed  = parse_cddl("x = uint", PathBuf::from("test.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let files   = generate(&lowered.module, &InteropLangs::all(), &CodegenOptions::default());
-    // vectors.json + vectors.cbor + 8 language harnesses
-    assert_eq!(files.len(), 10);
+    // vectors.json + vectors.cbor + 9 language harnesses
+    assert_eq!(files.len(), 11);
 }
 
 #[test]
@@ -379,7 +379,7 @@ status = "ok" / "warn"
     let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let files   = generate(&lowered.module, &InteropLangs::all(), &CodegenOptions::default());
-    assert_eq!(files.len(), 10);
+    assert_eq!(files.len(), 11);
     let json = files.iter().find(|f| f.path.ends_with("vectors.json")).unwrap();
     assert!(json.content.contains("SensorMessage"));
     assert!(json.content.contains("DeviceId"));

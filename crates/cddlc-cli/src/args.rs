@@ -91,8 +91,8 @@ pub struct GenerateArgs {
     pub java_flavor: JavaFlavor,
 
     /// Comma-separated list of languages for interop harnesses (default: all)
-    /// e.g. --interop-langs rust,python,nodejs,go,java
-    #[arg(long, default_value = "rust,c,cpp,csharp,nodejs,python,go,java")]
+    /// e.g. --interop-langs rust,python,nodejs,go,java,lua
+    #[arg(long, default_value = "rust,c,cpp,csharp,nodejs,python,go,java,lua")]
     pub interop_langs: String,
 
     /// Parse and analyze only — do not write output files

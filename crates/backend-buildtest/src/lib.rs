@@ -516,6 +516,41 @@ pub fn build_java(
     build_result(schema_name, out, files.len(), ms)
 }
 
+// ── Lua build (busted) ────────────────────────────────────────────────────────
+
+/// The busted runner: on PATH, or where `luarocks --local install busted` puts it.
+fn find_busted() -> Option<String> {
+    if let Ok(p) = find_tool("busted") {
+        return Some(p);
+    }
+    let home = std::env::var("HOME").ok()?;
+    let local = Path::new(&home).join(".luarocks/bin/busted");
+    local.exists().then(|| local.to_string_lossy().into_owned())
+}
+
+/// Test a generated Lua package with busted (which loads `src/` and runs `spec/`).
+pub fn build_lua(
+    work_dir:    &Path,
+    files:       &[GeneratedFile],
+    schema_name: &str,
+) -> BuildOutcome {
+    let Some(busted) = find_busted() else {
+        return BuildOutcome::Skipped { reason: "busted not found (luarocks install busted)".into() };
+    };
+
+    write_files(work_dir, files).expect("write files");
+
+    let pkg_dir = files.iter()
+        .find(|f| f.path.ends_with(".rockspec"))
+        .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
+        .unwrap_or_else(|| work_dir.to_path_buf());
+
+    let t0 = std::time::Instant::now();
+    let out = run_cmd(Command::new(&busted).arg("-o").arg("TAP").current_dir(&pkg_dir));
+    let ms = t0.elapsed().as_millis() as u64;
+    build_result(schema_name, out, files.len(), ms)
+}
+
 // ── Multi-schema runner ───────────────────────────────────────────────────────
 
 /// Run a build test for all reference schemas using one backend + build fn.

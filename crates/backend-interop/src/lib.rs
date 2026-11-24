@@ -40,12 +40,13 @@ pub struct InteropLangs {
     pub python: bool,
     pub go:     bool,
     pub java:   bool,
+    pub lua:    bool,
 }
 
 impl InteropLangs {
     /// Enable all languages.
     pub fn all() -> Self {
-        Self { rust: true, c: true, cpp: true, csharp: true, nodejs: true, python: true, go: true, java: true }
+        Self { rust: true, c: true, cpp: true, csharp: true, nodejs: true, python: true, go: true, java: true, lua: true }
     }
 }
 
@@ -72,6 +73,7 @@ pub fn generate(
     if langs.python { files.push(GeneratedFile { path: format!("{dir}/python/test_interop.py"),  content: emit_python_harness(&vectors, name, opts) }); }
     if langs.go     { files.push(GeneratedFile { path: format!("{dir}/go/interop_test.go"),      content: emit_go_harness(&vectors, name, opts) }); }
     if langs.java   { files.push(GeneratedFile { path: format!("{dir}/java/InteropTest.java"),   content: emit_java_harness(&vectors, name, opts) }); }
+    if langs.lua    { files.push(GeneratedFile { path: format!("{dir}/lua/interop_spec.lua"),    content: emit_lua_harness(&vectors, name, opts) }); }
 
     files
 }
@@ -1249,5 +1251,66 @@ fn emit_java_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions
     }
     w.dedent();
     w.line("}");
+    format!("{}\n", w.finish().trim_end())
+}
+
+// ── Lua harness ───────────────────────────────────────────────────────────────
+
+/// Lua: copy into the generated package's `spec/` and run `busted`. Each test
+/// decodes a vector, checks its primitive members and the enum variant, and
+/// re-encodes it byte for byte.
+fn emit_lua_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -> String {
+    use backend_lua::{lua_bytes, lua_member_name, lua_module_name, lua_str, lua_type_name};
+    let modname = lua_module_name(schema, opts.namespace.as_deref());
+    let mut w = IndentWriter::new(2);
+
+    for l in cddlc_codegen::header_lines(opts) {
+        w.line(&format!("-- {l}"));
+    }
+    w.line("-- interop test harness (Lua)");
+    w.line(&format!("-- Copy into the generated package (`{schema}-cbor/spec/`) and run `busted`."));
+    w.blank();
+    w.line(&format!("local M = require({})", lua_str(&modname)));
+    w.blank();
+    w.line("local function unhex(h) return (h:gsub(\"..\", function(b) return string.char(tonumber(b, 16)) end)) end");
+    w.line("local function hex(s) return (s:gsub(\".\", function(c) return string.format(\"%02x\", c:byte()) end)) end");
+    w.blank();
+    w.line("describe(\"interop vectors\", function()");
+    w.indent();
+    let mut used = std::collections::HashSet::new();
+    for v in vectors {
+        let t = lua_type_name(&v.cddl_name);
+        let base = format!("{t}: {}", v.description);
+        let mut name = base.clone();
+        let mut i = 2;
+        while !used.insert(name.clone()) {
+            name = format!("{base} ({i})");
+            i += 1;
+        }
+        let hex = v.cbor_hex();
+        w.line(&format!("it({}, function()", lua_str(&name)));
+        w.indent();
+        w.line(&format!("local got = M.{t}.decode(unhex({}))", lua_str(&hex)));
+        for f in &v.fields {
+            // An alias vector's one value is the alias itself.
+            let target = if v.shape == VectorShape::Alias { "got".to_owned() } else { format!("got.{}", lua_member_name(&f.name)) };
+            match &f.value {
+                FieldVal::Enum { kind, .. } if v.shape == VectorShape::Enum => w.line(&format!("assert.equal({}, got.kind)", lua_str(kind))),
+                FieldVal::Enum { .. } | FieldVal::Null => {}
+                FieldVal::Uint(n) => w.line(&format!("assert.equal({n}, {target})")),
+                FieldVal::Int(n) => w.line(&format!("assert.equal({n}, {target})")),
+                FieldVal::Bool(b) => w.line(&format!("assert.equal({b}, {target})")),
+                FieldVal::Text(t) => w.line(&format!("assert.equal({}, {target})", lua_str(t))),
+                FieldVal::Bytes(b) => w.line(&format!("assert.equal({}, {target})", lua_bytes(b))),
+                FieldVal::Float { value, .. } => w.line(&format!("assert.near({value:?}, {target}, 1e-4)")),
+            }
+        }
+        w.line(&format!("assert.equal({}, hex(M.{t}.encode(got)))", lua_str(&hex)));
+        w.dedent();
+        w.line("end)");
+        w.blank();
+    }
+    w.dedent();
+    w.line("end)");
     format!("{}\n", w.finish().trim_end())
 }
