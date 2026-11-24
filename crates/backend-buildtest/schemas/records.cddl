@@ -1,0 +1,20 @@
+; Reference schema: record arrays (RFC 8610 §3.4), encoded as arrays
+
+shape = {
+    name:    tstr,
+    origin:  point,
+    corners: [* point],
+    tag:     pair,
+}
+
+; A record with named members
+point = [x: int, y: int]
+
+; Positional members, named by position
+pair = [uint, tstr]
+
+; An optional last member, left off when absent
+labelled = [id: uint, name: tstr, ? note: tstr]
+
+; A record with a byte string, base64url in JSON
+blob = [id: uint, data: bstr]

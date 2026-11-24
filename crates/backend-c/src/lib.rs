@@ -404,7 +404,22 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
             // Compute map count: required fields always present; optional only when _present flag set
             let req_count = fields.iter().filter(|f| !matches!(f.occurrence, Occurrence::Optional)).count();
             let opt_fields: Vec<_> = fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
-            if opt_fields.is_empty() {
+            // A record (RFC 8610 §3.4) is an array of the members' values, in
+            // order; optional members come last, so one present after an absent
+            // one can't be written.
+            let record = s.encoding == cddlc_ir::StructEncoding::Array;
+            if record {
+                for pair in opt_fields.windows(2) {
+                    w.line(&format!(
+                        "if (val->{}_present && !val->{}_present) return -1;",
+                        to_snake_case(&pair[1].name), to_snake_case(&pair[0].name)
+                    ));
+                }
+                let opt_sum: String = opt_fields.iter()
+                    .map(|f| format!(" + (val->{}_present ? 1u : 0u)", to_snake_case(&f.name)))
+                    .collect();
+                w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});"));
+            } else if opt_fields.is_empty() {
                 w.line(&format!("nanocbor_fmt_map(enc, {req_count}u);"));
             } else {
                 let opt_sum: String = opt_fields.iter().map(|f| {
@@ -418,12 +433,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (val->{fname}_present) {{"));
                     w.indent();
-                    w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str()));
+                    if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
                     emit_c_encode_field(w, &f.ty, &format!("val->{fname}"), &f.occurrence, mod_name, opts);
                     w.dedent();
                     w.line("}");
                 } else {
-                    w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str()));
+                    if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
                     emit_c_encode_field(w, &f.ty, &format!("val->{fname}"), &f.occurrence, mod_name, opts);
                 }
             }
@@ -573,6 +588,41 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                 w.line("}");
                 w.dedent();
                 w.line("}");
+            }
+
+            if s.encoding == cddlc_ir::StructEncoding::Array {
+                // A record: the members' values in order; optional ones last.
+                w.line("nanocbor_value_t arr;");
+                w.line("if (nanocbor_enter_array(dec, &arr) < 0) return -1;");
+                w.line(&format!("memset(out, 0, sizeof({type_name}_t));"));
+                for f in &s.fields {
+                    let fname = to_snake_case(&f.name);
+                    if matches!(f.occurrence, Occurrence::Optional) {
+                        w.line("if (!nanocbor_at_end(&arr)) {");
+                        w.indent();
+                        emit_c_decode_field(w, &f.ty, &format!("out->{fname}"), &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
+                        w.line(&format!("out->{fname}_present = true;"));
+                        w.dedent();
+                        w.line("}");
+                    } else {
+                        w.line("if (nanocbor_at_end(&arr)) {");
+                        w.indent();
+                        w.line(&format!(
+                            "if (cb && cb->on_error) cb->on_error(ctx, ({pfx}_field_err_t){{{pfx_upper}_ERR_MISSING, {:?}, 0}});",
+                            f.name.as_str()
+                        ));
+                        w.line("return -1;");
+                        w.dedent();
+                        w.line("}");
+                        emit_c_decode_field(w, &f.ty, &format!("out->{fname}"), &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
+                    }
+                }
+                w.line("if (!nanocbor_at_end(&arr)) return -1; /* too many items */");
+                w.line("nanocbor_leave_container(dec, &arr);");
+                w.line("return NANOCBOR_OK;");
+                w.dedent();
+                w.line("}");
+                return;
             }
 
             w.line("nanocbor_value_t map;");
@@ -1534,6 +1584,12 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
     let ctype = format!("{}_t", to_snake_case(&s.name));
     let pfx   = format!("{mod_name}_{snake}");
 
+    if s.encoding == cddlc_ir::StructEncoding::Array {
+        emit_json_record_impl(w, s, mod_name, &pfx, &ctype, opts);
+        emit_json_encode_decode(w, &pfx, &ctype);
+        return;
+    }
+
     // to_json
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
     w.indent();
@@ -1591,6 +1647,63 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
 
     emit_json_encode_decode(w, &pfx, &ctype);
     let _ = opts;
+}
+
+/// A record's to_json / from_json (RFC 8610 §3.4): a JSON array of the members'
+/// values, in order. Optional members come last: one present after an absent
+/// one can't be written, so to_json returns NULL.
+fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
+    let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+    w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
+    w.indent();
+    for pair in optional.windows(2) {
+        w.line(&format!(
+            "if (obj->{}_present && !obj->{}_present) return NULL;",
+            pair[1].name.replace('-', "_"), pair[0].name.replace('-', "_")
+        ));
+    }
+    w.line("cJSON* j = cJSON_CreateArray();");
+    w.line("if (!j) return NULL;");
+    for f in &s.fields {
+        let fname = f.name.replace('-', "_");
+        let val_expr = json_value_expr(&f.ty, &format!("obj->{fname}"), mod_name);
+        if matches!(f.occurrence, Occurrence::Optional) {
+            w.line(&format!("if (obj->{fname}_present) cJSON_AddItemToArray(j, {val_expr});"));
+        } else {
+            w.line(&format!("cJSON_AddItemToArray(j, {val_expr});"));
+        }
+    }
+    w.line("return j;");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    let required = s.fields.iter().filter(|f| !matches!(f.occurrence, Occurrence::Optional)).count();
+    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.indent();
+    w.line("if (!cJSON_IsArray(j)) return false;");
+    w.line("int n = cJSON_GetArraySize(j);");
+    w.line(&format!("if (n < {required} || n > {}) return false;", s.fields.len()));
+    w.line("memset(out, 0, sizeof(*out));");
+    for (i, f) in s.fields.iter().enumerate() {
+        let fname = f.name.replace('-', "_");
+        if matches!(f.occurrence, Occurrence::Optional) {
+            w.line(&format!("if (n > {i}) {{"));
+            w.indent();
+            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {i});"));
+            json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
+            w.line(&format!("out->{fname}_present = true;"));
+            w.dedent();
+            w.line("}");
+        } else {
+            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {i});"));
+            json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
+        }
+    }
+    w.line("return true;");
+    w.dedent();
+    w.line("}");
+    w.blank();
 }
 
 fn json_decode_field(w: &mut IndentWriter, ty: &TypeRef, dest: &str, src: &str, mod_name: &str, _opts: &CodegenOptions) {

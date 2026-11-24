@@ -25,6 +25,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("tagged",      include_str!("../schemas/tagged.cddl")),
     ("iot-sensor",  include_str!("../schemas/iot_sensor.cddl")),
     ("simple-values", include_str!("../schemas/simple_values.cddl")),
+    ("records",     include_str!("../schemas/records.cddl")),
 ];
 
 // ── Result types ──────────────────────────────────────────────────────────────

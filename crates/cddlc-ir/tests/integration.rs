@@ -650,3 +650,42 @@ fn test_size_error_is_readable() {
     assert!(err.contains("the operand must be a byte count (`.size 8`) or a range of them (`.size (1..8)`)"), "{err}");
     assert!(!err.contains("Spanned"), "{err}");
 }
+
+// ── Record arrays (dgtlrift/cddlc#81) ────────────────────────────────────────
+
+fn record(m: &IrModule, name: &str) -> (Vec<String>, cddlc_ir::StructEncoding) {
+    let Some(TypeDef::Struct(s)) = m.get(name) else { panic!("{name} is not a struct") };
+    (s.fields.iter().map(|f| f.name.to_string()).collect(), s.encoding)
+}
+
+#[test]
+fn record_arrays_are_array_encoded_structs() {
+    use cddlc_ir::StructEncoding::{Array, Map};
+    let m = compile("r = [a: uint, b: tstr]\n");
+    assert_eq!(record(&m, "r"), (vec!["a".into(), "b".into()], Array));
+
+    // Members without keys are named after a rule they refer to, else by position.
+    let m = compile("r = [uint, uint, hdr]\nhdr = { v: uint }\n");
+    assert_eq!(record(&m, "r"), (vec!["item0".into(), "item1".into(), "hdr".into()], Array));
+    assert_eq!(record(&m, "hdr").1, Map);
+
+    // Generic and nested records too.
+    let m = compile("r = pair<uint, tstr>\npair<K, V> = [K, V]\n");
+    assert_eq!(record(&m, "r"), (vec!["item0".into(), "item1".into()], Array));
+    let m = compile("r = { a: [uint, tstr] }\n");
+    assert_eq!(record(&m, "r-a").1, Array);
+
+    // A homogeneous array stays an array.
+    let m = compile("r = [* uint]\n");
+    assert!(matches!(m.get("r"), Some(TypeDef::Array(_))));
+}
+
+#[test]
+fn record_optional_members_must_come_last() {
+    assert_eq!(record(&compile("r = [a: uint, ? b: tstr]\n"), "r").0, ["a", "b"]);
+    for src in ["r = [? a: uint, b: tstr]\n", "r = [a: uint, * b: tstr]\n"] {
+        let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
+        let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect(src).to_string();
+        assert!(err.contains("optional members must come last"), "{src}: {err}");
+    }
+}

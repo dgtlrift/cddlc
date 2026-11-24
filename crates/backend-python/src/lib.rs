@@ -372,6 +372,13 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     if s.fields.is_empty() { w.line("pass"); }
     w.blank();
 
+    if s.encoding == cddlc_ir::StructEncoding::Array {
+        emit_record_raw(w, s, &class_name, opts);
+        emit_encode_decode(w, &class_name);
+        w.dedent();
+        return;
+    }
+
     // _to_raw
     let fields: Vec<_> = if opts.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
@@ -455,6 +462,86 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     emit_encode_decode(w, &class_name);
 
     w.dedent();
+}
+
+/// A record's `_to_raw` / `_from_raw` (RFC 8610 §3.4): a list of the members'
+/// values, in order. Optional members come last: those present are written up
+/// to the first absent one, and one set after an absent one is an error.
+fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
+    w.line("def _to_raw(self) -> Any:");
+    w.indent();
+    w.line("a: list[Any] = []");
+    let mut gap = false;
+    for f in &s.fields {
+        let fname = to_snake_case(&f.name);
+        let value = py_to_raw(&f.ty, &format!("self.{fname}"), opts);
+        if f.occurrence.is_required() {
+            w.line(&format!("a.append({value})"));
+        } else {
+            if !gap {
+                w.line("gap = False");
+                gap = true;
+            }
+            w.line(&format!("if self.{fname} is not None:"));
+            w.indent();
+            w.line("if gap:");
+            w.indent();
+            w.line(&format!(
+                "raise ValueError(\"{class_name}.{}: set, but an optional member before it isn't\")",
+                f.name
+            ));
+            w.dedent();
+            w.line(&format!("a.append({value})"));
+            w.dedent();
+            w.line("else:");
+            w.indent();
+            w.line("gap = True");
+            w.dedent();
+        }
+    }
+    return_tagged(w, s.tagged, "a", opts);
+    w.dedent();
+    w.blank();
+
+    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    w.line("@classmethod");
+    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.indent();
+    untag_raw(w, s.tagged, class_name, opts);
+    w.line("if not isinstance(raw, list):");
+    w.indent();
+    w.line(&format!("raise ValueError(\"{class_name}: expected an array\")"));
+    w.dedent();
+    w.line(&format!("if not {required} <= len(raw) <= {}:", s.fields.len()));
+    w.indent();
+    w.line(&format!(
+        "raise ValueError(f\"{class_name}: expected {} items, got {{len(raw)}}\")",
+        if required == s.fields.len() { required.to_string() } else { format!("{required} to {}", s.fields.len()) }
+    ));
+    w.dedent();
+    let mut args = Vec::new();
+    for (i, f) in s.fields.iter().enumerate() {
+        let fname = to_snake_case(&f.name);
+        let at    = format!("{class_name}.{}", f.name);
+        let local = format!("f_{fname}");
+        let conv  = py_from_raw(&f.ty, &format!("raw[{i}]"), &at, opts);
+        if f.occurrence.is_required() {
+            w.line(&format!("{local} = {conv}"));
+            emit_constraint_checks(w, &f.constraints, &local, &at);
+        } else {
+            w.line(&format!("{local} = {conv} if len(raw) > {i} else None"));
+            if !f.constraints.is_empty() {
+                w.line(&format!("if {local} is not None:"));
+                w.indent();
+                emit_constraint_checks(w, &f.constraints, &local, &at);
+                w.dedent();
+            }
+        }
+        args.push(format!("{fname}={local}"));
+    }
+    w.line(&format!("return cls({})", args.join(", ")));
+    w.dedent();
+    w.blank();
 }
 
 // ── Enum ──────────────────────────────────────────────────────────────────────

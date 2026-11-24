@@ -326,6 +326,16 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.line(&format!("e.tag(minicbor::data::Tag::new({}))?;", tag.0));
     }
 
+    if s.encoding == cddlc_ir::StructEncoding::Array {
+        emit_record_encode(w, s, opts, module);
+        w.line("Ok(())");
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        return;
+    }
+
     // Compute map length: required count is static; add 1 per present optional field
     let req_count = s.fields.iter()
         .filter(|f| !matches!(f.occurrence, Occurrence::Optional))
@@ -378,6 +388,110 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("}");
 }
 
+/// A record's members as an array, in order (RFC 8610 §3.4). Optional members
+/// come last: those present are written up to the first absent one, and a
+/// present one after it can't be placed, so encoding fails.
+fn emit_record_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
+    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let optional: Vec<_> = s.fields.iter().filter(|f| !f.occurrence.is_required()).collect();
+    if optional.is_empty() {
+        w.line(&format!("e.array({required}u64)?;"));
+    } else {
+        w.line(&format!("let mut len = {required}u64;"));
+        w.line("let mut gap = false;");
+        for f in &optional {
+            let fname = field_ident(&f.name);
+            w.line(&format!("if self.{fname}.is_some() {{"));
+            w.indent();
+            w.line(&format!(
+                "if gap {{ return Err(EncodeError::message(\"{}: '{}' is set but an optional member before it isn't\")); }}",
+                s.name, f.name
+            ));
+            w.line("len += 1;");
+            w.dedent();
+            w.line("} else { gap = true; }");
+        }
+        w.line("let _ = gap;");
+        w.line("e.array(len)?;");
+    }
+    for f in &s.fields {
+        let access = format!("self.{}", field_ident(&f.name));
+        if f.occurrence.is_required() {
+            emit_encode_value(w, &f.ty, &access, &f.occurrence, opts, Some(module));
+        } else {
+            w.line(&format!("if let Some(ref v) = {access} {{"));
+            w.indent();
+            emit_encode_typeref(w, &f.ty, "(*v)", opts, Some(module));
+            w.dedent();
+            w.line("}");
+        }
+    }
+}
+
+/// Reads a record: an array of the members' values, in order; optional
+/// members at the end may be left off.
+fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
+    w.line("let len = d.array()?;");
+    w.line("let mut i = 0u64;");
+    w.line("fn more(d: &mut Decoder<'_>, len: Option<u64>, i: u64) -> Result<bool, DecodeError> {");
+    w.indent();
+    w.line("Ok(match len { Some(n) => i < n, None => d.datatype()? != minicbor::data::Type::Break })");
+    w.dedent();
+    w.line("}");
+    for f in &s.fields {
+        let local = field_local(&f.name);
+        let decode_expr = decode_expr_for_in_module(&f.ty, opts, Some(module));
+        if f.occurrence.is_required() {
+            w.line("if !more(d, len, i)? {");
+            w.indent();
+            w.line(&format!("return Err(DecodeError::message(\"{}: missing item '{}'\"));", s.name, f.name));
+            w.dedent();
+            w.line("}");
+            w.line(&format!("let {local} = {{ let val = {decode_expr};"));
+            w.indent();
+            emit_field_validation(w, &f.constraints, "val", &f.name);
+            w.line("val };");
+            w.dedent();
+            w.line("i += 1;");
+        } else {
+            w.line(&format!("let {local} = if more(d, len, i)? {{"));
+            w.indent();
+            w.line(&format!("let val = {decode_expr};"));
+            emit_field_validation(w, &f.constraints, "val", &f.name);
+            w.line("i += 1;");
+            w.line("Some(val)");
+            w.dedent();
+            w.line("} else { None };");
+        }
+    }
+    w.line("match len {");
+    w.indent();
+    w.line(&format!(
+        "Some(n) if i < n => return Err(DecodeError::message(\"{}: too many items\")),",
+        s.name
+    ));
+    w.line("None => {");
+    w.indent();
+    w.line("if d.datatype()? != minicbor::data::Type::Break {");
+    w.indent();
+    w.line(&format!("return Err(DecodeError::message(\"{}: too many items\"));", s.name));
+    w.dedent();
+    w.line("}");
+    w.line("d.skip()?;");
+    w.dedent();
+    w.line("}");
+    w.line("_ => {}");
+    w.dedent();
+    w.line("}");
+    w.line("Ok(Self {");
+    w.indent();
+    for f in &s.fields {
+        w.line(&format!("{}: {},", field_ident(&f.name), field_local(&f.name)));
+    }
+    w.dedent();
+    w.line("})");
+}
+
 fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&s.name);
 
@@ -395,6 +509,15 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.line("return Err(DecodeError::message(\"unexpected CBOR tag\"));");
         w.dedent();
         w.line("}");
+    }
+
+    if s.encoding == cddlc_ir::StructEncoding::Array {
+        emit_record_decode(w, s, opts, module);
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        return;
     }
 
     // Declare Option<T> vars for each field.
@@ -2025,14 +2148,21 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
     if s.deprecated { w.line("#[deprecated]"); }
 
     let mut markers = Vec::new();
-    w.line("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]");
+    let record = s.encoding == cddlc_ir::StructEncoding::Array;
+    if record {
+        // A record is a JSON array: see `emit_record_json_impls`.
+        w.line("#[derive(Debug, Clone, PartialEq, Default)]");
+    } else {
+        w.line("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]");
+    }
     w.line(&format!("pub struct {} {{", to_pascal_case(&s.name)));
     w.indent();
+    let mut field_types = Vec::new();
     for f in &s.fields {
         emit_doc(w, f.doc.as_deref());
         let fname = field_ident(&f.name);
         let attrs = serde_field_attrs_json(&f.name, &fname, &f.ty, &f.occurrence, module);
-        if !attrs.is_empty() { w.line(&attrs); }
+        if !attrs.is_empty() && !record { w.line(&attrs); }
         let ty_str = match field_literal(f) {
             Some(lit) => {
                 let marker = marker_name(&s.name, &f.name, module);
@@ -2043,10 +2173,15 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
             None => field_type_str(&f.ty, &f.occurrence, opts),
         };
         w.line(&format!("pub {fname}: {ty_str},"));
+        field_types.push(ty_str);
     }
     w.dedent();
     w.line("}");
     w.blank();
+    if record {
+        emit_record_json_impls(w, s, &field_types, module);
+        w.blank();
+    }
 
     let type_name = to_pascal_case(&s.name);
     w.line(&format!("impl {type_name} {{"));
@@ -2069,6 +2204,129 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
         w.blank();
         emit_literal_marker_json(w, marker, lit);
     }
+}
+
+/// serde writes a struct as a JSON object, so a record (RFC 8610 §3.4) gets
+/// its own impls: an array of its members' values, in order, optional members
+/// at the end left off when absent. Byte members go through a wrapper that
+/// carries their base64url conversion.
+fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[String], module: &IrModule) {
+    let ty = to_pascal_case(&s.name);
+    // Per member: (field, element type to read, wrapper type if any).
+    let mut members = Vec::new();
+    for (f, ty_str) in s.fields.iter().zip(field_types) {
+        let inner = if f.occurrence.is_required() {
+            ty_str.clone()
+        } else {
+            ty_str.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')).unwrap_or(ty_str).to_owned()
+        };
+        let wrapper = byte_shape(&f.ty, module).map(|shape| {
+            let (with, _) = bytes_with(shape, &Occurrence::Required);
+            let name = format!("{ty}{}Json", to_pascal_case(&f.name));
+            w.line("#[derive(Serialize, Deserialize)]");
+            w.line(&format!("struct {name}(#[serde(with = {with:?})] {inner});"));
+            name
+        });
+        members.push((f, inner, wrapper));
+    }
+    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+
+    w.line(&format!("impl Serialize for {ty} {{"));
+    w.indent();
+    w.line("fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {");
+    w.indent();
+    let has_optional = required < s.fields.len();
+    if has_optional {
+        w.line("use serde::ser::{Error as _, SerializeSeq};");
+        w.line(&format!("let mut len = {required}usize;"));
+        w.line("let mut gap = false;");
+    } else {
+        w.line("use serde::ser::SerializeSeq;");
+        w.line(&format!("let len = {required}usize;"));
+    }
+    for (f, _, _) in members.iter().filter(|(f, _, _)| !f.occurrence.is_required()) {
+        w.line(&format!("if self.{}.is_some() {{", field_ident(&f.name)));
+        w.indent();
+        w.line(&format!(
+            "if gap {{ return Err(S::Error::custom(\"{}: '{}' is set but an optional member before it isn't\")); }}",
+            s.name, f.name
+        ));
+        w.line("len += 1;");
+        w.dedent();
+        w.line("} else { gap = true; }");
+    }
+    if has_optional { w.line("let _ = gap;"); }
+    w.line("let mut seq = serializer.serialize_seq(Some(len))?;");
+    for (f, _, wrapper) in &members {
+        let access = format!("self.{}", field_ident(&f.name));
+        let elem = |v: &str| match wrapper {
+            Some(wr) => format!("&{wr}({v}.clone())"),
+            None => v.to_owned(),
+        };
+        if f.occurrence.is_required() {
+            let v = match wrapper {
+                Some(wr) => format!("&{wr}({access}.clone())"),
+                None => format!("&{access}"),
+            };
+            w.line(&format!("seq.serialize_element({v})?;"));
+        } else {
+            w.line(&format!("if let Some(v) = &{access} {{ seq.serialize_element({})?; }}", elem("v")));
+        }
+    }
+    w.line("seq.end()");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("impl<'de> Deserialize<'de> for {ty} {{"));
+    w.indent();
+    w.line("fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {");
+    w.indent();
+    w.line("struct V;");
+    w.line("impl<'de> serde::de::Visitor<'de> for V {");
+    w.indent();
+    w.line(&format!("type Value = {ty};"));
+    w.line("fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {");
+    w.indent();
+    w.line(&format!("f.write_str(\"the record {}, an array\")", s.name));
+    w.dedent();
+    w.line("}");
+    w.line("fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {");
+    w.indent();
+    w.line("use serde::de::Error as _;");
+    for (f, inner, wrapper) in &members {
+        let local = field_ident(&f.name);
+        let (read_ty, unwrap) = match wrapper {
+            Some(wr) => (wr.clone(), ".map(|w| w.0)"),
+            None => (inner.clone(), ""),
+        };
+        if f.occurrence.is_required() {
+            w.line(&format!(
+                "let {local} = seq.next_element::<{read_ty}>()?{unwrap}.ok_or_else(|| A::Error::custom(\"{}: missing item '{}'\"))?;",
+                s.name, f.name
+            ));
+        } else {
+            w.line(&format!("let {local} = seq.next_element::<{read_ty}>()?{unwrap};"));
+        }
+    }
+    w.line("if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {");
+    w.indent();
+    w.line(&format!("return Err(A::Error::custom(\"{}: too many items\"));", s.name));
+    w.dedent();
+    w.line("}");
+    let names: Vec<_> = s.fields.iter().map(|f| field_ident(&f.name)).collect();
+    w.line(&format!("Ok({ty} {{ {} }})", names.join(", ")));
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.line("deserializer.deserialize_seq(V)");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
 }
 
 fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, module: &IrModule) {

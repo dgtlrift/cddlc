@@ -30,7 +30,7 @@ use crate::prelude::is_prelude;
 use crate::types::{
     AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
     FieldDef, FieldKey, IrModule, LiteralValue, Occurrence,
-    Primitive, Sources, StructDef, TypeDef, TypeRef,
+    Primitive, Sources, StructDef, StructEncoding, TypeDef, TypeRef,
 };
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -385,6 +385,7 @@ impl<'m> LowerCtx<'m> {
         Ok(TypeDef::Struct(StructDef {
             name:       name.into(),
             fields,
+            encoding:   StructEncoding::Map,
             tagged:     meta.tag,
             dcbor:      false,
             doc:        meta.doc.clone(),
@@ -406,6 +407,7 @@ impl<'m> LowerCtx<'m> {
         Ok(TypeDef::Struct(StructDef {
             name:       name.into(),
             fields,
+            encoding:   StructEncoding::Map,
             tagged:     meta.tag,
             dcbor:      false,
             doc:        meta.doc.clone(),
@@ -549,8 +551,40 @@ impl<'m> LowerCtx<'m> {
             }));
         }
 
-        // Multi-entry array → struct with positional fields
-        self.lower_map_as_struct(name, choices, meta)
+        // Multi-entry array → a record: a struct encoded as an array
+        // (RFC 8610 §3.4), its members positional.
+        let mut def = self.lower_map_as_struct(name, choices, meta)?;
+        if let TypeDef::Struct(st) = &mut def {
+            st.encoding = StructEncoding::Array;
+            // A member without a key (`[uint, tstr]`) is named after its type
+            // when that is a rule, else by position; names stay unique.
+            let mut seen = std::collections::HashSet::new();
+            for (i, (f, e)) in st.fields.iter_mut().zip(&entries).enumerate() {
+                if let MemberKind::Type(_) = &e.node.kind {
+                    let named = match &f.ty {
+                        TypeRef::Named(n) if !n.starts_with(&format!("{name}-")) => Some(n.clone()),
+                        _ => None,
+                    };
+                    f.name = named.unwrap_or_else(|| format!("item{i}").into());
+                }
+                if !seen.insert(f.name.clone()) {
+                    f.name = format!("{}{i}", f.name).into();
+                    seen.insert(f.name.clone());
+                }
+                f.key = FieldKey::Text(f.name.clone());
+            }
+            let optional_then_required = st.fields.windows(2).any(|w| {
+                !matches!(w[0].occurrence, Occurrence::Required) && matches!(w[1].occurrence, Occurrence::Required)
+            });
+            if optional_then_required || st.fields.iter().any(|f| f.occurrence.is_repeated()) {
+                return Err(IrError::Unsupported {
+                    rule:   name.into(),
+                    reason: "a record array's optional members must come last, and it can't repeat a member \
+                             (`[a: uint, * tstr]`); use a separate array for the repeated part".into(),
+                });
+            }
+        }
+        Ok(def)
     }
 
     // ── Tagged type ───────────────────────────────────────────────────────────
@@ -652,6 +686,7 @@ impl<'m> LowerCtx<'m> {
                 Ok(TypeDef::Struct(StructDef {
                     name:       name.into(),
                     fields:     fields?,
+                    encoding:   StructEncoding::Map,
                     tagged:     meta.tag,
                     dcbor:      false,
                     doc:        meta.doc.clone(),
@@ -890,6 +925,7 @@ impl<'m> LowerCtx<'m> {
                 self.output.insert(name.into(), TypeDef::Struct(StructDef {
                     name:       name.into(),
                     fields:     new_fields,
+                    encoding:   StructEncoding::Map,
                     tagged:     None,
                     dcbor:      false,
                     doc:        None,

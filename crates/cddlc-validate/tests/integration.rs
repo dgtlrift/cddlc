@@ -296,3 +296,19 @@ fn literal_fields_are_enforced() {
     assert_fails(&m, "record", &json(r#"{"t":1,"cat":"kernel","type":"SimEnd","reason":"bogus"}"#));
     assert_fails(&m, "start", &json(r#"{"t":1,"cat":"kernel","type":"SimEnd"}"#));
 }
+
+// ── Record arrays (dgtlrift/cddlc#81) ────────────────────────────────────────
+
+#[test]
+fn records_validate_as_arrays() {
+    let m = lower("r = [a: uint, b: tstr, ? c: bool]\n");
+    assert_ok(&m, "r", &json(r#"[1, "x"]"#));
+    assert_ok(&m, "r", &json(r#"[1, "x", true]"#));
+    let errors = assert_fails(&m, "r", &json(r#"{"a": 1, "b": "x"}"#));
+    assert!(errors[0].message.contains("expected an array for record 'r'"), "{errors:?}");
+    let errors = assert_fails(&m, "r", &json(r#"[1]"#));
+    assert!(errors[0].message.contains("needs 2 to 3 item(s), found 1"), "{errors:?}");
+    assert_fails(&m, "r", &json(r#"[1, "x", true, 4]"#));
+    let errors = assert_fails(&m, "r", &json(r#"["x", 1]"#));
+    assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "[0]");
+}
