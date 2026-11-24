@@ -206,6 +206,16 @@ pub const CBOR_JACKSON: &str = r#"
 
     public static Object untag(Object v, long tag, String at) {
         if (v instanceof Tagged t && t.tag() == tag) return t.value();
+        // Jackson reads a bignum (tag 2 or 3 around its magnitude bytes) as a
+        // number, dropping the tag: give back the magnitude (RFC 8949 §3.4.3).
+        if ((tag == 2 || tag == 3) && v instanceof java.math.BigInteger b) {
+            java.math.BigInteger m = tag == 2 ? b : b.negate().subtract(java.math.BigInteger.ONE);
+            if (m.signum() >= 0) {
+                byte[] raw = m.toByteArray();
+                int skip = raw.length > 1 && raw[0] == 0 ? 1 : 0;
+                return java.util.Arrays.copyOfRange(raw, m.signum() == 0 ? raw.length : skip, raw.length);
+            }
+        }
         throw invalid(at, "expected CBOR tag " + tag);
     }
 

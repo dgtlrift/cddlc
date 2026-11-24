@@ -319,8 +319,8 @@ impl Primitive {
             "bstr"      | "bytes" => Some(Primitive::Bstr),
             "tstr"      | "text"  => Some(Primitive::Tstr),
             "any"       => Some(Primitive::Any),
-            // number = uint / int (treat as Int for IR purposes)
-            "number"    => Some(Primitive::Int),
+            // `number` and the tagged prelude types aren't primitives; see
+            // `prelude::prelude_typeref`.
             _           => None,
         }
     }

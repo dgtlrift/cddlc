@@ -206,6 +206,12 @@ impl<'m> Ctx<'m> {
                     .join(" | ");
                 self.err(path, format!("value did not match any alternative: {detail}"));
             }
+            // A bignum (`biguint = #6.2(bstr)`, `bignint = #6.3(bstr)`): the CBOR
+            // decoder reads one that fits as a plain integer, dropping the tag.
+            TypeRef::Tagged(tag, inner)
+                if matches!((tag.0, inner.as_ref(), value),
+                    (2, TypeRef::Primitive(Primitive::Bstr), Value::Uint(_))
+                    | (3, TypeRef::Primitive(Primitive::Bstr), Value::Int(_))) => {}
             TypeRef::Tagged(tag, inner) => {
                 if let Some(payload) = self.unwrap_tag(Some(*tag), value, path) {
                     self.check_typeref(inner, payload, path);
