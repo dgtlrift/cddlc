@@ -83,7 +83,7 @@ struct Device {
 ```
 
 - **Structs** are plain aggregates. Optional members are `std::optional<T>`;
-  repeated members are `std::array<T, N>`.
+  repeated members are `std::array<T, N>` (`std::vector<T>` with `--alloc heap`).
 - **`tstr` and `bstr`** are `std::string_view`: zero-copy views into the buffer
   being decoded, so that buffer must outlive the decoded value.
 - **Aliases** are each their own struct holding `value`, so two aliases of the
@@ -92,8 +92,9 @@ struct Device {
 - **Enums** are a struct around a `std::variant` of the variants' payload types,
   with a `make_<Variant>` constructor per variant. A text variant stores its
   string, so `make_Warn` takes the CDDL text: `Status::make_Warn("warn")`.
-- **Arrays** are a struct with `std::array<T, N> items` and `std::size_t count`.
-  `N` comes from `; @capacity` or `--max-array`.
+- **Arrays** are a struct with `std::array<T, N> items` and `std::size_t count`;
+  `N` comes from `; @capacity` or `--max-array`. With `--alloc heap` they are a
+  struct with `std::vector<T> items` and no capacity limit.
 - Doc comments and `; @doc` pragmas become `///` comments.
 
 ### Functions
@@ -185,7 +186,6 @@ nanocbor (or nlohmann/json) on the first configure.
 ## Known gaps
 
 - **nanocbor only**: `--runtime` is accepted, but only nanocbor is wired up.
-- **`--alloc` is ignored**: arrays are always `std::array<T, N>` plus a count.
 - **Text enums are not type-checked**: a text variant stores its string, so
   `make_Ok("warn")` builds a value that encodes as `"warn"`.
 - **Mixed-type enums**: enums mixing text and integer variants are a
