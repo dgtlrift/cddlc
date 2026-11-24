@@ -378,3 +378,29 @@ fn test_plain_aliases_are_distinct_types() {
     assert!(src.contains("nanocbor_get_tstr(dec, &_p, &_l); if (_r >= 0) out.value ="), "{src}");
     assert!(src.contains("nanocbor_get_bstr(dec, &_p, &_l); if (_r >= 0) out.value ="), "{src}");
 }
+
+/// Issue #35: an optional member is decoded into its inner type, then assigned to
+/// the `std::optional`, never decoded through a pointer to the optional itself.
+#[test]
+fn test_optional_member_decodes_through_inner_value() {
+    let g = compile("rec = { ? count: uint, ? on: bool, ? gone: nil }");
+    let src = &g.source;
+    assert!(src.contains("uint64_t _v{};"), "{src}");
+    assert!(src.contains("bool _v{};"), "{src}");
+    assert!(src.contains("out.count = _v;"), "{src}");
+    assert!(src.contains("out.on = _v;"), "{src}");
+    assert!(src.contains("out.gone = _v;"), "{src}");
+    assert!(!src.contains("&out.count"), "{src}");
+    assert!(!src.contains("&out.on"), "{src}");
+}
+
+/// Issue #35: a member pinned to a literal gets that literal as its test value.
+#[test]
+fn test_literal_members_use_their_literal_in_tests() {
+    let g = compile("rec = { always: true, never: false, version: 1, kind: \"kernel\" }");
+    let t = &g.tests;
+    assert!(t.contains("original.always = true;"), "{t}");
+    assert!(t.contains("original.never = false;"), "{t}");
+    assert!(t.contains("original.version = 1u;"), "{t}");
+    assert!(t.contains("original.kind = std::string_view(\"kernel\");"), "{t}");
+}

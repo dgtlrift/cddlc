@@ -15,7 +15,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Capacity, Constraint, EnumDef,
-    IrModule, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    IrModule, LiteralValue, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct CppBackend;
@@ -647,7 +647,16 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                 let fkey  = f.name.as_str();
                 w.line(&format!("if (key == {:?}) {{", fkey));
                 w.indent();
-                emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}"), &f.constraints, fkey, "&map", opts);
+                if matches!(f.occurrence, Occurrence::Optional) {
+                    // Decode into the inner type, then set the optional: nanocbor
+                    // writes through a pointer to the inner type, never an optional
+                    // (dgtlrift/cddlc#35). A present `nil` becomes a present monostate.
+                    w.line(&format!("{} _v{{}};", cpp_typeref(&f.ty, opts)));
+                    emit_cpp_decode_field(w, &f.ty, "_v", &f.constraints, fkey, "&map", opts);
+                    w.line(&format!("out.{fname} = _v;"));
+                } else {
+                    emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}"), &f.constraints, fkey, "&map", opts);
+                }
                 w.dedent();
                 w.line("} else");
             }
@@ -977,6 +986,18 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                     TypeRef::Tagged(_, inner) => inner.as_ref(),
                     other => other,
                 };
+                // A member pinned to one value (`always: true`, `version: 1`) must use
+                // it, or its own decoder rejects the roundtrip (dgtlrift/cddlc#35).
+                if let Some(lit) = f.constraints.iter().find_map(|c| match c {
+                    Constraint::Eq(LiteralValue::Bool(b)) => Some(b.to_string()),
+                    Constraint::Eq(LiteralValue::Uint(n)) => Some(format!("{n}u")),
+                    Constraint::Eq(LiteralValue::Int(n)) => Some(format!("{n}")),
+                    Constraint::Eq(LiteralValue::Text(t)) => Some(format!("std::string_view({t:?})")),
+                    _ => None,
+                }) {
+                    w.line(&format!("original.{fname} = {lit};"));
+                    continue;
+                }
                 match effective_ty {
                     TypeRef::Primitive(Primitive::Uint) => {
                         w.line(&format!("original.{fname} = 42u;"));
