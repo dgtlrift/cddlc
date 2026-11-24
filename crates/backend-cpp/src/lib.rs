@@ -1378,6 +1378,11 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
                 w.line(&format!("{ty} {fname}{{}};"));
             }
             w.blank();
+            let eq: Vec<String> = s.fields.iter()
+                .map(|f| { let n = to_snake_case(&f.name); format!("{n} == o.{n}") })
+                .collect();
+            let eq = if eq.is_empty() { "true".to_owned() } else { eq.join(" && ") };
+            w.line(&format!("bool operator==(const {ctype} &o) const {{ return {eq}; }}"));
             w.line("std::vector<uint8_t> encode() const;");
             w.line(&format!("static {ctype} decode(const std::vector<uint8_t>& data);"));
             w.dedent();
@@ -1401,6 +1406,7 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
                 w.indent();
                 w.line("nlohmann::json value;");
                 w.blank();
+                w.line(&format!("bool operator==(const {ctype} &o) const {{ return value == o.value; }}"));
                 w.line("std::vector<uint8_t> encode() const;");
                 w.line(&format!("static {ctype} decode(const std::vector<uint8_t>& data);"));
                 w.dedent();
@@ -1423,6 +1429,7 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
             w.indent();
             w.line(&format!("{inner_ty} value{{}};"));
             w.blank();
+            w.line(&format!("bool operator==(const {ctype} &o) const {{ return value == o.value; }}"));
             w.line("std::vector<uint8_t> encode() const;");
             w.line(&format!("static {ctype} decode(const std::vector<uint8_t>& data);"));
             w.dedent();
@@ -1502,8 +1509,17 @@ fn emit_source_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("}");
     w.blank();
 
+    w.line("/// A JSON value's serialized bytes, as the `decode` functions take them.");
+    w.line("[[maybe_unused]] static std::vector<uint8_t> json_bytes(const nlohmann::json& j) {");
+    w.indent();
+    w.line("auto s = j.dump();");
+    w.line("return std::vector<uint8_t>(s.begin(), s.end());");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
     for (_, def) in &module.types {
-        emit_cpp_json_impl(&mut w, def, opts);
+        emit_cpp_json_impl(&mut w, def, opts, module);
         w.blank();
     }
 
@@ -1511,17 +1527,41 @@ fn emit_source_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn cpp_json_to_val(ty: &TypeRef, expr: &str) -> String {
+/// How a named type is represented in C++ JSON output.
+enum JsonNamed { TextEnum, Array, Object }
+
+fn json_named_kind(n: &str, module: &IrModule) -> JsonNamed {
+    match module.get(n) {
+        Some(TypeDef::Enum(e)) if json_enum_is_string(e) => JsonNamed::TextEnum,
+        Some(TypeDef::Array(_)) => JsonNamed::Array,
+        _ => JsonNamed::Object,
+    }
+}
+
+/// A text-only enum is emitted as `using X = std::string`.
+fn json_enum_is_string(e: &EnumDef) -> bool {
+    e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)))
+}
+
+/// A C++ expression converting `expr` to a `nlohmann::json` value.
+fn cpp_json_to_val(ty: &TypeRef, expr: &str, module: &IrModule) -> String {
     match ty {
         TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
             format!("b64url_encode({expr})"),
-        TypeRef::Named(_) => format!("nlohmann::json::parse({expr}.encode())"),
-        TypeRef::Tagged(_, inner) => cpp_json_to_val(inner, expr),
+        // `std::monostate` has no JSON conversion (dgtlrift/cddlc#54).
+        TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "nullptr".into(),
+        TypeRef::Named(n) => match json_named_kind(n, module) {
+            JsonNamed::TextEnum => expr.to_owned(),
+            JsonNamed::Array => format!("nlohmann::json::parse(encode_{}({expr}))", to_pascal_case(n)),
+            JsonNamed::Object => format!("nlohmann::json::parse({expr}.encode())"),
+        },
+        TypeRef::Tagged(_, inner) => cpp_json_to_val(inner, expr, module),
         _ => expr.to_owned(),
     }
 }
 
-fn cpp_json_from_val(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
+/// A C++ expression converting the `nlohmann::json` value `expr` to its type.
+fn cpp_json_from_val(ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: &IrModule) -> String {
     match ty {
         TypeRef::Primitive(Primitive::Uint) => format!("{expr}.get<uint64_t>()"),
         TypeRef::Primitive(Primitive::Int)  => format!("{expr}.get<int64_t>()"),
@@ -1532,17 +1572,19 @@ fn cpp_json_from_val(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String 
         TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
             format!("b64url_decode({expr}.get<std::string>())"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "std::monostate{}".into(),
-        TypeRef::Named(n) => {
-            let ctype = to_pascal_case(n);
-            let bytes = format!("std::vector<uint8_t>({expr}.dump().begin(), {expr}.dump().end())");
-            format!("{ctype}::decode({bytes})")
-        }
-        TypeRef::Tagged(_, inner) => cpp_json_from_val(inner, expr, opts),
+        // `json_bytes` serializes once; building a vector from `dump().begin()` and
+        // `dump().end()` used iterators of two different strings (dgtlrift/cddlc#54).
+        TypeRef::Named(n) => match json_named_kind(n, module) {
+            JsonNamed::TextEnum => format!("{expr}.get<std::string>()"),
+            JsonNamed::Array => format!("decode_{}(json_bytes({expr}))", to_pascal_case(n)),
+            JsonNamed::Object => format!("{}::decode(json_bytes({expr}))", to_pascal_case(n)),
+        },
+        TypeRef::Tagged(_, inner) => cpp_json_from_val(inner, expr, opts, module),
         TypeRef::Choice(_) => expr.to_owned(),
     }
 }
 
-fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions, module: &IrModule) {
     match def {
         TypeDef::Struct(s) => {
             let ctype = to_pascal_case(&s.name);
@@ -1552,13 +1594,13 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
                 let key   = f.name.as_str();
-                let _val  = cpp_json_to_val(&f.ty, &fname);
+                let _val  = cpp_json_to_val(&f.ty, &fname, module);
                 match &f.occurrence {
                     Occurrence::Optional => {
-                        w.line(&format!("if ({fname}.has_value()) j[{key:?}] = {val};", fname=format!("this->{fname}"), val=cpp_json_to_val(&f.ty, &format!("this->{fname}.value()"))));
+                        w.line(&format!("if ({fname}.has_value()) j[{key:?}] = {val};", fname=format!("this->{fname}"), val=cpp_json_to_val(&f.ty, &format!("this->{fname}.value()"), module)));
                     }
                     _ => {
-                        w.line(&format!("j[{key:?}] = {};", cpp_json_to_val(&f.ty, &format!("this->{fname}"))));
+                        w.line(&format!("j[{key:?}] = {};", cpp_json_to_val(&f.ty, &format!("this->{fname}"), module)));
                     }
                 }
             }
@@ -1577,10 +1619,10 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                 let key   = f.name.as_str();
                 match &f.occurrence {
                     Occurrence::Optional => {
-                        w.line(&format!("if (j.contains({key:?})) out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j[{key:?}]"), opts)));
+                        w.line(&format!("if (j.contains({key:?})) out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j[{key:?}]"), opts, module)));
                     }
                     _ => {
-                        w.line(&format!("out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j.at({key:?})"), opts)));
+                        w.line(&format!("out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j.at({key:?})"), opts, module)));
                     }
                 }
             }
@@ -1618,14 +1660,10 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             let elem_ty = cpp_json_field_type(&a.element, opts);
             w.line(&format!("std::vector<uint8_t> encode_{ctype}(const {ctype}& val) {{"));
             w.indent();
-            if matches!(&a.element, TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) {
-                w.line("nlohmann::json arr = nlohmann::json::array();");
-                w.line("for (const auto& item : val) arr.push_back(b64url_encode(item));");
-                w.line("auto s = arr.dump();");
-            } else {
-                w.line("nlohmann::json arr = val;");
-                w.line("auto s = arr.dump();");
-            }
+            // Element by element, so named elements use their own conversion.
+            w.line("nlohmann::json arr = nlohmann::json::array();");
+            w.line(&format!("for (const auto& item : val) arr.push_back({});", cpp_json_to_val(&a.element, "item", module)));
+            w.line("auto s = arr.dump();");
             w.line("return std::vector<uint8_t>(s.begin(), s.end());");
             w.dedent();
             w.line("}");
@@ -1634,13 +1672,9 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.line(&format!("{ctype} decode_{ctype}(const std::vector<uint8_t>& data) {{"));
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
-            if matches!(&a.element, TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) {
-                w.line(&format!("{ctype} out;"));
-                w.line("for (const auto& item : j) out.push_back(b64url_decode(item.get<std::string>()));");
-                w.line("return out;");
-            } else {
-                w.line(&format!("return j.get<{ctype}>();"));
-            }
+            w.line(&format!("{ctype} out;"));
+            w.line(&format!("for (const auto& item : j) out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+            w.line("return out;");
             w.dedent();
             w.line("}");
 
@@ -1650,7 +1684,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             let ctype    = to_pascal_case(&a.name);
             w.line(&format!("std::vector<uint8_t> {ctype}::encode() const {{"));
             w.indent();
-            let val = cpp_json_to_val(&a.ty, "this->value");
+            let val = cpp_json_to_val(&a.ty, "this->value", module);
             w.line(&format!("nlohmann::json j = {val};"));
             w.line("auto s = j.dump();");
             w.line("return std::vector<uint8_t>(s.begin(), s.end());");
@@ -1662,7 +1696,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("{ctype} out{{}};"));
-            w.line(&format!("out.value = {};", cpp_json_from_val(&a.ty, "j", opts)));
+            w.line(&format!("out.value = {};", cpp_json_from_val(&a.ty, "j", opts, module)));
             w.line("return out;");
             w.dedent();
             w.line("}");
@@ -1695,7 +1729,7 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.line(&format!("{ctype} original{{}};"));
                 w.line("auto encoded = original.encode();");
                 w.line(&format!("auto decoded = {ctype}::decode(encoded);"));
-                w.line("(void)decoded;");
+                w.line("assert(decoded == original);");
                 w.dedent();
                 w.line("}");
                 w.blank();
@@ -1710,7 +1744,7 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                     w.line(&format!("{ctype} original{{}};"));
                     w.line("auto encoded = original.encode();");
                     w.line(&format!("auto decoded = {ctype}::decode(encoded);"));
-                    w.line("(void)decoded;");
+                    w.line("assert(decoded == original);");
                     w.dedent();
                     w.line("}");
                     w.blank();
@@ -1723,7 +1757,7 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.line(&format!("{ctype} original{{}};"));
                 w.line(&format!("auto encoded = encode_{ctype}(original);"));
                 w.line(&format!("auto decoded = decode_{ctype}(encoded);"));
-                w.line("(void)decoded;");
+                w.line("assert(decoded == original);");
                 w.dedent();
                 w.line("}");
                 w.blank();
@@ -1735,7 +1769,7 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.line(&format!("{ctype} original{{}};"));
                 w.line("auto encoded = original.encode();");
                 w.line(&format!("auto decoded = {ctype}::decode(encoded);"));
-                w.line("(void)decoded;");
+                w.line("assert(decoded == original);");
                 w.dedent();
                 w.line("}");
                 w.blank();
