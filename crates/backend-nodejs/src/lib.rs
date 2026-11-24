@@ -206,6 +206,47 @@ fn emit_tsconfig() -> String {
     .to_owned()
 }
 
+// ── CBOR floats ───────────────────────────────────────────────────────────────
+
+/// A float as decoded when it must stay distinct from an integer. `valueOf`
+/// keeps `Number(x)` and arithmetic working wherever a plain number was expected.
+const CBOR_FLOAT_HELPER: &str = r#"/** A CBOR float, kept apart from integers so `1.0` doesn't read as `1`. */
+export class CborFloat {
+  constructor(readonly value: number) {}
+  valueOf(): number { return this.value; }
+}"#;
+
+/// cborg returns small integers and floats alike as `number`. In a module with
+/// an enum that has both an integer and a float variant, decoding uses this
+/// tokenizer, which wraps every float in a `CborFloat` (a float token is
+/// terminal, so its value is returned as is) (dgtlrift/cddlc#52).
+const FLOAT_MARKING_TOKENIZER: &str = r#"/** cborg tokenizer that decodes every CBOR float as a `CborFloat`. */
+class FloatMarkingTokenizer {
+  private readonly inner: Tokenizer;
+  constructor(data: Uint8Array) { this.inner = new Tokenizer(data, {}); }
+  done(): boolean { return this.inner.done(); }
+  pos(): number { return this.inner.pos(); }
+  next(): Token {
+    const t = this.inner.next();
+    return t.type === Type.float ? new Token(Type.float, new CborFloat(t.value), t.encodedLength) : t;
+  }
+}"#;
+
+/// Whether some enum has both an integer and a float variant, so decoding must
+/// keep CBOR floats apart from integers.
+fn module_needs_float_marking(module: &IrModule) -> bool {
+    module.types.values().any(|def| match def {
+        TypeDef::Enum(e) => {
+            let has = |f: &dyn Fn(&Primitive) -> bool| {
+                e.variants.iter().any(|v| matches!(&v.ty, TypeRef::Primitive(p) if f(p)))
+            };
+            has(&|p| matches!(p, Primitive::Uint | Primitive::Int))
+                && has(&|p| matches!(p, Primitive::Float | Primitive::Float16 | Primitive::Float32 | Primitive::Float64))
+        }
+        _ => false,
+    })
+}
+
 // ── CBOR tags ─────────────────────────────────────────────────────────────────
 
 /// cborg throws on any tag it has no decoder for, so each tag the module uses gets
@@ -276,7 +317,7 @@ fn open_cbor_decoder(w: &mut IndentWriter, name: &str, type_name: &str) {
     let from = from_cbor_fn_name(name);
     w.line(&format!("export function {dname}(data: Uint8Array): {type_name} {{"));
     w.indent();
-    w.line(&format!("return {from}(cborgDecode(data, CBOR_DECODE_OPTIONS));"));
+    w.line(&format!("return {from}(cborgDecode(data, cborDecodeOptions(data)));"));
     w.dedent();
     w.line("}");
     w.blank();
@@ -314,7 +355,11 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     if opts.is_json() {
         // JSON is a Node.js/browser built-in — no imports needed
     } else {
-        w.line("import { encode as cborgEncode, decode as cborgDecode } from 'cborg';");
+        if module_needs_float_marking(module) {
+            w.line("import { encode as cborgEncode, decode as cborgDecode, Tokenizer, Token, Type } from 'cborg';");
+        } else {
+            w.line("import { encode as cborgEncode, decode as cborgDecode } from 'cborg';");
+        }
         w.blank();
         // Emit a self-contained streaming CBOR encoder — cborg v4 has no Encoder class.
         for line in CBOR_ENCODER_CLASS.lines() {
@@ -360,6 +405,29 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
         }
         w.dedent();
         w.line("]) };");
+        w.blank();
+        for line in CBOR_FLOAT_HELPER.lines() {
+            w.line(line);
+        }
+        w.blank();
+        if module_needs_float_marking(module) {
+            for line in FLOAT_MARKING_TOKENIZER.lines() {
+                w.line(line);
+            }
+            w.blank();
+            w.line("/** Decode options for one buffer: floats come back as `CborFloat` (see above). */");
+            w.line("function cborDecodeOptions(data: Uint8Array) {");
+            w.indent();
+            w.line("return { ...CBOR_DECODE_OPTIONS, tokenizer: new FloatMarkingTokenizer(data) };");
+            w.dedent();
+            w.line("}");
+        } else {
+            w.line("function cborDecodeOptions(_data: Uint8Array) {");
+            w.indent();
+            w.line("return CBOR_DECODE_OPTIONS;");
+            w.dedent();
+            w.line("}");
+        }
     }
 
     if module_has_bool_literal(module) {
@@ -1010,15 +1078,16 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
     }
-    // A float variant takes any other number (dgtlrift/cddlc#38). cborg returns
-    // small integers and floats alike as `number`, so with an integer variant
-    // present an integral float such as 1.0 already went to that variant above.
+    // A float variant takes a CBOR float (dgtlrift/cddlc#38). In a module with a
+    // mixed integer/float enum, floats decode as `CborFloat`, so the integer
+    // branch above never sees them and `1.0` stays a float (dgtlrift/cddlc#52);
+    // elsewhere cborg returns floats as plain numbers.
     if !opts.is_json() {
         if let Some(v) = e.variants.iter().find(is_float) {
             let vname = to_pascal_case(&v.name);
-            w.line("if (typeof inner === 'number') {");
+            w.line("if (inner instanceof CborFloat || typeof inner === 'number') {");
             w.indent();
-            w.line(&format!("return {{ kind: {vname:?}, value: inner }};"));
+            w.line(&format!("return {{ kind: {vname:?}, value: Number(inner) }};"));
             w.dedent();
             w.line("}");
         }
