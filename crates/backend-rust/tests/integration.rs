@@ -77,8 +77,10 @@ fn test_cargo_toml_crate_name() {
 
 #[test]
 fn test_cargo_toml_minicbor_version_range() {
+    // Caret 2.3: new 2.x releases, never an incompatible 3.0.
     let g = compile("device-id = uint");
-    assert!(g.cargo_toml.contains(">=2"));
+    assert!(g.cargo_toml.contains("minicbor = { version = \"2.3\""), "{}", g.cargo_toml);
+    assert!(!g.cargo_toml.contains(">="), "{}", g.cargo_toml);
 }
 
 #[test]
@@ -607,4 +609,24 @@ fn test_tagged_member_writes_and_checks_tag() {
     assert!(lib.contains("let val = { if d.tag()? != minicbor::data::Tag::new(1) { return Err(DecodeError::message(\"unexpected CBOR tag\")); } d.u64()? };"), "{lib}");
     // A repeated tagged member's items each carry the tag.
     assert!(lib.contains("pub type ReadingTimes = Vec<minicbor::data::Tagged<1, u64>>;"), "{lib}");
+}
+
+/// Issue #63: in JSON, an integer-literal enum variant is a marker type that only
+/// accepts its literal, so `2` decodes as `Variant2`, not the first variant.
+#[test]
+fn test_json_int_literal_enum_uses_markers() {
+    let g = compile_with_opts("priority = 1 / 2 / 3", json_opts());
+    assert!(g.lib_rs.contains("Variant2(PriorityVariant2),"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("pub const VALUE: u64 = 2;"), "{}", g.lib_rs);
+    assert!(!g.lib_rs.contains("Variant2(u64)"), "{}", g.lib_rs);
+    assert!(g.roundtrip_rs.contains("let original = Priority::Variant2(PriorityVariant2);"), "{}", g.roundtrip_rs);
+}
+
+/// Issue #63: a JSON `bstr` alias brings the traits its encode/decode call into scope.
+#[test]
+fn test_json_bstr_alias_imports_traits() {
+    let g = compile_with_opts("blob = bstr", json_opts());
+    let enc = &g.lib_rs[g.lib_rs.find("pub fn encode_Blob").unwrap()..];
+    assert!(enc.starts_with("pub fn encode_Blob(val: &Blob) -> Vec<u8> {\n    use base64::Engine;"), "{enc}");
+    assert!(g.lib_rs.contains("<serde_json::Error as serde::de::Error>::custom(e.to_string())"), "{}", g.lib_rs);
 }

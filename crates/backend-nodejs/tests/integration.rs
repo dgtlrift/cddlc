@@ -827,3 +827,18 @@ fn test_cbor_optional_member_omitted_when_absent() {
     let fixed = compile("reading = { id: uint }");
     assert!(fixed.source.contains("enc.startMap(1);"), "{}", fixed.source);
 }
+
+/// The generated package targets cborg 7, jest 30 and TypeScript 6. TypeScript 6
+/// includes no `@types` packages unless listed, and cborg 7 hands a tag decoder
+/// a function that decodes the tagged content.
+#[test]
+fn test_package_targets_cborg7_ts6() {
+    let g = compile("t = #6.1(uint)");
+    assert!(g.package_json.contains("\"cborg\": \"^7.0.0\""), "{}", g.package_json);
+    assert!(g.package_json.contains("\"jest\":           \"^30.0.0\""), "{}", g.package_json);
+    assert!(g.package_json.contains("\"@types/node\":    \"^24.0.0\""), "{}", g.package_json);
+    assert!(g.package_json.contains("\"typescript\":     \"^6.0.0\""), "{}", g.package_json);
+    assert!(g.tsconfig.contains("\"types\":            [\"node\", \"jest\"]"), "{}", g.tsconfig);
+    assert!(g.tsconfig.contains("\"esModuleInterop\":  true"), "{}", g.tsconfig);
+    assert!(g.source.contains("(decode: () => unknown) => new CborTagged(tag, decode())"), "{}", g.source);
+}

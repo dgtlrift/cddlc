@@ -325,6 +325,19 @@ fn test_build_rust() {
     assert_all_ok(&outcomes);
 }
 
+/// Build and test all schemas using the Rust backend's JSON output (serde_json).
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_rust_json -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_rust_json() {
+    let tmp  = work_dir("rust-json");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    eprintln!("\n=== Rust JSON build test ===");
+    let outcomes = run_build_tests(&RustBackend, |d, f, n| build_rust(d, f, n), &opts, tmp.path());
+    print_summary("Rust JSON", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
 /// Build and test all schemas using the C backend (cmake build + ctest).
 /// Requires: cmake, cc in PATH
 /// Run: cargo test -p backend-buildtest --test build_validation test_build_c -- --ignored --nocapture
@@ -336,6 +349,19 @@ fn test_build_c() {
     eprintln!("\n=== C build test ===");
     let outcomes = run_build_tests(&CBackend, |d, f, n| build_c(d, f, n), &opts, tmp.path());
     print_summary("C", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
+/// Build and test all schemas using the C backend's JSON output (cJSON).
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_c_json -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_c_json() {
+    let tmp  = work_dir("c-json");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    eprintln!("\n=== C JSON build test ===");
+    let outcomes = run_build_tests(&CBackend, |d, f, n| build_c(d, f, n), &opts, tmp.path());
+    print_summary("C JSON", &outcomes);
     assert_all_ok(&outcomes);
 }
 

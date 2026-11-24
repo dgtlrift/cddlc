@@ -135,7 +135,7 @@ fn emit_package_json(name: &str, opts: &CodegenOptions) -> String {
     } else {
         format!(
             r#"  "dependencies": {{
-    "cborg": "^4.0.0"
+    "cborg": "^7.0.0"
   }}"#
         )
     };
@@ -157,10 +157,11 @@ fn emit_package_json(name: &str, opts: &CodegenOptions) -> String {
   }},
 {deps},
   "devDependencies": {{
-    "@types/jest":    "^29.0.0",
-    "jest":           "^29.0.0",
-    "ts-jest":        "^29.0.0",
-    "typescript":     "^5.0.0"
+    "@types/jest":    "^30.0.0",
+    "@types/node":    "^24.0.0",
+    "jest":           "^30.0.0",
+    "ts-jest":        "^29.4.0",
+    "typescript":     "^6.0.0"
   }},
   "jest": {{
     "preset":        "ts-jest/presets/default-esm",
@@ -196,7 +197,8 @@ fn emit_tsconfig() -> String {
     "declaration":      true,
     "declarationMap":   true,
     "sourceMap":        true,
-    "esModuleInterop":  false,
+    "types":            ["node", "jest"],
+    "esModuleInterop":  true,
     "skipLibCheck":     true
   },
   "include": ["src/**/*", "tests/**/*"],
@@ -258,9 +260,10 @@ export class CborTagged {
   constructor(readonly tag: number, readonly value: unknown) {}
 }
 
-function cborTagDecoders(tags: number[]): ((inner: unknown) => unknown)[] {
-  const decoders: ((inner: unknown) => unknown)[] = [];
-  for (const tag of tags) decoders[tag] = (inner: unknown) => new CborTagged(tag, inner);
+function cborTagDecoders(tags: number[]): ((decode: () => unknown) => unknown)[] {
+  // cborg >= 7 hands a tag decoder a function that decodes the tagged content.
+  const decoders: ((decode: () => unknown) => unknown)[] = [];
+  for (const tag of tags) decoders[tag] = (decode: () => unknown) => new CborTagged(tag, decode());
   return decoders;
 }
 

@@ -64,6 +64,14 @@ fn text_literal(v: &EnumVariant) -> Option<&str> {
     }
 }
 
+/// The integer of an integer-literal enum variant (the `2` in `1 / 2 / 3`).
+fn int_literal(v: &EnumVariant) -> Option<&LiteralValue> {
+    match (&v.ty, literal_eq(&v.constraints)) {
+        (TypeRef::Primitive(Primitive::Uint | Primitive::Int), Some(lit @ (LiteralValue::Uint(_) | LiteralValue::Int(_)))) => Some(lit),
+        _ => None,
+    }
+}
+
 /// The CDDL string for a `tstr` enum variant: its literal, or (for variants without
 /// one) the historical lowercased-name fallback.
 fn variant_str(v: &EnumVariant) -> String {
@@ -1181,14 +1189,14 @@ fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions) -> String {
     if opts.is_json() {
         s.push_str("serde      = { version = \"1\", features = [\"derive\"] }\n");
         s.push_str("serde_json = \"1\"\n");
-        s.push_str("base64     = \"0.22\"\n");
+        s.push_str("base64     = \"0.23\"\n");
         s.push('\n');
         s.push_str("[dev-dependencies]\n");
         s.push_str("# The round-trip tests also go through CBOR.\n");
         s.push_str("ciborium = \"0.2\"\n");
     } else {
-        s.push_str("minicbor = { version = \">=2\", features = [\"derive\"] }\n");
-        s.push_str("heapless = { version = \"0.8\", optional = true }\n");
+        s.push_str("minicbor = { version = \"2.3\", features = [\"derive\"] }\n");
+        s.push_str("heapless = { version = \"0.9\", optional = true }\n");
         s.push('\n');
         s.push_str("[features]\n");
         // Outside no-std the types are `Vec` and `String`, which need minicbor's alloc.
@@ -1197,7 +1205,7 @@ fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions) -> String {
         s.push_str("no-std  = [\"heapless\"]\n");
         s.push('\n');
         s.push_str("[dev-dependencies]\n");
-        s.push_str("minicbor = { version = \">=2\", features = [\"derive\", \"alloc\"] }\n");
+        s.push_str("minicbor = { version = \"2.3\", features = [\"derive\", \"alloc\"] }\n");
     }
     if opts.dcbor {
         s.push('\n');
@@ -1961,9 +1969,14 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
         let mut default_expr = None;
         for v in &e.variants {
             let vname = to_pascal_case(&v.name);
-            let (line, default) = if let Some(t) = text_literal(v) {
+            // Text and integer literals are marker types that serialize as, and only
+            // accept, their literal (an integer variant holding a `u64` would take
+            // any number, so every value decoded as the first one; dgtlrift/cddlc#63).
+            let literal = text_literal(v).map(|t| LiteralValue::Text(t.to_owned()))
+                .or_else(|| int_literal(v).cloned());
+            let (line, default) = if let Some(lit) = literal {
                 let marker = marker_name(&e.name, &v.name, module);
-                markers.push((marker.clone(), LiteralValue::Text(t.to_owned())));
+                markers.push((marker.clone(), lit));
                 (format!("{vname}({marker}),"), format!("{type_name}::{vname}({marker})"))
             } else {
                 match &v.ty {
@@ -2085,6 +2098,7 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.line(&format!("pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"));
         w.indent();
         if is_bytes {
+            w.line("use base64::Engine;");
             w.line("let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(val);");
             w.line("serde_json::to_vec(&encoded).expect(\"encode\")");
         } else {
@@ -2099,7 +2113,7 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
             w.line("use base64::Engine;");
             w.line("let s: String = serde_json::from_slice(data)?;");
             w.line("base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&s)");
-            w.line("    .map_err(|e| serde_json::Error::custom(e.to_string()))");
+            w.line("    .map_err(|e| <serde_json::Error as serde::de::Error>::custom(e.to_string()))");
         } else {
             w.line("serde_json::from_slice(data)");
         }
@@ -2274,7 +2288,7 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
         let vname    = to_pascal_case(&v.name);
         let construct = match &v.ty {
             _ if text_literal(v).is_some() && all_unit => format!("{type_name}::{vname}"),
-            _ if text_literal(v).is_some() => {
+            _ if text_literal(v).is_some() || int_literal(v).is_some() => {
                 format!("{type_name}::{vname}({})", marker_name(&e.name, &v.name, module))
             }
             TypeRef::Primitive(Primitive::Tstr) => {
