@@ -756,12 +756,21 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     if a.deprecated { w.line("#[deprecated]"); }
 
     let type_name = to_pascal_case(&a.name);
-    let elem_ty   = typeref_to_rust(&a.element, opts);
     // minicbor encodes a `Vec<u8>` element as an array of integers; `ByteVec` is a bstr.
-    let heap_elem_ty = if is_bstr(&a.element) {
+    let heap_inner = |ty: &TypeRef| if is_bstr(ty) {
         "minicbor::bytes::ByteVec".to_owned()
     } else {
-        elem_ty.clone()
+        typeref_to_rust(ty, opts)
+    };
+    // The array is a plain `Vec` alias encoded by minicbor's blanket impls, so a
+    // tagged element (`[* #6.1(uint)]`) is wrapped in `minicbor::data::Tagged`,
+    // which writes and checks the tag per item (dgtlrift/cddlc#47).
+    let (elem_ty, heap_elem_ty) = match &a.element {
+        TypeRef::Tagged(tag, inner) => (
+            format!("minicbor::data::Tagged<{}, {}>", tag.0, typeref_to_rust(inner, opts)),
+            format!("minicbor::data::Tagged<{}, {}>", tag.0, heap_inner(inner)),
+        ),
+        other => (typeref_to_rust(other, opts), heap_inner(other)),
     };
     let cap       = capacity_value(
         a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
@@ -996,9 +1005,10 @@ fn emit_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: &Co
         TypeRef::Named(_) => {
             w.line(&format!("{expr}.encode(e, ctx)?;"));
         }
-        TypeRef::Tagged(_, inner) => {
-            // Inline tags in struct field position are not emitted; only
-            // top-level AliasDef/StructDef tags produce tag emission.
+        TypeRef::Tagged(tag, inner) => {
+            // A tagged member (`stamp: #6.1(uint)`) is written as tag + value,
+            // like a tagged type (dgtlrift/cddlc#47).
+            w.line(&format!("e.tag(minicbor::data::Tag::new({}))?;", tag.0));
             emit_encode_typeref(w, inner, expr, opts);
         }
         TypeRef::Choice(_) => {
@@ -1063,7 +1073,13 @@ fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option
                 format!("{}::decode(d, ctx)?", to_pascal_case(n))
             }
         }
-        TypeRef::Tagged(_, inner) => decode_expr_for_in_module(inner, opts, module),
+        // A tagged member must carry its tag, which is checked and consumed
+        // before the value (dgtlrift/cddlc#47).
+        TypeRef::Tagged(tag, inner) => format!(
+            "{{ if d.tag()? != minicbor::data::Tag::new({}) {{ return Err(DecodeError::message(\"unexpected CBOR tag\")); }} {} }}",
+            tag.0,
+            decode_expr_for_in_module(inner, opts, module)
+        ),
         TypeRef::Choice(_) => "d.decode()?".into(),
     }
 }

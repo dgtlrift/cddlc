@@ -597,3 +597,14 @@ fn test_roundtrip_variant_named_default_gets_unique_test_name() {
         assert!(rt.contains("fn roundtrip_record_decided_by_tags()"), "{rt}");
     }
 }
+
+/// Issue #47: a tagged member is written with its tag, and decoding requires it.
+#[test]
+fn test_tagged_member_writes_and_checks_tag() {
+    let out = compile("reading = { stamp: #6.1(uint), times: [* #6.1(uint)] }");
+    let lib = &out.lib_rs;
+    assert!(lib.contains("e.str(\"stamp\")?;\n        e.tag(minicbor::data::Tag::new(1))?;\n        e.u64(self.stamp)?;"), "{lib}");
+    assert!(lib.contains("let val = { if d.tag()? != minicbor::data::Tag::new(1) { return Err(DecodeError::message(\"unexpected CBOR tag\")); } d.u64()? };"), "{lib}");
+    // A repeated tagged member's items each carry the tag.
+    assert!(lib.contains("pub type ReadingTimes = Vec<minicbor::data::Tagged<1, u64>>;"), "{lib}");
+}
