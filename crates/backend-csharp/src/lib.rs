@@ -171,6 +171,10 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
 
     let type_name = to_pascal_case(&s.name);
 
+    let record = s.encoding == cddlc_ir::StructEncoding::Array;
+    if record && opts.is_json() {
+        w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]"));
+    }
     w.line(&format!("public sealed class {type_name}"));
     w.line("{");
     w.indent();
@@ -179,7 +183,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     for f in &s.fields {
         emit_doc_comment(w, f.doc.as_deref());
         if f.deprecated { w.line("[Obsolete]"); }
-        if opts.is_json() {
+        if opts.is_json() && !record {
             // JsonPropertyName attribute
             w.line(&format!("[JsonPropertyName({:?})]", f.name.as_str()));
             // Skip null for optional fields
@@ -193,6 +197,13 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     }
     w.blank();
 
+    if record && !opts.is_json() {
+        emit_record_cbor(w, s, &type_name, opts);
+        w.dedent();
+        w.line("}");
+        return;
+    }
+
     // Encode method
     emit_struct_encode(w, s, opts);
     w.blank();
@@ -200,6 +211,167 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     // Decode static method
     emit_struct_decode(w, s, opts);
 
+    w.dedent();
+    w.line("}");
+    if record {
+        w.blank();
+        emit_record_json_converter(w, s, &type_name, opts);
+    }
+}
+
+/// A record's Encode / Decode (RFC 8610 §3.4): an array of the members' values,
+/// in order. Optional members come last: those present are written up to the
+/// first absent one, and one set after an absent one is an error.
+fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: &CodegenOptions) {
+    let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+    let required = s.fields.len() - optional.len();
+    w.line("public void Encode(CborWriter writer)");
+    w.line("{");
+    w.indent();
+    for pair in optional.windows(2) {
+        w.line(&format!(
+            "if (this.{} is not null && this.{} is null) throw new InvalidOperationException({:?});",
+            to_pascal_case(&pair[1].name), to_pascal_case(&pair[0].name),
+            format!("{type_name}.{}: set, but an optional member before it isn't", pair[1].name)
+        ));
+    }
+    if let Some(tag) = s.tagged {
+        w.line(&format!("writer.WriteTag((CborTag){});", tag.0));
+    }
+    let present: String = optional.iter()
+        .map(|f| format!(" + (this.{} is not null ? 1 : 0)", to_pascal_case(&f.name)))
+        .collect();
+    w.line(&format!("writer.WriteStartArray({required}{present});"));
+    for f in &s.fields {
+        let expr = format!("this.{}", to_pascal_case(&f.name));
+        if matches!(f.occurrence, Occurrence::Optional) {
+            w.line(&format!("if ({expr} is not null)"));
+            w.line("{");
+            w.indent();
+            emit_cs_encode_typeref(w, &f.ty, &expr, opts);
+            w.dedent();
+            w.line("}");
+        } else {
+            emit_cs_encode_value(w, &f.ty, &expr, &f.occurrence, opts);
+        }
+    }
+    w.line("writer.WriteEndArray();");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+    w.line("{");
+    w.indent();
+    if let Some(tag) = s.tagged {
+        w.line("var tag = reader.ReadTag();");
+        w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+    }
+    for f in &s.fields {
+        let ty    = cs_field_type(&f.ty, &f.occurrence, opts);
+        let local = to_snake_case(&f.name);
+        let def   = cs_default_value(&f.ty, &f.occurrence, opts);
+        w.line(&format!("{ty} {local} = {def};"));
+    }
+    w.line("var length = reader.ReadStartArray();");
+    w.line("int read = 0;");
+    w.line("bool More() => length is int n ? read < n : reader.PeekState() != CborReaderState.EndArray;");
+    for f in &s.fields {
+        let local = to_snake_case(&f.name);
+        if matches!(f.occurrence, Occurrence::Optional) {
+            w.line("if (More())");
+            w.line("{");
+            w.indent();
+            emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &f.occurrence, opts);
+            w.line("read++;");
+            w.dedent();
+            w.line("}");
+        } else {
+            w.line(&format!(
+                "if (!More()) throw new CborContentException({:?});",
+                format!("{type_name}: missing item '{}'", f.name)
+            ));
+            emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &f.occurrence, opts);
+            w.line("read++;");
+        }
+    }
+    w.line(&format!("if (More()) throw new CborContentException({:?});", format!("{type_name}: too many items")));
+    w.line("reader.ReadEndArray();");
+    w.line(&format!("return new {type_name}"));
+    w.line("{");
+    w.indent();
+    for f in &s.fields {
+        w.line(&format!("{} = {},", to_pascal_case(&f.name), to_snake_case(&f.name)));
+    }
+    w.dedent();
+    w.line("};");
+    w.dedent();
+    w.line("}");
+}
+
+/// System.Text.Json writes a class as an object, so a record gets a converter:
+/// a JSON array of its members' values, in order, optional ones at the end
+/// left off when absent.
+fn emit_record_json_converter(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: &CodegenOptions) {
+    let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+    let required = s.fields.len() - optional.len();
+    let total = s.fields.len();
+    w.line(&format!("public sealed class {type_name}JsonConverter : JsonConverter<{type_name}>"));
+    w.line("{");
+    w.indent();
+    w.line(&format!(
+        "public override {type_name} Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)"
+    ));
+    w.line("{");
+    w.indent();
+    w.line("using var doc = JsonDocument.ParseValue(ref reader);");
+    w.line("var a = doc.RootElement;");
+    w.line(&format!(
+        "if (a.ValueKind != JsonValueKind.Array || a.GetArrayLength() < {required} || a.GetArrayLength() > {total})"
+    ));
+    w.line(&format!("    throw new JsonException({:?});", format!("{type_name}: expected an array of {required} to {total} items")));
+    w.line("int n = a.GetArrayLength();");
+    w.line(&format!("return new {type_name}"));
+    w.line("{");
+    w.indent();
+    for (i, f) in s.fields.iter().enumerate() {
+        let ty = cs_field_type(&f.ty, &f.occurrence, opts);
+        let pname = to_pascal_case(&f.name);
+        if matches!(f.occurrence, Occurrence::Optional) {
+            w.line(&format!("{pname} = n > {i} ? a[{i}].Deserialize<{ty}>(options) : default,"));
+        } else {
+            w.line(&format!("{pname} = a[{i}].Deserialize<{ty}>(options)!,"));
+        }
+    }
+    w.dedent();
+    w.line("};");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!(
+        "public override void Write(Utf8JsonWriter writer, {type_name} value, JsonSerializerOptions options)"
+    ));
+    w.line("{");
+    w.indent();
+    for pair in optional.windows(2) {
+        w.line(&format!(
+            "if (value.{} is not null && value.{} is null) throw new JsonException({:?});",
+            to_pascal_case(&pair[1].name), to_pascal_case(&pair[0].name),
+            format!("{type_name}.{}: set, but an optional member before it isn't", pair[1].name)
+        ));
+    }
+    w.line("writer.WriteStartArray();");
+    for f in &s.fields {
+        let pname = to_pascal_case(&f.name);
+        if matches!(f.occurrence, Occurrence::Optional) {
+            w.line(&format!("if (value.{pname} is not null) JsonSerializer.Serialize(writer, value.{pname}, options);"));
+        } else {
+            w.line(&format!("JsonSerializer.Serialize(writer, value.{pname}, options);"));
+        }
+    }
+    w.line("writer.WriteEndArray();");
+    w.dedent();
+    w.line("}");
     w.dedent();
     w.line("}");
 }
