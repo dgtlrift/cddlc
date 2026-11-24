@@ -357,3 +357,28 @@ fn records_validate_as_arrays() {
     let errors = assert_fails(&m, "r", &json(r#"["x", 1]"#));
     assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "[0]");
 }
+
+// ── Tables (dgtlrift/cddlc#82) ────────────────────────────────────────────────
+
+#[test]
+fn tables_validate_each_entry() {
+    let m = lower("r = { * tstr => uint }\n");
+    assert_ok(&m, "r", &json(r#"{}"#));
+    assert_ok(&m, "r", &json(r#"{"x": 1, "y": 2}"#));
+    let errors = assert_fails(&m, "r", &json(r#"{"x": 1, "y": "two"}"#));
+    assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "{y}");
+    assert_fails(&m, "r", &json(r#"[1]"#));
+
+    // `+` needs an entry; a key must have the key type (here in CBOR).
+    let m = lower("r = { + uint => tstr }\n");
+    assert_fails(&m, "r", &Value::from(ciborium::Value::Map(vec![])));
+    let entry = |k: ciborium::Value| ciborium::Value::Map(vec![(k, ciborium::Value::Text("a".into()))]);
+    assert_ok(&m, "r", &Value::from(entry(ciborium::Value::Integer(1.into()))));
+    let errors = assert_fails(&m, "r", &Value::from(entry(ciborium::Value::Text("1".into()))));
+    assert!(errors[0].message.contains("invalid key"), "{errors:?}");
+
+    // A table member, with a constrained value.
+    let m = lower("r = { scores: { * tstr => uint .le 100 } }\n");
+    assert_ok(&m, "r", &json(r#"{"scores": {"a": 100}}"#));
+    assert_fails(&m, "r", &json(r#"{"scores": {"a": 101}}"#));
+}

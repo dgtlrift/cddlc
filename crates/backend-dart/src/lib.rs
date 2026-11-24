@@ -839,7 +839,7 @@ fn emit_tests(module: &IrModule, lib_name: &str, opts: &CodegenOptions) -> Strin
 
     for (_, def) in &module.types {
         if let TypeDef::Struct(s) = def {
-            emit_struct_test(&mut w, s, opts);
+            emit_struct_test(&mut w, module, s, opts);
         }
         if let TypeDef::Enum(e) = def {
             emit_enum_test(&mut w, e, opts);
@@ -854,14 +854,19 @@ fn emit_tests(module: &IrModule, lib_name: &str, opts: &CodegenOptions) -> Strin
     w.finish()
 }
 
-fn emit_struct_test(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &CodegenOptions) {
     let class_name = to_pascal_case(&s.name);
 
-    // Skip structs that can't be trivially default-constructed in the test
+    // Skip structs that can't be trivially default-constructed in the test; a
+    // table member is a map literal.
     let skip = s.fields.iter().any(|f| {
         f.occurrence.is_repeated()
             || (!matches!(f.occurrence, Occurrence::Optional)
-                && matches!(&f.ty, TypeRef::Named(_) | TypeRef::Choice(_)))
+                && match &f.ty {
+                    TypeRef::Named(n) => !matches!(module.get(n), Some(TypeDef::Map(_))),
+                    TypeRef::Choice(_) => true,
+                    _ => false,
+                })
     });
     if skip { return; }
 
@@ -873,7 +878,13 @@ fn emit_struct_test(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) 
     w.indent();
     for f in &s.fields {
         let fname   = dart_field(&f.name);
-        let default = test_default_for(&f.ty, &f.occurrence, opts);
+        let default = match (&f.ty, &f.occurrence) {
+            (TypeRef::Named(n), Occurrence::Required) => match module.get(n) {
+                Some(TypeDef::Map(m)) => test_table_for(m, opts),
+                _ => test_default_for(&f.ty, &f.occurrence, opts),
+            },
+            _ => test_default_for(&f.ty, &f.occurrence, opts),
+        };
         w.line(&format!("{fname}: {default},"));
     }
     w.dedent();
@@ -997,9 +1008,15 @@ fn json_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                         format!("({expr} as List).map((e) => {item}).toList()")
                     }
                 }
-                Some(TypeDef::Map(_)) => {
-                    // typedef Map<K,V> — pass through as dynamic map
-                    format!("({expr} as Map).cast()")
+                Some(TypeDef::Map(m)) => {
+                    // typedef Map<K,V> — each entry converted (dgtlrift/cddlc#82)
+                    format!(
+                        "({expr} as Map).map<{}, {}>((k, v) => MapEntry({}, {}))",
+                        typeref_to_dart(&m.key_ty, opts),
+                        typeref_to_dart(&m.val_ty, opts),
+                        json_from_expr(&m.key_ty, "k", module, opts),
+                        json_from_expr(&m.val_ty, "v", module, opts)
+                    )
                 }
                 Some(TypeDef::Enum(_)) => {
                     // Enum class has fromJson(dynamic)
@@ -1031,7 +1048,11 @@ fn json_to_expr(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOpti
                     if item == "e" { field.to_owned() }
                     else { format!("{field}.map((e) => {item}).toList()") }
                 }
-                Some(TypeDef::Map(_)) => field.to_owned(),
+                Some(TypeDef::Map(m)) => {
+                    let v = json_to_expr(&m.val_ty, "v", module, opts);
+                    if v == "v" { field.to_owned() }
+                    else { format!("{field}.map((k, v) => MapEntry(k, {v}))") }
+                }
                 _ => format!("{field}.toJson()"),
             }
         }
@@ -1066,7 +1087,19 @@ fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                     let item = cbor_from_expr(&a.element, "e", module, opts);
                     format!("({expr} as CborList).map((e) => {item}).toList()")
                 }
-                Some(TypeDef::Map(_)) => format!("{expr} as Map"),
+                Some(TypeDef::Map(m)) => {
+                    let raw = match m.tagged {
+                        Some(tag) => format!("_untag({}, {expr}, '{}')", tag.0, to_pascal_case(n)),
+                        None => expr.to_owned(),
+                    };
+                    format!(
+                        "({raw} as CborMap).map<{}, {}>((k, v) => MapEntry({}, {}))",
+                        typeref_to_dart(&m.key_ty, opts),
+                        typeref_to_dart(&m.val_ty, opts),
+                        cbor_from_expr(&m.key_ty, "k", module, opts),
+                        cbor_from_expr(&m.val_ty, "v", module, opts)
+                    )
+                }
                 Some(TypeDef::Enum(_)) => {
                     let cls = to_pascal_case(n);
                     format!("{cls}._fromCborValue({expr})")
@@ -1133,7 +1166,11 @@ fn cbor_to_expr_tagged(ty: &TypeRef, field: &str, module: &IrModule, opts: &Code
                 Some(TypeDef::Map(m)) => {
                     let tags = match m.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
                     let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
-                    format!("CborMap({field}{t})")
+                    format!(
+                        "CborMap({field}.map<CborValue, CborValue>((k, v) => MapEntry({}, {})){t})",
+                        cbor_to_expr(&m.key_ty, "k", module, opts),
+                        cbor_to_expr(&m.val_ty, "v", module, opts)
+                    )
                 }
                 Some(TypeDef::Enum(_)) | Some(TypeDef::Struct(_)) | None =>
                     format!("{field}._toCborValue({tags})"),
@@ -1154,6 +1191,20 @@ fn cbor_map_key(key: &FieldKey) -> String {
 }
 
 // ── Test default values ───────────────────────────────────────────────────────
+
+/// A table literal for a test: one entry when its key and value are
+/// primitives, else empty.
+fn test_table_for(m: &MapDef, opts: &CodegenOptions) -> String {
+    let (k, v) = (typeref_to_dart(&m.key_ty, opts), typeref_to_dart(&m.val_ty, opts));
+    match (&m.key_ty, &m.val_ty) {
+        (TypeRef::Primitive(_), TypeRef::Primitive(_)) => format!(
+            "<{k}, {v}>{{{}: {}}}",
+            test_default_for(&m.key_ty, &Occurrence::Required, opts),
+            test_default_for(&m.val_ty, &Occurrence::Required, opts)
+        ),
+        _ => format!("<{k}, {v}>{{}}"),
+    }
+}
 
 fn test_default_for(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     if matches!(occ, Occurrence::Optional) {

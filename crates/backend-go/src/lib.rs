@@ -17,7 +17,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, IrModule, LiteralValue, Occurrence,
-    Primitive, StructDef, TypeDef, TypeRef,
+    MapDef, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 /// The fxamacker/cbor release generated CBOR modules require.
@@ -571,13 +571,20 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     w.line(&format!("// Package {pkg} encodes and decodes the types of the {} CDDL schema.", module.name));
     w.line(&format!("package {pkg}"));
     w.blank();
+    // Tables (`{ * tstr => uint }`) bring their own helpers.
+    let tables = module.types.values().any(|d| matches!(d, TypeDef::Map(_)));
     w.line("import (");
     if opts.is_json() {
-        for imp in ["\"bytes\"", "\"encoding/base64\"", "\"encoding/json\"", "\"fmt\"", "\"strings\""] {
+        let mut imps = vec!["\"bytes\"", "\"encoding/base64\"", "\"encoding/json\"", "\"fmt\""];
+        if tables { imps.push("\"slices\""); }
+        imps.push("\"strings\"");
+        for imp in imps {
             w.line(&format!("\t{imp}"));
         }
     } else {
+        if tables { w.line("\t\"bytes\""); }
         w.line("\t\"fmt\"");
+        if tables { w.line("\t\"slices\""); }
         w.blank();
         w.line("\t\"github.com/fxamacker/cbor/v2\"");
     }
@@ -595,6 +602,12 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     for line in helpers.lines().chain([""]).chain(COMMON_HELPERS.lines()) {
         if line.is_empty() { w.blank() } else { w.line(line) }
     }
+    if tables {
+        let entries = if opts.is_json() { JSON_TABLE_HELPERS } else { CBOR_TABLE_HELPERS };
+        for line in [""].into_iter().chain(TABLE_HELPERS.lines()).chain([""]).chain(entries.lines()) {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
+    }
     tabify(w.finish())
 }
 
@@ -604,7 +617,7 @@ fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &Code
         TypeDef::Enum(e)   => emit_enum(w, e, opts),
         TypeDef::Array(a)  => emit_array(w, a, opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map(w, m, opts),
     }
 }
 
@@ -1509,6 +1522,55 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     emit_encode_decode(w, &name, opts);
 }
 
+// ── Map ───────────────────────────────────────────────────────────────────────
+
+/// A table (`{ * tstr => uint }`): a Go map (dgtlrift/cddlc#82).
+fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    let name = to_pascal_case(&m.name);
+    let key = go_type(&m.key_ty);
+    let val = go_type(&m.val_ty);
+    cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("//"));
+    if m.deprecated { w.line("//"); w.line("// Deprecated: marked deprecated in the schema."); }
+    w.line(&format!("type {name} map[{key}]{val}"));
+    w.blank();
+
+    let tag = if opts.is_json() { None } else { m.tagged };
+    w.line(&format!("// {} writes v as a {} map, in the order of its encoded keys.", marshal_name(opts), format_name(opts)));
+    w.line(&format!("func (v {name}) {}() ([]byte, error) {{", marshal_name(opts)));
+    w.indent();
+    let each = format!(
+        "encodeTable(map[{key}]{val}(v), func(x {val}) ([]byte, error) {{ return {} }})",
+        enc_expr(&m.val_ty, "x")
+    );
+    return_encoded(w, tag, &each);
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("// {} reads v from a {} map, checking each entry's types.", unmarshal_name(opts), format_name(opts)));
+    w.line(&format!("func (v *{name}) {}(data []byte) error {{", unmarshal_name(opts)));
+    w.indent();
+    untag_input(w, tag, &name);
+    w.line(&format!("entries, err := decodeTable[{key}](r, {})", go_str(&name)));
+    w.line("if err != nil {");
+    w.line("    return err");
+    w.line("}");
+    w.line(&format!("out := make({name}, len(entries))"));
+    w.line("for k, r := range entries {");
+    w.indent();
+    w.line(&format!("var x {val}"));
+    emit_decode(w, &m.val_ty, "r", "x", &format!("{name} value"));
+    w.line("out[k] = x");
+    w.dedent();
+    w.line("}");
+    w.line("*v = out");
+    w.line("return nil");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    emit_encode_decode(w, &name, opts);
+}
+
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
@@ -1562,6 +1624,70 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
 
 // ── Test file ─────────────────────────────────────────────────────────────────
 
+/// Table helpers (dgtlrift/cddlc#82): entries are written in the order of
+/// their encoded keys, so the output is deterministic.
+const TABLE_HELPERS: &str = r#"// encodeTable writes a table's entries in the order of their encoded keys.
+func encodeTable[K comparable, V any](m map[K]V, val func(V) ([]byte, error)) ([]byte, error) {
+	type entry struct{ k, v []byte }
+	es := make([]entry, 0, len(m))
+	for k, x := range m {
+		kb, err := marshal(k)
+		if err != nil {
+			return nil, err
+		}
+		vb, err := val(x)
+		if err != nil {
+			return nil, fmt.Errorf("[%v]: %w", k, err)
+		}
+		es = append(es, entry{kb, vb})
+	}
+	slices.SortFunc(es, func(a, b entry) int { return bytes.Compare(a.k, b.k) })
+	keys := make([][]byte, len(es))
+	vals := make([][]byte, len(es))
+	for i, e := range es {
+		keys[i], vals[i] = e.k, e.v
+	}
+	return encodeEntries(keys, vals)
+}
+
+// decodeTable reads a map's entries, each key as a K.
+func decodeTable[K comparable](r []byte, at string) (map[K]raw, error) {
+	if kindOf(r) != kindMap {
+		return nil, mismatch(at, "a map", r)
+	}
+	var m map[K]raw
+	if err := unmarshal(r, &m); err != nil {
+		return nil, fmt.Errorf("%s: %w", at, err)
+	}
+	return m, nil
+}"#;
+
+const CBOR_TABLE_HELPERS: &str = r#"// encodeEntries writes encoded keys and values as a CBOR map.
+func encodeEntries(keys, vals [][]byte) ([]byte, error) {
+	out := head(5, uint64(len(keys)))
+	for i, k := range keys {
+		out = append(out, k...)
+		out = append(out, vals[i]...)
+	}
+	return out, nil
+}"#;
+
+const JSON_TABLE_HELPERS: &str = r#"// encodeEntries writes encoded keys and values as a JSON object.
+func encodeEntries(keys, vals [][]byte) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(k)
+		buf.WriteByte(':')
+		buf.Write(vals[i])
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
+}"#;
+
 const TEST_HELPERS: &str = r#"type encodable interface {
 	Encode() ([]byte, error)
 }
@@ -1606,7 +1732,7 @@ fn emit_tests(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
             TypeDef::Enum(e) => emit_enum_tests(&mut w, e, module, opts),
             TypeDef::Alias(a) => emit_alias_tests(&mut w, a, module),
             TypeDef::Array(a) => emit_array_tests(&mut w, a, module),
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => emit_map_tests(&mut w, m, module),
         }
     }
     tabify(w.finish())
@@ -1695,10 +1821,23 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, module: &IrModule) {
     test_fn(w, &format!("Test{name}RoundtripItems"), &[format!("roundtrip(t, {name}{{{item}, {item}}}, Decode{name})")]);
 }
 
+fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, module: &IrModule) {
+    let name = to_pascal_case(&m.name);
+    test_fn(w, &format!("Test{name}RoundtripEmpty"), &[format!("roundtrip(t, {name}{{}}, Decode{name})")]);
+    test_fn(w, &format!("Test{name}RoundtripEntries"), &[format!("roundtrip(t, {}, Decode{name})", go_map_value(m, module, true, 1))]);
+}
+
 // ── Test values ───────────────────────────────────────────────────────────────
 
 /// Nesting depth past which a named type's test value is not built further.
 const MAX_FIXTURE_DEPTH: usize = 4;
+
+/// A table with one entry.
+fn go_map_value(m: &MapDef, module: &IrModule, explicit: bool, depth: usize) -> String {
+    let key = go_value(&m.key_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
+    let val = go_value(&m.val_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
+    format!("{}{{{key}: {val}}}", to_pascal_case(&m.name))
+}
 
 fn go_struct_value(s: &StructDef, module: &IrModule, explicit: bool, depth: usize) -> String {
     let fields: Vec<String> = s.fields.iter().map(|f| {
@@ -1783,7 +1922,8 @@ fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: 
                 Some(TypeDef::Alias(a)) => format!("{tn}({})", go_value(&a.ty, &Occurrence::Required, &a.constraints, module, explicit, depth + 1)),
                 Some(TypeDef::Enum(e)) => e.variants.first().map(|v| go_variant_value(e, v, module, depth)).unwrap_or_else(|| format!("{tn}{{}}")),
                 Some(TypeDef::Array(_)) => format!("{tn}{{}}"),
-                Some(TypeDef::Map(_)) | None => format!("{tn}{{}}"),
+                Some(TypeDef::Map(m)) => go_map_value(m, module, explicit, depth),
+                None => format!("{tn}{{}}"),
             }
         }
     }

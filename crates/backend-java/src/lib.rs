@@ -26,7 +26,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, FieldDef, IrModule, LiteralValue,
-    Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 /// Library versions the generated `pom.xml` pins.
@@ -62,7 +62,6 @@ impl Backend for JavaBackend {
             GeneratedFile { path: format!("{dir}/src/main/java/{pkg_dir}/Cddl.java"), content: emit_runtime(&cx) },
         ];
         for (_, def) in &module.types {
-            if matches!(def, TypeDef::Map(_)) { continue; }
             let class = java_type_name(def.name());
             files.push(GeneratedFile {
                 path: format!("{dir}/src/main/java/{pkg_dir}/{class}.java"),
@@ -728,7 +727,7 @@ fn emit_type_file(cx: &Cx, def: &TypeDef) -> String {
         TypeDef::Enum(e) => emit_sealed_enum(&mut w, cx, e),
         TypeDef::Array(a) => emit_array(&mut w, cx, a),
         TypeDef::Alias(a) => emit_alias(&mut w, cx, a),
-        TypeDef::Map(_) => {}
+        TypeDef::Map(m) => emit_table(&mut w, cx, m),
     }
     w.finish()
 }
@@ -1282,6 +1281,64 @@ fn emit_array(w: &mut IndentWriter, cx: &Cx, a: &ArrayDef) {
     w.line("}");
 }
 
+// ── Table ─────────────────────────────────────────────────────────────────────
+
+/// A table (`{ * tstr => uint }`): a record holding a `Map` (dgtlrift/cddlc#82).
+/// The value model reads a map's keys as text, so its keys are text.
+fn emit_table(w: &mut IndentWriter, cx: &Cx, m: &MapDef) {
+    let class = java_type_name(&m.name);
+    let key = java_type(&m.key_ty, true, None);
+    let val = java_type(&m.val_ty, true, None);
+    emit_javadoc(w, m.doc.as_deref(), &format!("The {} table.", m.name));
+    if m.deprecated { w.line("@Deprecated"); }
+    jsonb_annotations(w, cx, &class);
+    let ann = if cx.ee() { format!("@{BV}.NotNull ") } else { String::new() };
+    w.line(&format!("public record {class}({ann}Map<{key}, {val}> entries) {{"));
+    w.indent();
+    w.line("/** Checks that the entries are present; throws {@link IllegalArgumentException}. */");
+    w.line("public void validate() {");
+    w.line(&format!("    if (this.entries == null) throw Cddl.invalid({}, \"missing entries\");", java_str(&class)));
+    w.line(&format!(
+        "    for (Map.Entry<{key}, {val}> e : this.entries.entrySet()) if (e.getKey() == null || e.getValue() == null) throw Cddl.invalid({}, \"null entry\");",
+        java_str(&class)
+    ));
+    w.line("}");
+    w.blank();
+    w.line("/** This value in the format-neutral value model. */");
+    w.line("public Object toRaw() {");
+    w.indent();
+    w.line("validate();");
+    w.line("Map<Object, Object> m = new LinkedHashMap<>();");
+    w.line(&format!(
+        "for (Map.Entry<{key}, {val}> e : this.entries.entrySet()) m.put({}, {});",
+        to_raw(&m.key_ty, "e.getKey()"),
+        to_raw(&m.val_ty, "e.getValue()")
+    ));
+    let ret = match m.tagged { Some(t) => format!("Cddl.tag({}L, m)", t.0), None => "m".into() };
+    w.line(&format!("return {ret};"));
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("/** Reads a {class} from the value model, checking each entry's types. */"));
+    w.line(&format!("public static {class} fromRaw(Object raw) {{"));
+    w.indent();
+    let raw = match m.tagged { Some(t) => format!("Cddl.untag(raw, {}L, {})", t.0, java_str(&class)), None => "raw".into() };
+    w.line(&format!("Map<{key}, {val}> out = new LinkedHashMap<>();"));
+    w.line(&format!(
+        "for (Map.Entry<String, Object> e : Cddl.asMap({raw}, {}).entrySet()) out.put({}, {});",
+        java_str(&class),
+        from_raw(&m.key_ty, "e.getKey()", &format!("{class} key"), None),
+        from_raw(&m.val_ty, "e.getValue()", &format!("{class} value"), None)
+    ));
+    w.line(&format!("return new {class}(out);"));
+    w.dedent();
+    w.line("}");
+    emit_encode_decode(w, cx, &class, false);
+    emit_jsonb_codec(w, cx, &class);
+    w.dedent();
+    w.line("}");
+}
+
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
 fn emit_alias(w: &mut IndentWriter, cx: &Cx, a: &AliasDef) {
@@ -1341,6 +1398,7 @@ fn emit_tests(cx: &Cx) -> String {
     w.blank();
     w.line("import java.nio.charset.StandardCharsets;");
     w.line("import java.util.List;");
+    w.line("import java.util.Map;");
     w.line("import org.junit.jupiter.api.Test;");
     w.blank();
     w.line("/** Roundtrip tests: each value encodes, decodes and compares equal. */");
@@ -1458,7 +1516,17 @@ fn emit_tests(cx: &Cx) -> String {
                     format!("roundtrip(original, original.encode(), {class}::decode, {class}.class);"),
                 ]);
             }
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => {
+                let class = java_type_name(&m.name);
+                test(&mut w, format!("{}RoundtripEmpty", camel(&m.name)), vec![
+                    format!("{class} original = new {class}(Map.of());"),
+                    format!("roundtrip(original, original.encode(), {class}::decode, {class}.class);"),
+                ]);
+                test(&mut w, format!("{}RoundtripEntries", camel(&m.name)), vec![
+                    format!("{class} original = {};", java_table_value(cx, m, true, 1)),
+                    format!("roundtrip(original, original.encode(), {class}::decode, {class}.class);"),
+                ]);
+            }
         }
     }
     w.dedent();
@@ -1547,10 +1615,18 @@ fn java_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint
                 Some(TypeDef::Alias(a)) => format!("new {class}({})", java_value(cx, &a.ty, &Occurrence::Required, &a.constraints, explicit, depth + 1)),
                 Some(TypeDef::Enum(e)) => e.variants.first().map(|v| java_variant_value(cx, e, v, depth)).unwrap_or_else(|| "null".into()),
                 Some(TypeDef::Array(_)) => format!("new {class}(List.of())"),
-                Some(TypeDef::Map(_)) | None => "null".into(),
+                Some(TypeDef::Map(m)) => java_table_value(cx, m, explicit, depth),
+                None => "null".into(),
             }
         }
     }
+}
+
+/// A table with one entry.
+fn java_table_value(cx: &Cx, m: &MapDef, explicit: bool, depth: usize) -> String {
+    let key = java_value(cx, &m.key_ty, &Occurrence::Required, &[], explicit, depth + 1);
+    let val = java_value(cx, &m.val_ty, &Occurrence::Required, &[], explicit, depth + 1);
+    format!("new {}(Map.of({key}, {val}))", java_type_name(&m.name))
 }
 
 /// A value just outside an alias's constraints, and the constraint it breaks.

@@ -271,7 +271,7 @@ readings = [* sensor-reading]
 | Named structs | `foo = { field: type, ? opt: type }` | Optional fields, integer map keys |
 | Type choices (enums) | `status = "ok" / "warn" / "error"` | String, integer, or mixed variants |
 | Arrays | `readings = [* float32]`, `[+ T]`, `[n*m T]` | Capacity from pragma or `--max-array` |
-| Open maps | `props = { * tstr => any }` | Parses, but not yet correctly lowered to IR — see [Known Gaps](#known-gaps-and-future-enhancements) |
+| Tables (open maps) | `props = { * tstr => any }`, `{ + uint => tstr }` | Any number of entries of the key and value types; a map that also has named members is not yet supported |
 | Type aliases | `device-id = tstr .size 16` | With optional constraints |
 | CBOR tags | `#6.1(uint)` | Tag verification on decode, emission on encode |
 | Generics | `pair<T> = [T, T]` | Monomorphised at use sites |
@@ -291,6 +291,7 @@ readings = [* sensor-reading]
 | Enums (string/int/mixed) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Arrays / typed lists | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Record arrays (`[a: uint, b: tstr]`) | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Tables (`{ * tstr => V }`) | ✓ | ✓ | ✓ | ✓¹ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Type aliases | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | CBOR tags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Optional fields | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -299,6 +300,12 @@ readings = [* sensor-reading]
 | dCBOR deterministic encoding | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | `#![no_std]` support | ✓ | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | Interop test harness | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
+
+¹ Generated, but not yet built and tested against .NET.
+
+In CBOR, Rust, Python, Go, C, C++ and C# tables take integer or text keys. JSON objects
+have text keys, and the TypeScript, Java and Lua value models read a map's keys as text, so
+there tables need `tstr` keys.
 
 ---
 
@@ -377,11 +384,8 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 - **Unwrapped groups** (`~group`) are not fully handled.
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
 - **Socket/plug rules** (`$socket /= T`) are not supported.
-- **CDDL tables** (`{* K => V}`) are not constructed as a distinct IR node — `cddlc-ir`'s
-  lowering pass never emits a `MapDef`, so table entries currently get mangled into a
-  struct field. This affects both codegen and `cddlc validate` (which detects the case
-  and reports it explicitly rather than mis-validating). Fixing it properly requires
-  changes across the parser/IR and all seven codegen backends.
+- **Maps that mix named members with computed keys** (`{ a: uint, * tstr => any }`) are
+  rejected with an "unsupported" error; tables (`{ * tstr => uint }`) are supported.
 
 ### Validator gaps (`cddlc validate`)
 
@@ -391,8 +395,6 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
   collapses these prelude names to `Primitive::Any` during lowering, before the name
   reaches the validator. Explicit tags written directly in a schema (`#6.0(tstr)`) are
   unaffected. See `crates/cddlc-validate/src/lib.rs` for detail.
-- **CDDL tables** are rejected with an explicit "not yet supported" error (see above)
-  rather than validated.
 - No **CSV** validation (JSON and CBOR only).
 
 ### Tooling gaps

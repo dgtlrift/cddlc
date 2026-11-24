@@ -729,3 +729,40 @@ fn record_optional_members_must_come_last() {
         assert!(err.contains("optional members must come last"), "{src}: {err}");
     }
 }
+
+// ── Tables (dgtlrift/cddlc#82) ────────────────────────────────────────────────
+
+#[test]
+fn computed_key_map_lowers_to_map_def() {
+    let m = compile("r = { * tstr => uint }\n");
+    let Some(TypeDef::Map(t)) = m.get("r") else { panic!("{:?}", m.get("r")) };
+    assert_eq!(t.key_ty, TypeRef::Primitive(Primitive::Tstr));
+    assert_eq!(t.val_ty, TypeRef::Primitive(Primitive::Uint));
+    assert!(matches!(t.occurrence, Occurrence::ZeroOrMore { .. }));
+
+    let m = compile("r = { + uint => tstr }\n");
+    let Some(TypeDef::Map(t)) = m.get("r") else { panic!() };
+    assert_eq!(t.key_ty, TypeRef::Primitive(Primitive::Uint));
+    assert!(matches!(t.occurrence, Occurrence::OneOrMore { .. }));
+}
+
+#[test]
+fn table_member_and_constrained_value() {
+    // An inline table member is a table type of its own.
+    let m = compile("r = { counts: { * tstr => uint } }\n");
+    assert!(matches!(m.get("r-counts"), Some(TypeDef::Map(_))));
+
+    // A value with control operators becomes an alias that carries them.
+    let m = compile("r = { * tstr => uint .le 9 }\n");
+    let Some(TypeDef::Map(t)) = m.get("r") else { panic!() };
+    assert_eq!(t.val_ty, TypeRef::Named("r-value".into()));
+    let Some(TypeDef::Alias(a)) = m.get("r-value") else { panic!() };
+    assert!(!a.constraints.is_empty());
+}
+
+#[test]
+fn mixed_map_is_unsupported() {
+    let parsed = parse_cddl("r = { a: uint, * tstr => any }\n", PathBuf::from("test.cddl")).unwrap();
+    let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect("mixed map").to_string();
+    assert!(err.contains("mixes named members with computed keys"), "{err}");
+}
