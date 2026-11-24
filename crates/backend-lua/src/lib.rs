@@ -141,8 +141,8 @@ fn lua_float(f: f64) -> String {
 }
 
 fn header(w: &mut IndentWriter, cx: &Cx) {
-    for l in cddlc_codegen::header_lines(cx.opts) {
-        w.line(&format!("-- {l}"));
+    for l in cddlc_codegen::header_comment(cx.opts, cddlc_codegen::CommentStyle::DashDash) {
+        w.line(&l);
     }
     w.line(&format!("-- Format: {}; Lua 5.3+", if cx.json() { "JSON (RFC 8259)" } else { "CBOR (RFC 8949)" }));
     if cx.opts.dcbor { w.line("-- Encoding: deterministic (dCBOR)"); }
@@ -164,9 +164,7 @@ fn doc(w: &mut IndentWriter, d: Option<&str>, fallback: &str) {
 
 fn emit_rockspec(cx: &Cx, dir: &str, file: &str) -> String {
     let mut s = String::new();
-    for l in cddlc_codegen::header_lines(cx.opts) {
-        s.push_str(&format!("-- {l}\n"));
-    }
+    s.push_str(&cddlc_codegen::header_text(cx.opts, cddlc_codegen::CommentStyle::DashDash));
     s.push_str(&format!(r#"rockspec_format = "3.0"
 package = "{pkg}"
 version = "0.1.0-1"

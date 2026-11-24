@@ -198,8 +198,8 @@ fn long_lit(n: i128) -> String {
 }
 
 fn header(w: &mut IndentWriter, cx: &Cx) {
-    for l in cddlc_codegen::header_lines(cx.opts) {
-        w.line(&format!("// {l}"));
+    for l in cddlc_codegen::header_comment(cx.opts, cddlc_codegen::CommentStyle::Slash) {
+        w.line(&l);
     }
     w.line(&format!("// Format: {}; flavor: {}", if cx.json() { "JSON (RFC 8259)" } else { "CBOR (RFC 8949)" },
         if cx.ee() { "Jakarta EE" } else { "Java SE" }));
@@ -258,9 +258,7 @@ fn emit_pom(dir: &str, opts: &CodegenOptions) -> String {
     dep(&mut deps, "org.junit.jupiter", "junit-jupiter", JUNIT, Some("test"));
 
     let mut head = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    for l in cddlc_codegen::header_lines(opts) {
-        head.push_str(&format!("<!-- {} -->\n", l.replace("--", "- -")));
-    }
+    head.push_str(&cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Xml));
     format!(r#"{head}<project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">

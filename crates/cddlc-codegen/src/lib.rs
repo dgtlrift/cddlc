@@ -6,7 +6,8 @@ pub mod backend;
 pub mod emit;
 
 pub use backend::{
-    header_lines, header_text, AllocStrategy, Backend, CodegenError, CodegenOptions,
+    cddl_boilerplate, comment_lines, header_comment, header_json, header_lines, header_text,
+    AllocStrategy, CommentStyle, Backend, CodegenError, CodegenOptions,
     CodegenOutput, Format, GeneratedFile, JavaFlavor, Language, GENERATED,
 };
 pub use emit::{
