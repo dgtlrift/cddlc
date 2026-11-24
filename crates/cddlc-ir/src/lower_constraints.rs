@@ -3,7 +3,7 @@
 /// Converts `TypeOp` entries from the parser AST into typed [`Constraint`]
 /// values on IR nodes.  Also handles the range operator (`..` / `...`).
 
-use cddlc_parser::{CtlOp, Type2, TypeOp, Value};
+use cddlc_parser::{CtlOp, MemberKind, Type2, TypeOp, Value};
 
 use crate::error::{IrError, IrWarning, IrWarningKind};
 use crate::types::{Constraint, LiteralValue, TypeRef};
@@ -26,8 +26,13 @@ pub fn lower_type_op(
 
         TypeOp::Control { op, operand } => {
             if let (CtlOp::Size, Some(signed)) = (&op.node, integer_base(base)) {
-                if let Some(bytes) = size_literal(&operand.node) {
-                    return Ok(integer_size(bytes, signed));
+                // An integer's size bounds its value; with a range of byte
+                // counts, the largest one does.
+                match size_operand(&operand.node) {
+                    Some(SizeOperand::Exact(bytes)) => return Ok(integer_size(bytes, signed)),
+                    Some(SizeOperand::Range { max: Some(bytes), .. }) => return Ok(integer_size(bytes, signed)),
+                    Some(SizeOperand::Range { max: None, .. }) => return Ok(vec![]),
+                    None => {}
                 }
             }
             lower_control_op(&op.node, &operand.node, rule_name, regex_hook, warnings)
@@ -50,11 +55,43 @@ fn integer_base(base: &Type2) -> Option<bool> {
     }
 }
 
-/// The byte count of a literal `.size N` operand.
-fn size_literal(operand: &Type2) -> Option<u64> {
-    match operand {
+/// A `.size` operand: a byte count, or a range of them.
+enum SizeOperand {
+    Exact(u64),
+    /// `max: None` when the range has no upper bound that fits.
+    Range { min: u64, max: Option<u64> },
+}
+
+/// A non-negative integer literal.
+fn count_literal(t: &Type2) -> Option<u64> {
+    match t {
         Type2::Value(Value::Uint(n)) => Some(*n),
         Type2::Value(Value::Int(n)) if *n >= 0 => Some(*n as u64),
+        _ => None,
+    }
+}
+
+/// The operand of `.size`: `N`, or a parenthesized `(N)`, `(lo..hi)` or
+/// `(lo...hi)` (dgtlrift/cddlc#70). The parser reads the parentheses as a
+/// group holding one type.
+fn size_operand(operand: &Type2) -> Option<SizeOperand> {
+    if let Some(n) = count_literal(operand) {
+        return Some(SizeOperand::Exact(n));
+    }
+    let Type2::Group(g) = operand else { return None };
+    let [choice] = g.node.choices.as_slice() else { return None };
+    let [entry] = choice.entries.as_slice() else { return None };
+    if entry.node.occurrence.is_some() { return None; }
+    let MemberKind::Type(t) = &entry.node.kind else { return None };
+    let [t1] = t.node.choices.as_slice() else { return None };
+    let lo = count_literal(&t1.node.base.node)?;
+    match t1.node.ops.as_slice() {
+        [] => Some(SizeOperand::Exact(lo)),
+        [TypeOp::Range { upper, inclusive }] => {
+            let hi = count_literal(&upper.node)?;
+            let max = if *inclusive { Some(hi) } else { hi.checked_sub(1) };
+            Some(SizeOperand::Range { min: lo, max })
+        }
         _ => None,
     }
 }
@@ -225,6 +262,16 @@ fn lower_control_op(
 // ── .size lowering ────────────────────────────────────────────────────────────
 
 fn lower_size(operand: &Type2, rule_name: &str) -> Result<Vec<Constraint>, IrError> {
+    match size_operand(operand) {
+        Some(SizeOperand::Exact(n)) => return Ok(vec![Constraint::SizeExact(n as usize)]),
+        Some(SizeOperand::Range { min, max }) => {
+            return Ok(vec![Constraint::SizeRange {
+                min: Some(min as usize),
+                max: max.map(|m| m as usize),
+            }]);
+        }
+        None => {}
+    }
     match operand {
         // .size N  — exact
         Type2::Value(Value::Uint(n)) => {
@@ -248,7 +295,7 @@ fn lower_size(operand: &Type2, rule_name: &str) -> Result<Vec<Constraint>, IrErr
         }
         _ => Err(IrError::BadSizeConstraint {
             rule:   rule_name.to_owned(),
-            reason: format!("unexpected .size operand: {:?}", operand),
+            reason: "the operand must be a byte count (`.size 8`) or a range of them (`.size (1..8)`)".into(),
         }),
     }
 }
