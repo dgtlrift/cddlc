@@ -245,7 +245,7 @@ fn test_generated_file_contains_encode_impl() {
     assert!(ok, "{stderr}");
 
     let content = fs::read_to_string(find_rs_file(&dir)).unwrap();
-    assert!(content.contains("impl<C> Encode<C> for Sensor"));
+    assert!(content.contains("impl<CddlcC> Encode<CddlcC> for Sensor"));
 }
 
 #[test]

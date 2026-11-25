@@ -235,7 +235,7 @@ fn test_struct_decl() {
 #[test]
 fn test_struct_encode_impl() {
     let g = compile("sensor = { id: uint, value: float32 }");
-    assert!(g.lib_rs.contains("impl<C> Encode<C> for Sensor"));
+    assert!(g.lib_rs.contains("impl<CddlcC> Encode<CddlcC> for Sensor"));
     assert!(g.lib_rs.contains("e.map(2u64)?"));
 }
 
@@ -293,7 +293,7 @@ fn test_string_enum_decl() {
 #[test]
 fn test_string_enum_encode() {
     let g = compile(r#"status = "ok" / "warn""#);
-    assert!(g.lib_rs.contains("impl<C> Encode<C> for Status"));
+    assert!(g.lib_rs.contains("impl<CddlcC> Encode<CddlcC> for Status"));
     assert!(g.lib_rs.contains("e.str(s.as_str())?"));  // owned String → .as_str()
 }
 
@@ -640,7 +640,7 @@ fn test_no_std_array_has_own_functions() {
     let g = compile_with_opts("readings = [* reading]\nreading = { v: uint }\nmsg = { r: readings }", no_std_opts());
     assert!(g.lib_rs.contains("pub type Readings = heapless::Vec<Reading, 16>;"), "{}", g.lib_rs);
     assert!(!g.lib_rs.contains("pub type Readings = Vec<"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("pub fn encode_readings<C, W: Write>(val: &Readings"), "{}", g.lib_rs);
+    assert!(g.lib_rs.contains("pub fn encode_readings<CddlcC, CddlcW: Write>(val: &Readings"), "{}", g.lib_rs);
     assert!(g.lib_rs.contains("pub fn decode_readings(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<Readings, DecodeError>"), "{}", g.lib_rs);
     assert!(g.lib_rs.contains("encode_readings(&self.r, e, ctx)?;"), "{}", g.lib_rs);
     assert!(g.lib_rs.contains("let val = decode_readings(d, ctx)?;"), "{}", g.lib_rs);

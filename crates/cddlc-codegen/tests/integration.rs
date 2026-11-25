@@ -113,7 +113,7 @@ fn test_struct_decl() {
 #[test]
 fn test_struct_encode_impl() {
     let code = generate("sensor = { id: uint, value: float32 }");
-    assert!(code.contains("impl<C> Encode<C> for Sensor"));
+    assert!(code.contains("impl<CddlcC> Encode<CddlcC> for Sensor"));
     assert!(code.contains("e.map(2u64)?"));
 }
 
@@ -174,7 +174,7 @@ fn test_string_enum_decl() {
 #[test]
 fn test_string_enum_encode() {
     let code = generate(r#"status = "ok" / "warn""#);
-    assert!(code.contains("impl<C> Encode<C> for Status"));
+    assert!(code.contains("impl<CddlcC> Encode<CddlcC> for Status"));
     assert!(code.contains("e.str(s.as_str())?"));
 }
 
