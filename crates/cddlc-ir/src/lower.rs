@@ -296,9 +296,7 @@ impl<'m> LowerCtx<'m> {
                     constraints.push(Constraint::Eq(lit.clone()));
                 } else {
                     for op in &t1.ops {
-                        let cs = lower_type_op(
-                            op, &t1.base.node, name, meta.regex_hook.as_deref(), &mut self.warnings,
-                        )?;
+                        let cs = self.lower_op(op, &t1.base.node, name, meta.regex_hook.as_deref(), 0)?;
                         constraints.extend(cs);
                     }
                 }
@@ -597,6 +595,155 @@ impl<'m> LowerCtx<'m> {
             alts = next;
         }
         Ok(alts)
+    }
+
+    /// The constraints a range or control operator puts on `base`. Those that
+    /// need the schema (`.within`, `.and`, `.bits`, `.plus`, `.cat`) are lowered
+    /// here; the others in [`lower_type_op`] (dgtlrift/cddlc#86).
+    fn lower_op(
+        &mut self,
+        op:    &cddlc_parser::TypeOp,
+        base:  &Type2,
+        rule:  &str,
+        hook:  Option<&str>,
+        depth: usize,
+    ) -> Result<Vec<Constraint>, IrError> {
+        use cddlc_parser::{CtlOp, TypeOp};
+        let TypeOp::Control { op: ctl, operand } = op else {
+            return lower_type_op(op, base, rule, hook, &mut self.warnings);
+        };
+        let operand = &operand.node;
+        let unchecked = |this: &mut Self, what: String| {
+            this.warnings.push(IrWarning {
+                rule:    Some(rule.to_owned()),
+                message: format!("{what} isn't checked by cddlc validate or generated code"),
+                kind:    crate::error::IrWarningKind::UncheckedControlOp,
+            });
+            Ok(vec![])
+        };
+        match &ctl.node {
+            // `T .within U` / `T .and U` (RFC 8610 §3.8.5): a value of both, so U's
+            // constraints too.
+            CtlOp::Within | CtlOp::And => {
+                let name = if matches!(ctl.node, CtlOp::Within) { ".within" } else { ".and" };
+                match self.type_constraints(operand, rule, hook, depth) {
+                    Some(cs) => cs,
+                    None => unchecked(self, format!("'{name}' with this operand")),
+                }
+            }
+            // `uint .bits flags` (RFC 8610 §3.8.2): the bit numbers the operand's
+            // values name are the only ones that may be set.
+            CtlOp::Bits => match self.bit_numbers(operand, rule) {
+                Some(bits) => Ok(vec![Constraint::Bits(bits)]),
+                None => unchecked(self, "'.bits' with this operand".into()),
+            },
+            // `1 .plus 2` and `"a" .cat "b"` (RFC 9165) compute a literal.
+            CtlOp::Other(name) if name == "plus" || name == "cat" => {
+                match (base, operand) {
+                    (Type2::Value(a), Type2::Value(b)) => match fold_literal(name, a, b) {
+                        Some(v) => Ok(vec![Constraint::Eq(v)]),
+                        None => Err(IrError::InvalidControlOp {
+                            op:   format!(".{name}"),
+                            ty:   "operands of these kinds".into(),
+                            rule: rule.to_owned(),
+                        }),
+                    },
+                    _ => unchecked(self, format!("'.{name}' on a value other than a literal")),
+                }
+            }
+            CtlOp::Other(name) if name == "abnf" || name == "abnfb" || name == "det" || name == "feature" => {
+                unchecked(self, format!("'.{name}'"))
+            }
+            _ => lower_type_op(op, base, rule, hook, &mut self.warnings),
+        }
+    }
+
+    /// The constraints the type `t2` puts on a value: a literal, a parenthesized
+    /// or named type with ranges or control operators. `None` when cddlc can't
+    /// reduce it to constraints.
+    fn type_constraints(
+        &mut self,
+        t2:    &Type2,
+        rule:  &str,
+        hook:  Option<&str>,
+        depth: usize,
+    ) -> Option<Result<Vec<Constraint>, IrError>> {
+        if depth > 8 {
+            return None;
+        }
+        let ty: Type = match t2 {
+            Type2::Value(v) => return Some(Ok(vec![Constraint::Eq(lower_value(v))])),
+            Type2::Group(g) => match strip_parens(&g.node).choices.as_slice() {
+                [gc] => match gc.entries.as_slice() {
+                    [e] if e.node.occurrence.is_none() => match &e.node.kind {
+                        MemberKind::Type(t) => t.node.clone(),
+                        _ => return None,
+                    },
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            Type2::Typename { name, args } if args.is_empty() => {
+                if Primitive::from_prelude(name.node.as_str()).is_some() {
+                    return Some(Ok(vec![])); // `.and uint`: no constraint of its own
+                }
+                let r = self.module.rules.iter().map(|sr| &sr.node)
+                    .find(|r| r.name.node.0 == name.node.0 && r.generic_params.is_empty())?;
+                match &r.kind {
+                    RuleKind::Type { ty, extend: false } => ty.node.clone(),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let [t1] = ty.choices.as_slice() else { return None };
+        let t1 = &t1.node;
+        if t1.ops.is_empty() {
+            return self.type_constraints(&t1.base.node, rule, hook, depth + 1);
+        }
+        let mut out = Vec::new();
+        for op in &t1.ops {
+            match self.lower_op(op, &t1.base.node, rule, hook, depth + 1) {
+                Ok(cs) => out.extend(cs),
+                Err(e) => return Some(Err(e)),
+            }
+        }
+        Some(Ok(out))
+    }
+
+    /// The bit numbers a `.bits` operand names: the unsigned integer values of
+    /// a group's members (`&( a: 0, b: 1 )`, `flags` with `flags = &(...)`).
+    fn bit_numbers(&self, operand: &Type2, rule: &str) -> Option<Vec<u64>> {
+        let values = match operand {
+            Type2::EnumGroup(_) | Type2::EnumTypename { .. } => self.enumeration_values(rule, operand).ok()?,
+            Type2::Value(Value::Uint(n)) => return Some(vec![*n]),
+            Type2::Typename { name, args } if args.is_empty() => {
+                let r = self.module.rules.iter().map(|sr| &sr.node)
+                    .find(|r| r.name.node.0 == name.node.0 && r.generic_params.is_empty())?;
+                match &r.kind {
+                    RuleKind::Type { ty, extend: false } => ty.node.clone(),
+                    RuleKind::Group { .. } => self.enumeration_values(rule, &Type2::EnumTypename {
+                        name: name.clone(),
+                        args: vec![],
+                    }).ok()?,
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let mut bits = Vec::new();
+        for c in &values.choices {
+            match &c.node.base.node {
+                Type2::Value(Value::Uint(n)) if c.node.ops.is_empty() => bits.push(*n),
+                Type2::EnumGroup(_) | Type2::EnumTypename { .. } | Type2::Typename { .. } if c.node.ops.is_empty() => {
+                    bits.extend(self.bit_numbers(&c.node.base.node, rule)?);
+                }
+                _ => return None,
+            }
+        }
+        bits.sort_unstable();
+        bits.dedup();
+        Some(bits)
     }
 
     /// A named type (`base`, made unique) for an enumeration used in place.
@@ -1049,9 +1196,7 @@ impl<'m> LowerCtx<'m> {
         // Gather constraints from control operators
         let mut constraints: Vec<Constraint> = Vec::new();
         for op in &t1.ops {
-            let cs = lower_type_op(
-                op, &t1.base.node, name, meta.regex_hook.as_deref(), &mut self.warnings,
-            )?;
+            let cs = self.lower_op(op, &t1.base.node, name, meta.regex_hook.as_deref(), 0)?;
             constraints.extend(cs);
         }
 
@@ -1531,7 +1676,7 @@ impl<'m> LowerCtx<'m> {
             }
         }
         for op in &t1.ops {
-            let cs = lower_type_op(op, &t1.base.node, rule_name, None, &mut self.warnings)?;
+            let cs = self.lower_op(op, &t1.base.node, rule_name, None, 0)?;
             constraints.extend(cs);
         }
 
@@ -1635,6 +1780,23 @@ impl<'m> LowerCtx<'m> {
             }
         }
     }
+}
+
+/// `a .plus b` (numbers) or `a .cat b` (text or bytes) as one literal.
+fn fold_literal(op: &str, a: &Value, b: &Value) -> Option<LiteralValue> {
+    let (a, b) = (lower_value(a), lower_value(b));
+    Some(match (op, a, b) {
+        ("plus", LiteralValue::Uint(x), LiteralValue::Uint(y)) => LiteralValue::Uint(x.checked_add(y)?),
+        ("plus", x @ (LiteralValue::Uint(_) | LiteralValue::Int(_)), y @ (LiteralValue::Uint(_) | LiteralValue::Int(_))) => {
+            let as_i = |v: LiteralValue| match v { LiteralValue::Uint(n) => n as i128, LiteralValue::Int(n) => n as i128, _ => 0 };
+            let sum = as_i(x) + as_i(y);
+            if sum >= 0 { LiteralValue::Uint(u64::try_from(sum).ok()?) } else { LiteralValue::Int(i64::try_from(sum).ok()?) }
+        }
+        ("plus", LiteralValue::Float(x), LiteralValue::Float(y)) => LiteralValue::Float(x + y),
+        ("cat", LiteralValue::Text(x), LiteralValue::Text(y)) => LiteralValue::Text(x + &y),
+        ("cat", LiteralValue::Bytes(mut x), LiteralValue::Bytes(y)) => { x.extend(y); LiteralValue::Bytes(x) }
+        _ => return None,
+    })
 }
 
 /// The most alternatives a map or array may expand to from group choices.

@@ -923,3 +923,25 @@ fn enumerations_are_choices_of_values() {
     let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect("type").to_string();
     assert!(err.contains("not a group"), "{err}");
 }
+
+// ── Control operators (dgtlrift/cddlc#86) ────────────────────────────────────
+
+#[test]
+fn unchecked_control_operators_warn() {
+    let r = compile_warns("r = tstr .abnf \"DIGIT\"\n");
+    assert!(
+        r.warnings.iter().any(|w| w.kind == cddlc_ir::IrWarningKind::UncheckedControlOp && w.message.contains(".abnf")),
+        "{:?}", r.warnings
+    );
+    let r = compile_warns("r = uint .within other\nother = uint / tstr\n");
+    assert!(r.warnings.iter().any(|w| w.kind == cddlc_ir::IrWarningKind::UncheckedControlOp), "{:?}", r.warnings);
+}
+
+#[test]
+fn plus_and_cat_compute_literals() {
+    let m = compile("r = 1 .plus 2\ns = \"a\" .cat \"b\"\n");
+    let Some(TypeDef::Alias(a)) = m.get("r") else { panic!() };
+    assert_eq!(a.constraints, vec![Constraint::Eq(cddlc_ir::LiteralValue::Uint(3))]);
+    let Some(TypeDef::Alias(a)) = m.get("s") else { panic!() };
+    assert_eq!(a.constraints, vec![Constraint::Eq(cddlc_ir::LiteralValue::Text("ab".into()))]);
+}
