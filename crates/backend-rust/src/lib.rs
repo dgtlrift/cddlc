@@ -469,9 +469,9 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, modul
 fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&s.name);
     w.line("#[allow(unused_variables)]");
-    w.line(&format!("impl<C> Encode<C> for {} {{", type_name));
+    w.line(&format!("impl<CddlcC> Encode<CddlcC> for {} {{", type_name));
     w.indent();
-    w.line("fn encode<W: Write>(&self, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {");
+    w.line("fn encode<CddlcW: Write>(&self, e: &mut Encoder<CddlcW>, ctx: &mut CddlcC) -> Result<(), EncodeError<CddlcW::Error>> {");
     w.indent();
 
     // Emit CBOR tag if present
@@ -903,9 +903,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &
 fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&e.name);
     w.line("#[allow(unused_variables)]");
-    w.line(&format!("impl<C> Encode<C> for {} {{", type_name));
+    w.line(&format!("impl<CddlcC> Encode<CddlcC> for {} {{", type_name));
     w.indent();
-    w.line("fn encode<W: Write>(&self, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {");
+    w.line("fn encode<CddlcW: Write>(&self, e: &mut Encoder<CddlcW>, ctx: &mut CddlcC) -> Result<(), EncodeError<CddlcW::Error>> {");
     w.indent();
 
     if let Some(tag) = e.tagged {
@@ -1280,7 +1280,7 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &Ir
     w.line(&format!("/// Writes a `{type_name}` as a CBOR map."));
     w.line("#[allow(unused_variables)]");
     w.line(&format!(
-        "pub fn encode_{snake}<C, W: Write>(val: &{type_name}, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {{"
+        "pub fn encode_{snake}<CddlcC, CddlcW: Write>(val: &{type_name}, e: &mut Encoder<CddlcW>, ctx: &mut CddlcC) -> Result<(), EncodeError<CddlcW::Error>> {{"
     ));
     w.indent();
     if let Some(tag) = m.tagged {
@@ -1352,7 +1352,7 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
     w.line(&format!("/// Writes a `{type_name}`: each `{elem}`'s {width} members, inline, in one CBOR array."));
     w.line("#[allow(unused_variables)]");
     w.line(&format!(
-        "pub fn encode_{snake}<C, W: Write>(val: &{type_name}, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {{"
+        "pub fn encode_{snake}<CddlcC, CddlcW: Write>(val: &{type_name}, e: &mut Encoder<CddlcW>, ctx: &mut CddlcC) -> Result<(), EncodeError<CddlcW::Error>> {{"
     ));
     w.indent();
     if let Some(tag) = a.tagged {
@@ -1432,7 +1432,7 @@ fn emit_array_no_std(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, 
     w.line(&format!("/// Writes a `{type_name}` as a CBOR array."));
     w.line("#[allow(unused_variables)]");
     w.line(&format!(
-        "pub fn encode_{snake}<C, W: Write>(val: &{type_name}, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {{"
+        "pub fn encode_{snake}<CddlcC, CddlcW: Write>(val: &{type_name}, e: &mut Encoder<CddlcW>, ctx: &mut CddlcC) -> Result<(), EncodeError<CddlcW::Error>> {{"
     ));
     w.indent();
     if let Some(tag) = a.tagged {
@@ -1586,9 +1586,9 @@ fn emit_tagged_newtype_encode(
     opts:      &CodegenOptions,
 ) {
     w.line("#[allow(unused_variables)]");
-    w.line(&format!("impl<C> Encode<C> for {} {{", type_name));
+    w.line(&format!("impl<CddlcC> Encode<CddlcC> for {} {{", type_name));
     w.indent();
-    w.line("fn encode<W: Write>(&self, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {");
+    w.line("fn encode<CddlcW: Write>(&self, e: &mut Encoder<CddlcW>, ctx: &mut CddlcC) -> Result<(), EncodeError<CddlcW::Error>> {");
     w.indent();
     w.line(&format!("e.tag(minicbor::data::Tag::new({}))?;", tag.0));
     emit_encode_value(w, inner, "self.0", &Occurrence::Required, opts, None);
@@ -1635,9 +1635,9 @@ fn emit_constrained_newtype_encode(
     opts:      &CodegenOptions,
 ) {
     w.line("#[allow(unused_variables)]");
-    w.line(&format!("impl<C> Encode<C> for {} {{", type_name));
+    w.line(&format!("impl<CddlcC> Encode<CddlcC> for {} {{", type_name));
     w.indent();
-    w.line("fn encode<W: Write>(&self, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {");
+    w.line("fn encode<CddlcW: Write>(&self, e: &mut Encoder<CddlcW>, ctx: &mut CddlcC) -> Result<(), EncodeError<CddlcW::Error>> {");
     w.indent();
     emit_encode_value(w, inner, "self.0", &Occurrence::Required, opts, None);
     w.line("Ok(())");
@@ -2427,7 +2427,7 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};");
     w.line("    use serde::{Deserialize, Deserializer, Serialize, Serializer, de};");
     w.blank();
-    w.line("    pub fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {");
+    w.line("    pub fn serialize<CddlcS: Serializer>(v: &[u8], s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.line("        if s.is_human_readable() {");
     w.line("            s.serialize_str(&URL_SAFE_NO_PAD.encode(v))");
     w.line("        } else {");
@@ -2457,7 +2457,7 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("        }");
     w.line("    }");
     w.blank();
-    w.line("    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {");
+    w.line("    pub fn deserialize<'de, CddlcD: Deserializer<'de>>(d: CddlcD) -> Result<Vec<u8>, CddlcD::Error> {");
     w.line("        if d.is_human_readable() {");
     w.line("            d.deserialize_str(BytesVisitor)");
     w.line("        } else {");
@@ -2469,7 +2469,7 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("    pub struct BytesRef<'a>(pub &'a [u8]);");
     w.blank();
     w.line("    impl Serialize for BytesRef<'_> {");
-    w.line("        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {");
+    w.line("        fn serialize<CddlcS: Serializer>(&self, s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.line("            serialize(self.0, s)");
     w.line("        }");
     w.line("    }");
@@ -2478,7 +2478,7 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("    pub struct Bytes(pub Vec<u8>);");
     w.blank();
     w.line("    impl<'de> Deserialize<'de> for Bytes {");
-    w.line("        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {");
+    w.line("        fn deserialize<CddlcD: Deserializer<'de>>(d: CddlcD) -> Result<Self, CddlcD::Error> {");
     w.line("            deserialize(d).map(Bytes)");
     w.line("        }");
     w.line("    }");
@@ -2487,14 +2487,14 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("    pub mod option {");
     w.line("        use serde::{Deserialize, Deserializer, Serializer};");
     w.blank();
-    w.line("        pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {");
+    w.line("        pub fn serialize<CddlcS: Serializer>(v: &Option<Vec<u8>>, s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.line("            match v {");
     w.line("                Some(bytes) => s.serialize_some(&super::BytesRef(bytes)),");
     w.line("                None => s.serialize_none(),");
     w.line("            }");
     w.line("        }");
     w.blank();
-    w.line("        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {");
+    w.line("        pub fn deserialize<'de, CddlcD: Deserializer<'de>>(d: CddlcD) -> Result<Option<Vec<u8>>, CddlcD::Error> {");
     w.line("            Ok(Option::<super::Bytes>::deserialize(d)?.map(|b| b.0))");
     w.line("        }");
     w.line("    }");
@@ -2503,11 +2503,11 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("    pub mod vec {");
     w.line("        use serde::{Deserialize, Deserializer, Serializer};");
     w.blank();
-    w.line("        pub fn serialize<S: Serializer>(v: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error> {");
+    w.line("        pub fn serialize<CddlcS: Serializer>(v: &[Vec<u8>], s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.line("            s.collect_seq(v.iter().map(|b| super::BytesRef(b)))");
     w.line("        }");
     w.blank();
-    w.line("        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {");
+    w.line("        pub fn deserialize<'de, CddlcD: Deserializer<'de>>(d: CddlcD) -> Result<Vec<Vec<u8>>, CddlcD::Error> {");
     w.line("            Ok(Vec::<super::Bytes>::deserialize(d)?.into_iter().map(|b| b.0).collect())");
     w.line("        }");
     w.line("    }");
@@ -2519,19 +2519,19 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("        struct Seq<'a>(&'a [Vec<u8>]);");
     w.blank();
     w.line("        impl Serialize for Seq<'_> {");
-    w.line("            fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {");
+    w.line("            fn serialize<CddlcS: Serializer>(&self, s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.line("                super::vec::serialize(self.0, s)");
     w.line("            }");
     w.line("        }");
     w.blank();
-    w.line("        pub fn serialize<S: Serializer>(v: &Option<Vec<Vec<u8>>>, s: S) -> Result<S::Ok, S::Error> {");
+    w.line("        pub fn serialize<CddlcS: Serializer>(v: &Option<Vec<Vec<u8>>>, s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.line("            match v {");
     w.line("                Some(items) => s.serialize_some(&Seq(items)),");
     w.line("                None => s.serialize_none(),");
     w.line("            }");
     w.line("        }");
     w.blank();
-    w.line("        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<Vec<u8>>>, D::Error> {");
+    w.line("        pub fn deserialize<'de, CddlcD: Deserializer<'de>>(d: CddlcD) -> Result<Option<Vec<Vec<u8>>>, CddlcD::Error> {");
     w.line("            let v = Option::<Vec<super::Bytes>>::deserialize(d)?;");
     w.line("            Ok(v.map(|items| items.into_iter().map(|b| b.0).collect()))");
     w.line("        }");
@@ -2612,7 +2612,7 @@ fn bytes_with(shape: ByteShape, occ: &Occurrence) -> (&'static str, bool) {
 /// Serde's own `Option` reads `null` as `None`, the same as an absent member;
 /// `#[serde(default)]` keeps absent members `None`.
 const PRESENT_NULL_HELPER: &str = r#"/// A present `null` member decodes as `Some(())`; an absent one stays `None`.
-fn present_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<()>, D::Error> {
+fn present_null<'de, CddlcD: serde::Deserializer<'de>>(d: CddlcD) -> Result<Option<()>, CddlcD::Error> {
     <()>::deserialize(d).map(Some)
 }"#;
 
@@ -2706,7 +2706,7 @@ fn emit_literal_marker_json(w: &mut IndentWriter, name: &str, lit: &LiteralValue
     w.blank();
     w.line(&format!("impl Serialize for {name} {{"));
     w.indent();
-    w.line("fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {");
+    w.line("fn serialize<CddlcS: serde::Serializer>(&self, s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.indent();
     w.line("Self::VALUE.serialize(s)");
     w.dedent();
@@ -2716,7 +2716,7 @@ fn emit_literal_marker_json(w: &mut IndentWriter, name: &str, lit: &LiteralValue
     w.blank();
     w.line(&format!("impl<'de> Deserialize<'de> for {name} {{"));
     w.indent();
-    w.line("fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {");
+    w.line("fn deserialize<CddlcD: serde::Deserializer<'de>>(d: CddlcD) -> Result<Self, CddlcD::Error> {");
     w.indent();
     w.line(&format!("let v = <{de_ty}>::deserialize(d)?;"));
     w.line("if v == Self::VALUE {");
@@ -2838,7 +2838,7 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
 
     w.line(&format!("impl Serialize for {ty} {{"));
     w.indent();
-    w.line("fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {");
+    w.line("fn serialize<CddlcS: serde::Serializer>(&self, serializer: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.indent();
     let has_optional = required < s.fields.len();
     if has_optional {
@@ -2853,7 +2853,7 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
         w.line(&format!("if self.{}.is_some() {{", field_ident(&f.name)));
         w.indent();
         w.line(&format!(
-            "if gap {{ return Err(S::Error::custom(\"{}: '{}' is set but an optional member before it isn't\")); }}",
+            "if gap {{ return Err(CddlcS::Error::custom(\"{}: '{}' is set but an optional member before it isn't\")); }}",
             s.name, f.name
         ));
         w.line("len += 1;");
@@ -2887,10 +2887,10 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
 
     w.line(&format!("impl<'de> Deserialize<'de> for {ty} {{"));
     w.indent();
-    w.line("fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {");
+    w.line("fn deserialize<CddlcD: serde::Deserializer<'de>>(deserializer: CddlcD) -> Result<Self, CddlcD::Error> {");
     w.indent();
-    w.line("struct V;");
-    w.line("impl<'de> serde::de::Visitor<'de> for V {");
+    w.line("struct CddlcVisitor;");
+    w.line("impl<'de> serde::de::Visitor<'de> for CddlcVisitor {");
     w.indent();
     w.line(&format!("type Value = {ty};"));
     w.line("fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {");
@@ -2927,7 +2927,7 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
     w.line("}");
     w.dedent();
     w.line("}");
-    w.line("deserializer.deserialize_seq(V)");
+    w.line("deserializer.deserialize_seq(CddlcVisitor)");
     w.dedent();
     w.line("}");
     w.dedent();
@@ -3105,28 +3105,28 @@ fn emit_flat_array_json(w: &mut IndentWriter, a: &ArrayDef, elem_ty: &str, width
     w.line(&format!("pub mod {snake}_flat {{"));
     w.indent();
     w.line("use super::*;");
-    w.line(&format!("pub fn serialize<S: serde::Serializer>(val: &[{elem_ty}], s: S) -> Result<S::Ok, S::Error> {{"));
+    w.line(&format!("pub fn serialize<CddlcS: serde::Serializer>(val: &[{elem_ty}], s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {{"));
     w.indent();
     w.line("use serde::ser::Error as _;");
     w.line("let mut items = Vec::new();");
     w.line("for item in val {");
     w.indent();
-    w.line("match serde_json::to_value(item).map_err(S::Error::custom)? {");
+    w.line("match serde_json::to_value(item).map_err(CddlcS::Error::custom)? {");
     w.line("    serde_json::Value::Array(m) => items.extend(m),");
-    w.line(&format!("    _ => return Err(S::Error::custom(\"{}: a record that isn't an array\")),", a.name));
+    w.line(&format!("    _ => return Err(CddlcS::Error::custom(\"{}: a record that isn't an array\")),", a.name));
     w.line("}");
     w.dedent();
     w.line("}");
     w.line("serde::Serialize::serialize(&items, s)");
     w.dedent();
     w.line("}");
-    w.line(&format!("pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<{elem_ty}>, D::Error> {{"));
+    w.line(&format!("pub fn deserialize<'de, CddlcD: serde::Deserializer<'de>>(d: CddlcD) -> Result<Vec<{elem_ty}>, CddlcD::Error> {{"));
     w.indent();
     w.line("use serde::de::Error as _;");
     w.line("let items = <Vec<serde_json::Value> as serde::Deserialize>::deserialize(d)?;");
-    w.line(&format!("if items.len() % {width} != 0 {{ return Err(D::Error::custom(\"{}: a partial group\")); }}", a.name));
+    w.line(&format!("if items.len() % {width} != 0 {{ return Err(CddlcD::Error::custom(\"{}: a partial group\")); }}", a.name));
     w.line(&format!(
-        "items.chunks({width}).map(|c| serde_json::from_value(serde_json::Value::Array(c.to_vec())).map_err(D::Error::custom)).collect()"
+        "items.chunks({width}).map(|c| serde_json::from_value(serde_json::Value::Array(c.to_vec())).map_err(CddlcD::Error::custom)).collect()"
     ));
     w.dedent();
     w.line("}");
@@ -3138,16 +3138,16 @@ fn emit_flat_array_json(w: &mut IndentWriter, a: &ArrayDef, elem_ty: &str, width
     w.line(&format!("pub mod {snake}_flat_option {{"));
     w.indent();
     w.line("use super::*;");
-    w.line(&format!("pub fn serialize<S: serde::Serializer>(val: &Option<Vec<{elem_ty}>>, s: S) -> Result<S::Ok, S::Error> {{"));
+    w.line(&format!("pub fn serialize<CddlcS: serde::Serializer>(val: &Option<Vec<{elem_ty}>>, s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {{"));
     w.line(&format!("    match val {{ Some(v) => super::{snake}_flat::serialize(v, s), None => s.serialize_none() }}"));
     w.line("}");
-    w.line(&format!("pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<{elem_ty}>>, D::Error> {{"));
+    w.line(&format!("pub fn deserialize<'de, CddlcD: serde::Deserializer<'de>>(d: CddlcD) -> Result<Option<Vec<{elem_ty}>>, CddlcD::Error> {{"));
     w.indent();
-    w.line(&format!("struct W(Vec<{elem_ty}>);"));
-    w.line("impl<'de> serde::Deserialize<'de> for W {");
-    w.line(&format!("    fn deserialize<D2: serde::Deserializer<'de>>(d: D2) -> Result<Self, D2::Error> {{ super::{snake}_flat::deserialize(d).map(W) }}"));
+    w.line(&format!("struct CddlcFlat(Vec<{elem_ty}>);"));
+    w.line("impl<'de> serde::Deserialize<'de> for CddlcFlat {");
+    w.line(&format!("    fn deserialize<CddlcD2: serde::Deserializer<'de>>(d: CddlcD2) -> Result<Self, CddlcD2::Error> {{ super::{snake}_flat::deserialize(d).map(CddlcFlat) }}"));
     w.line("}");
-    w.line("Ok(<Option<W> as serde::Deserialize>::deserialize(d)?.map(|w| w.0))");
+    w.line("Ok(<Option<CddlcFlat> as serde::Deserialize>::deserialize(d)?.map(|w| w.0))");
     w.dedent();
     w.line("}");
     w.dedent();
@@ -3213,7 +3213,7 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.blank();
         w.line(&format!("impl serde::Serialize for {type_name} {{"));
         w.indent();
-        w.line("fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {");
+        w.line("fn serialize<CddlcS: serde::Serializer>(&self, s: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
         w.indent();
         w.line("base64url_serde::serialize(&self.0, s)");
         w.dedent();
@@ -3223,7 +3223,7 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.blank();
         w.line(&format!("impl<'de> serde::Deserialize<'de> for {type_name} {{"));
         w.indent();
-        w.line("fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {");
+        w.line("fn deserialize<CddlcD: serde::Deserializer<'de>>(d: CddlcD) -> Result<Self, CddlcD::Error> {");
         w.indent();
         w.line("base64url_serde::deserialize(d).map(Self)");
         w.dedent();
