@@ -1239,8 +1239,13 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.blank();
         emit_tagged_newtype_decode(w, &type_name, tag, &a.ty, &a.constraints, opts);
     } else if a.constraints.is_empty() {
-        // Simple type alias
-        let inner_ty = typeref_to_rust(&a.ty, opts);
+        // Simple type alias. minicbor encodes a `Vec<u8>` as an array of
+        // integers; a bstr alias is a `ByteVec`, which it encodes as a bstr.
+        let inner_ty = if is_bstr(&a.ty) && !opts.no_std && !opts.is_json() {
+            "minicbor::bytes::ByteVec".to_owned()
+        } else {
+            typeref_to_rust(&a.ty, opts)
+        };
         w.line(&format!("pub type {} = {};", type_name, inner_ty));
     } else {
         // Constrained alias — newtype with validation
