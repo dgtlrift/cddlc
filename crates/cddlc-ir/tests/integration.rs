@@ -1048,3 +1048,16 @@ fn printf_and_join_warn() {
     let r = compile_warns("r = tstr .printf [\"%d\", 1]\n");
     assert!(r.warnings.iter().any(|w| w.message.contains("'.printf' isn't checked")), "{:?}", r.warnings);
 }
+
+#[test]
+fn test_literal_variant_names_are_identifiers_and_unique() {
+    // dgtlrift/cddlc#141: WebDriver BiDi's `script.SpecialNumber`.
+    let m = compile(r#"n = "NaN" / "-0" / "Infinity" / "-Infinity"
+t = "text/plain" / "1st" / "" / "a-b" / "a_b""#);
+    let names = |r: &str| match m.get(r).unwrap() {
+        TypeDef::Enum(e) => e.variants.iter().map(|v| v.name.to_string()).collect::<Vec<_>>(),
+        _ => panic!("not an enum"),
+    };
+    assert_eq!(names("n"), ["NaN", "Minus0", "Infinity", "MinusInfinity"]);
+    assert_eq!(names("t"), ["TextPlain", "V1st", "Empty", "AB", "AB4"]);
+}
