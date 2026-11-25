@@ -288,7 +288,7 @@ fn test_constrained_alias_validates_in_ctor() {
     let g = compile("device-id = tstr .size 16");
     assert!(g.source.contains("class DeviceId"));
     assert!(g.source.contains("CborValidationException"));
-    assert!(g.source.contains(".Length == 16"));
+    assert!(g.source.contains("UTF8.GetByteCount(value) == 16"), "{}", g.source);
 }
 
 #[test]
@@ -410,7 +410,7 @@ device-id = tstr .size 16
 "#);
     assert!(g.source.contains("class SensorMessage"));
     assert!(g.source.contains("class DeviceId"));
-    assert!(g.source.contains(".Length == 16"));
+    assert!(g.source.contains("UTF8.GetByteCount(value) == 16"), "{}", g.source);
     assert!(g.source.contains("WriteTag") && g.source.contains("1"));
 }
 
@@ -423,4 +423,49 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(g.source.contains("\"Log_Distance\""), "{}", g.source);
     assert!(!g.source.contains("\"freespace\""), "{}", g.source);
     assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
+}
+
+// ── Checked against .NET 8 (build tests and interop vectors) ─────────────────
+
+#[test]
+fn test_range_bounds_are_valid_csharp() {
+    let g = compile("temp = int .ge -40 .le 85");
+    assert!(g.source.contains("value >= -40L"), "{}", g.source);
+    assert!(g.source.contains("value <= 85L"), "{}", g.source);
+    assert!(!g.source.contains(">=="), "{}", g.source);
+}
+
+#[test]
+fn test_absent_optional_member_is_left_out() {
+    let g = compile("r = { id: uint, ? n: uint }");
+    assert!(g.source.contains("writer.WriteStartMap(1 + (this.N is not null ? 1 : 0));"), "{}", g.source);
+    assert!(g.source.contains("writer.WriteUInt64(this.N.Value);"), "{}", g.source);
+}
+
+#[test]
+fn test_inline_choice_is_object_tried_in_order() {
+    let g = compile("r = { v: int / float }");
+    assert!(g.source.contains("public object V { get; set; }"), "{}", g.source);
+    assert!(g.source.contains("case long alt_thisV:"), "{}", g.source);
+    assert!(g.source.contains("Cddl.Choice(reader, reader1 => (object?)reader1.ReadInt64(), reader1 => (object?)reader1.ReadDouble())"), "{}", g.source);
+}
+
+#[test]
+fn test_tagged_member_checks_its_tag() {
+    let g = compile("r = { t: #6.1(uint) }");
+    assert!(g.source.contains("Cddl.Tagged(reader, 1UL, reader1 => reader1.ReadUInt64())"), "{}", g.source);
+}
+
+#[test]
+fn test_integer_enum_writes_its_literal() {
+    let g = compile("priority = 1 / 2 / 3");
+    assert!(g.source.contains("writer.WriteUInt64(2UL)"), "{}", g.source);
+    assert!(g.source.contains("r => r.ReadUInt64() == 2UL ? Variant2.Instance"), "{}", g.source);
+}
+
+#[test]
+fn test_floats_keep_their_width() {
+    let g = compile("r = { a: float32, b: float64 }");
+    assert!(g.source.contains("Cddl.WriteFloat32(writer, this.A)"), "{}", g.source);
+    assert!(g.source.contains("Cddl.WriteFloat64(writer, this.B)"), "{}", g.source);
 }

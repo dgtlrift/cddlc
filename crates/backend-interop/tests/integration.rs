@@ -549,3 +549,14 @@ fn test_lua_harness() {
     assert!(lua.contains("assert.equal(\"aa\", got)"), "{lua}");
     assert!(lua.contains("hex(M.Reading.encode(got))"), "{lua}");
 }
+
+/// The TypeScript harness imports the source file the Node.js backend writes,
+/// named after the module as is, hyphens included.
+#[test]
+fn test_nodejs_harness_imports_hyphenated_module() {
+    let parsed  = parse_cddl("sensor = { id: uint }", PathBuf::from("my-schema.cddl")).expect("parse");
+    let lowered = lower(&parsed.value, 16, 64).expect("lower");
+    let files   = generate(&lowered.module, &InteropLangs::all(), &CodegenOptions::default());
+    let h = files.iter().find(|f| f.path.ends_with("interop.test.ts")).expect("harness");
+    assert!(h.content.contains("from '../src/my-schema.js';"), "{}", h.content);
+}

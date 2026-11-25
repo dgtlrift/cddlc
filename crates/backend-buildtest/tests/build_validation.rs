@@ -426,6 +426,20 @@ fn test_build_csharp() {
     assert_all_ok(&outcomes);
 }
 
+/// Build and test all schemas using the C# backend's JSON output (System.Text.Json).
+/// Requires: as test_build_csharp.
+/// Run: cargo test -p backend-buildtest --test build_validation test_build_csharp_json -- --ignored --nocapture
+#[test]
+#[ignore]
+fn test_build_csharp_json() {
+    let tmp  = work_dir("csharp-json");
+    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    eprintln!("\n=== C# JSON build test ===");
+    let outcomes = run_build_tests(&CSharpBackend, |d, f, n| build_csharp(d, f, n), &opts, tmp.path());
+    print_summary("C# JSON", &outcomes);
+    assert_all_ok(&outcomes);
+}
+
 /// Build and test all schemas using the Node.js backend (npm install + tsc + jest).
 /// Requires: npm in PATH
 /// Run: cargo test -p backend-buildtest --test build_validation test_build_nodejs -- --ignored --nocapture

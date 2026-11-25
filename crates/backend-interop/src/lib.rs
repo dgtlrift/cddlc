@@ -937,7 +937,8 @@ fn emit_csharp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
 // ── Node.js / TypeScript harness ──────────────────────────────────────────────
 
 fn emit_nodejs_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -> String {
-    let mod_name = schema.replace('-', "_");
+    // The Node.js backend names the source file after the module, as is.
+    let mod_name = schema;
     let mut w    = IndentWriter::new(2);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {

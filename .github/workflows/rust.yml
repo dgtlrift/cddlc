@@ -21,3 +21,84 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+
+  # The generated code for each language, built and tested with that
+  # language's own toolchain: every reference schema, in each format the
+  # backend writes (crates/backend-buildtest).
+  build-tests:
+    name: build tests (${{ matrix.lang }})
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - lang: rust
+          tests: test_build_rust test_build_rust_no_std test_build_rust_json
+        - lang: c
+          tests: test_build_c test_build_c_json
+        - lang: cpp
+          tests: test_build_cpp test_build_cpp_json
+        - lang: csharp
+          tests: test_build_csharp test_build_csharp_json
+        - lang: nodejs
+          tests: test_build_nodejs
+        - lang: python
+          tests: test_build_python test_build_python_json
+        - lang: go
+          tests: test_build_go test_build_go_json
+        - lang: java
+          tests: test_build_java test_build_java_json test_build_java_ee test_build_java_ee_json
+        - lang: lua
+          tests: test_build_lua test_build_lua_json
+        - lang: dart
+          tests: test_build_dart test_build_dart_json
+
+    env:
+      # A schema whose toolchain is missing fails instead of being skipped.
+      CDDLC_REQUIRE_TOOLS: '1'
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - if: matrix.lang == 'csharp'
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '8.0.x'
+    - if: matrix.lang == 'nodejs'
+      uses: actions/setup-node@v7
+      with:
+        node-version: '22'
+    - if: matrix.lang == 'python'
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+    - if: matrix.lang == 'python'
+      run: pip install 'cbor2>=6.0' pytest
+    - if: matrix.lang == 'go'
+      uses: actions/setup-go@v7
+      with:
+        go-version: 'stable'
+    - if: matrix.lang == 'java'
+      uses: actions/setup-java@v6
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    - if: matrix.lang == 'lua'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y lua5.4 liblua5.4-dev luarocks
+        luarocks --lua-version 5.4 --local install busted
+    - if: matrix.lang == 'dart'
+      uses: dart-lang/setup-dart@v1
+
+    - name: Build
+      run: cargo build
+    - name: Build tests
+      run: cargo test -p backend-buildtest --test build_validation -- --ignored --exact --nocapture ${{ matrix.tests }}
+    - name: Interop vectors
+      # The Rust-encoded vectors, decoded and re-encoded byte for byte by each
+      # language (no Dart harness yet).
+      if: matrix.lang != 'dart'
+      run: scripts/interop.sh ${{ matrix.lang }}
