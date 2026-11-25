@@ -431,8 +431,10 @@ another. With `CDDLC_REQUIRE_TOOLS=1`, as in CI, a missing toolchain fails inste
 A build that can't reach a package registry (a rate limit such as Maven Central's 429, a
 timeout, DNS) is retried `CDDLC_NETWORK_RETRIES` times (default 2). If it still can't, it's
 reported as *unavailable*, and in CI as a GitHub Actions warning, not as a failure. A registry
-outage therefore doesn't fail a required check. CI also caches each language's downloads
-between runs.
+outage therefore doesn't fail a required check on an ordinary pull request. A release PR
+(release-plz's `release-plz-*` branch, or the `release` label) is different: CI sets
+`CDDLC_REQUIRE_REGISTRIES`, and an unavailable schema fails it, so a release can't go out
+with a language that wasn't tested. CI also caches each language's downloads between runs.
 
 ### Published schemas
 

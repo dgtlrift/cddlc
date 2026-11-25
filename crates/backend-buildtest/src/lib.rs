@@ -720,8 +720,17 @@ where
 /// With `CDDLC_REQUIRE_TOOLS` set (as CI sets it), a skipped schema fails
 /// too, so a missing toolchain can't pass for a tested one.
 pub fn assert_all_ok(outcomes: &[BuildOutcome]) {
+    let set = |var: &str| std::env::var_os(var).is_some_and(|v| !v.is_empty());
+    assert_outcomes(outcomes, set("CDDLC_REQUIRE_TOOLS"), set("CDDLC_REQUIRE_REGISTRIES"));
+}
+
+/// [`assert_all_ok`], with `CDDLC_REQUIRE_TOOLS` and `CDDLC_REQUIRE_REGISTRIES`
+/// given.
+fn assert_outcomes(outcomes: &[BuildOutcome], require_tools: bool, require_registries: bool) {
     // A registry outage isn't the code's fault: warn (as a GitHub Actions
-    // annotation in CI) rather than fail, so it can't block a pull request.
+    // annotation in CI) rather than fail, so it can't block a pull request,
+    // unless CDDLC_REQUIRE_REGISTRIES is set (CI sets it on release PRs): a
+    // release must not go out with a language that couldn't be tested.
     let unavailable: Vec<(&String, &String)> = outcomes.iter()
         .filter_map(|o| match o {
             BuildOutcome::Unavailable { schema, reason } => Some((schema, reason)),
@@ -734,12 +743,15 @@ pub fn assert_all_ok(outcomes: &[BuildOutcome]) {
             "{} schema(s) not built because a package registry was unavailable ({}): {reason}",
             unavailable.len(), names.join(", ")
         );
+        if require_registries {
+            panic!("\n{msg}\nCDDLC_REQUIRE_REGISTRIES is set (a release): every schema must be built. Re-run when the registry is back.\n");
+        }
         eprintln!("\nWARNING: {msg}\n");
         if std::env::var_os("GITHUB_ACTIONS").is_some() {
             println!("::warning title=Package registry unavailable::{}", msg.replace('\n', " "));
         }
     }
-    if std::env::var_os("CDDLC_REQUIRE_TOOLS").is_some_and(|v| !v.is_empty()) {
+    if require_tools {
         let skipped: Vec<String> = outcomes.iter()
             .filter_map(|o| match o {
                 BuildOutcome::Skipped { reason } => Some(reason.clone()),
@@ -816,17 +828,28 @@ mod tests {
         assert_eq!(calls.get(), 1);
     }
 
-    #[test]
-    fn unavailable_schemas_do_not_fail_the_test() {
-        assert_all_ok(&[
+    fn unavailable() -> Vec<BuildOutcome> {
+        vec![
             BuildOutcome::Built { schema: "a".into(), files: 1, build_ms: 0 },
             BuildOutcome::Unavailable { schema: "b".into(), reason: "429".into() },
-        ]);
+        ]
     }
+
+    #[test]
+    fn unavailable_schemas_do_not_fail_a_pull_request() {
+        assert_outcomes(&unavailable(), true, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "CDDLC_REQUIRE_REGISTRIES is set")]
+    fn unavailable_schemas_fail_a_release() {
+        assert_outcomes(&unavailable(), true, true);
+    }
+
 
     #[test]
     #[should_panic(expected = "build(s) failed")]
     fn a_failed_schema_fails_the_test() {
-        assert_all_ok(&[failed("error[E0308]: mismatched types")]);
+        assert_outcomes(&[failed("error[E0308]: mismatched types")], false, false);
     }
 }

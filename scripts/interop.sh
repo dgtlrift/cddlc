@@ -11,7 +11,8 @@
 # A missing toolchain is reported, with the command that installs it, and the
 # language is skipped (it fails instead with CDDLC_REQUIRE_TOOLS set, as in
 # CI). A schema whose build can't reach a package registry (rate limit,
-# timeout) is retried, then reported as unavailable, not failed.
+# timeout) is retried, then reported as unavailable, not failed, unless
+# CDDLC_REQUIRE_REGISTRIES is set (CI sets it on release PRs).
 set -euo pipefail
 
 lang="${1:?usage: scripts/interop.sh <lang> [cddlc binary]}"
@@ -131,6 +132,13 @@ done
 
 if (( ${#unavailable[@]} )); then
     msg="$lang interop: ${#unavailable[@]} schema(s) not run because a package registry was unavailable: ${unavailable[*]}"
+    # A release (CDDLC_REQUIRE_REGISTRIES, set by CI on release PRs) must test
+    # every schema; anywhere else an outage is only a warning.
+    if [[ -n "${CDDLC_REQUIRE_REGISTRIES:-}" ]]; then
+        echo "$msg"
+        echo "CDDLC_REQUIRE_REGISTRIES is set (a release): every schema must run. Re-run when the registry is back."
+        exit 1
+    fi
     echo "WARNING: $msg"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
         echo "::warning title=Package registry unavailable::$msg"

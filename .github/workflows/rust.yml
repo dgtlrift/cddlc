@@ -5,6 +5,9 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+    # `labeled` / `unlabeled`: adding or removing the `release` label changes
+    # whether a registry outage blocks the PR (CDDLC_REQUIRE_REGISTRIES below).
+    types: [ opened, synchronize, reopened, labeled, unlabeled ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -58,6 +61,11 @@ jobs:
     env:
       # A schema whose toolchain is missing fails instead of being skipped.
       CDDLC_REQUIRE_TOOLS: '1'
+      # A release PR (release-plz's `release-plz-*` branch, or the `release`
+      # label) must test every schema: a package registry that stays
+      # unavailable fails it. On any other PR an outage is only a warning, so
+      # it doesn't block the merge.
+      CDDLC_REQUIRE_REGISTRIES: ${{ github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release-plz-') || contains(github.event.pull_request.labels.*.name, 'release')) && '1' || '' }}
 
     steps:
     - uses: actions/checkout@v7
