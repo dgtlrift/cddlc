@@ -801,6 +801,17 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
 
 // ── Enum ──────────────────────────────────────────────────────────────────────
 
+/// `, Eq, PartialOrd, Ord` for an enum whose variants hold only ordered
+/// primitives (not floats or other types), so it can key a `BTreeMap`
+/// (`{ * claim-label => any }`, dgtlrift/cddlc#140); empty otherwise.
+fn ord_derives(e: &EnumDef) -> &'static str {
+    let ordered = e.variants.iter().all(|v| match &v.ty {
+        TypeRef::Primitive(p) => !is_float(p),
+        _ => false,
+    });
+    if ordered { ", Eq, PartialOrd, Ord" } else { "" }
+}
+
 fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, e.doc.as_deref());
     if e.deprecated { w.line("#[deprecated]"); }
@@ -810,10 +821,11 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &
         matches!(&v.ty, TypeRef::Primitive(Primitive::Null))
     ).unwrap_or(true);
 
+    let ord = ord_derives(e);
     if first_is_unit {
-        w.line("#[derive(Debug, Clone, PartialEq, Default)]");
+        w.line(&format!("#[derive(Debug, Clone, PartialEq, Default{ord})]"));
     } else {
-        w.line("#[derive(Debug, Clone, PartialEq)]");
+        w.line(&format!("#[derive(Debug, Clone, PartialEq{ord})]"));
     }
     w.line(&format!("pub enum {} {{", to_pascal_case(&e.name)));
     w.indent();
@@ -1483,6 +1495,16 @@ fn is_bstr(ty: &TypeRef) -> bool {
 
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
+/// `, Eq, PartialOrd, Ord` for a newtype over an ordered primitive (not a
+/// float), so it can key a `BTreeMap` (dgtlrift/cddlc#140); empty otherwise.
+fn newtype_ord(ty: &TypeRef) -> &'static str {
+    match ty {
+        TypeRef::Primitive(p) if !is_float(p) => ", Eq, PartialOrd, Ord",
+        TypeRef::Tagged(_, inner) => newtype_ord(inner),
+        _ => "",
+    }
+}
+
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     emit_doc(w, a.doc.as_deref());
     if a.deprecated { w.line("#[deprecated]"); }
@@ -1492,7 +1514,7 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     // If there's a tag, wrap in a newtype struct
     if let Some(tag) = a.tagged {
         let inner_ty = typeref_to_rust(&a.ty, opts);
-        w.line("#[derive(Debug, Clone, PartialEq, Default)]");
+        w.line(&format!("#[derive(Debug, Clone, PartialEq, Default{})]", newtype_ord(&a.ty)));
         w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
         w.blank();
         emit_tagged_newtype_encode(w, &type_name, tag, &a.ty, opts);
@@ -1531,7 +1553,7 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         });
 
         if let Some(default_val) = size_default {
-            w.line("#[derive(Debug, Clone, PartialEq)]");
+            w.line(&format!("#[derive(Debug, Clone, PartialEq{})]", newtype_ord(&a.ty)));
             w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
             w.blank();
             w.line(&format!("impl Default for {} {{", type_name));
@@ -1544,7 +1566,7 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
             w.dedent();
             w.line("}");
         } else {
-            w.line("#[derive(Debug, Clone, PartialEq, Default)]");
+            w.line(&format!("#[derive(Debug, Clone, PartialEq, Default{})]", newtype_ord(&a.ty)));
             w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
         }
         w.blank();
@@ -2237,7 +2259,8 @@ fn emit_map_roundtrip(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     } else {
         // `.into()` makes a `ByteVec` or `Tagged` key or value from the plain one.
         w.line(&format!("let mut original = {type_name}::new();"));
-        w.line(&format!("original.insert({key}.into(), {val}.into());"));
+        // Parenthesized: `-1i64.into()` would negate the converted value.
+        w.line(&format!("original.insert(({key}).into(), ({val}).into());"));
         w.line("let mut buf = Vec::new();");
         w.line("minicbor::encode(&original, &mut buf).expect(\"encode\");");
         w.line(&format!("let decoded: {type_name} = minicbor::decode(&buf).expect(\"decode\");"));
@@ -2671,7 +2694,7 @@ fn emit_literal_marker_json(w: &mut IndentWriter, name: &str, lit: &LiteralValue
         _ => return,
     };
     w.line(&format!("/// Always the literal `{value}`."));
-    w.line("#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]");
+    w.line("#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]");
     w.line(&format!("pub struct {name};"));
     w.blank();
     w.line(&format!("impl {name} {{"));
@@ -2925,7 +2948,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
     let all_unit = e.variants.iter().all(unit_like);
 
     if all_unit {
-        w.line("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]");
+        w.line(&format!("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize{})]", ord_derives(e)));
         w.line(&format!("pub enum {type_name} {{"));
         w.indent();
         for (i, v) in e.variants.iter().enumerate() {
@@ -2938,7 +2961,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
         w.line("}");
     } else {
         let mut markers = Vec::new();
-        w.line("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]");
+        w.line(&format!("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize{})]", ord_derives(e)));
         w.line("#[serde(untagged)]");
         w.line(&format!("pub enum {type_name} {{"));
         w.indent();
@@ -3208,7 +3231,7 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
     } else {
-        w.line("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]");
+        w.line(&format!("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize{})]", newtype_ord(&a.ty)));
         w.line(&format!("pub struct {type_name}(pub {inner_ty});"));
     }
 
@@ -3270,7 +3293,7 @@ fn emit_roundtrip_tests_json(module: &IrModule, opts: &CodegenOptions) -> String
             TypeDef::Enum(e)   => emit_enum_roundtrip_json(&mut w, e, module),
             TypeDef::Alias(a)  => emit_alias_roundtrip_json(&mut w, a, opts),
             TypeDef::Array(a)  => emit_array_roundtrip_json(&mut w, a),
-            TypeDef::Map(m)    => emit_map_roundtrip_json(&mut w, m, opts),
+            TypeDef::Map(m)    => emit_map_roundtrip_json(&mut w, m, opts, module),
         }
         w.blank();
     }
@@ -3431,16 +3454,27 @@ fn emit_map_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     w.line("}");
 }
 
-fn emit_map_roundtrip_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+fn emit_map_roundtrip_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&m.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&m.name));
     w.line("#[test]");
     w.line(&format!("fn {test_name}() {{"));
     w.indent();
     w.line(&format!("let mut original = {type_name}::new();"));
+    // A JSON object's keys are text: a key enum that can hold text (`int /
+    // text`) gets a text key, which reads back as the same variant.
+    let text_key = match &m.key_ty {
+        TypeRef::Named(n) => match module.get(n) {
+            Some(TypeDef::Enum(e)) => e.variants.iter()
+                .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && literal_eq(&v.constraints).is_none())
+                .map(|v| format!("{}::{}(\"k\".to_string())", to_pascal_case(n), to_pascal_case(&v.name))),
+            _ => None,
+        },
+        _ => None,
+    };
     w.line(&format!(
         "original.insert({}, {});",
-        primitive_default_expr(&m.key_ty, opts),
+        text_key.unwrap_or_else(|| primitive_default_expr(&m.key_ty, opts)),
         primitive_default_expr(&m.val_ty, opts)
     ));
     w.line(&format!("let buf = encode_{type_name}(&original);"));
