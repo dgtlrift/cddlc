@@ -129,6 +129,21 @@ impl<'m> LowerCtx<'m> {
             }
         }
 
+        // A group's entries are inlined where it is used (dgtlrift/cddlc#83);
+        // groups aren't types, so one nothing refers to as a type is dropped
+        // (`$$g` isn't an identifier in any target language).
+        let root_name = self.module.rules.first().map(|sr| sr.node.name.node.0.clone());
+        let referenced: HashSet<SmolStr> = self.output.values().flat_map(collect_deps).collect();
+        let unused_groups: Vec<SmolStr> = self.output.keys()
+            .filter(|n| Some(*n) != root_name.as_ref() && !referenced.contains(*n))
+            .filter(|n| self.group_alternatives(n).is_some())
+            .cloned()
+            .collect();
+        for n in unused_groups {
+            self.output.shift_remove(&n);
+            self.sources.types.shift_remove(&n);
+        }
+
         // Pass 4: topological sort
         let sorted = topo_sort(&self.output)?;
 
@@ -179,11 +194,25 @@ impl<'m> LowerCtx<'m> {
                 self.output.insert(name, def);
             }
             RuleKind::Type { ty, extend: true } => {
-                self.lower_type_extend(&name, &ty.node)?;
+                // `$$g //= ( a: uint )` adds to a group (dgtlrift/cddlc#83).
+                match single_type2(&ty.node) {
+                    Some(Type2::Group(g)) => self.lower_group_extend(&name, &g.node.choices)?,
+                    _ => self.lower_type_extend(&name, &ty.node)?,
+                }
             }
             RuleKind::Group { group, extend: false } => {
-                // A group rule with `(` — treat as struct
-                let def = self.lower_group_as_struct(&name, &group.node.choices, &meta)?;
+                // `t = (int / uint)` is a parenthesized type, not a group.
+                let expanded = self.expand_groups(&name, &group.node.choices, false)?;
+                let def = match expanded.as_slice() {
+                    [gc] if matches!(gc.entries.as_slice(), [e]
+                        if e.node.occurrence.is_none() && matches!(e.node.kind, MemberKind::Type(_))) =>
+                    {
+                        let MemberKind::Type(ty) = &gc.entries[0].node.kind else { unreachable!() };
+                        self.lower_type_rule(&name, &ty.node, &meta)?
+                    }
+                    // A group rule with `(` — treat as struct
+                    _ => self.lower_group_as_struct(&name, &group.node.choices, &meta)?,
+                };
                 self.output.insert(name, def);
             }
             RuleKind::Group { group, extend: true } => {
@@ -403,6 +432,8 @@ impl<'m> LowerCtx<'m> {
         choices: &[GroupChoice],
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
+        let expanded = self.expand_groups(name, choices, false)?;
+        let choices = expanded.as_slice();
         // A map whose only member has a computed key (`{ * tstr => uint }`) is a
         // table: any number of entries whose keys and values have the given
         // types (RFC 8610 §3.5.1, dgtlrift/cddlc#82).
@@ -466,6 +497,119 @@ impl<'m> LowerCtx<'m> {
                 _ => false,
             },
             _ => false,
+        }
+    }
+
+    /// The entries of `choices` with each reference to a group (`g`), unwrapped
+    /// map or array (`~base`), group socket (`$$g`) and parenthesized group
+    /// replaced by the entries it stands for (RFC 8610 §2.1.2, §3.7, §3.9;
+    /// dgtlrift/cddlc#83). In an array, a repeated group (`[* g]`) is left as is.
+    fn expand_groups(
+        &self,
+        rule:     &str,
+        choices:  &[GroupChoice],
+        in_array: bool,
+    ) -> Result<Vec<GroupChoice>, IrError> {
+        choices.iter()
+            .map(|gc| Ok(GroupChoice { entries: self.expand_entries(rule, &gc.entries, in_array, 0)? }))
+            .collect()
+    }
+
+    fn expand_entries(
+        &self,
+        rule:     &str,
+        entries:  &[Spanned<cddlc_parser::MemberEntry>],
+        in_array: bool,
+        depth:    usize,
+    ) -> Result<Vec<Spanned<cddlc_parser::MemberEntry>>, IrError> {
+        let unsupported = |reason: &str| IrError::Unsupported { rule: rule.into(), reason: reason.into() };
+        if depth > 16 {
+            return Err(unsupported("a group that includes itself"));
+        }
+        let mut out = Vec::new();
+        for e in entries {
+            let MemberKind::Type(ty) = &e.node.kind else { out.push(e.clone()); continue };
+            let alternatives = match single_type2(&ty.node) {
+                Some(Type2::Typename { name, args }) if args.is_empty() => {
+                    match self.group_alternatives(name.node.as_str()) {
+                        Some(alts) => alts,
+                        None => { out.push(e.clone()); continue; }
+                    }
+                }
+                Some(Type2::Unwrap(name)) => match self.unwrap_alternatives(name.node.as_str()) {
+                    Some(alts) => alts,
+                    None => return Err(unsupported("`~` on a type other than a map or array")),
+                },
+                Some(Type2::Group(g)) => g.node.choices.iter().map(|c| c.entries.clone()).collect(),
+                _ => { out.push(e.clone()); continue; }
+            };
+            let optional = match e.node.occurrence.as_ref().map(|o| &o.node) {
+                None => false,
+                Some(AstOcc::Optional) => true,
+                // A repeated group: an array's is a later fix (dgtlrift/cddlc#90).
+                Some(_) if in_array => { out.push(e.clone()); continue; }
+                Some(_) => return Err(unsupported("a repeated group in a map")),
+            };
+            let entries = match alternatives.as_slice() {
+                [] => continue,
+                [only] => only,
+                _ => return Err(unsupported("a choice between groups (`//`)")),
+            };
+            for mut inner in self.expand_entries(rule, entries, in_array, depth + 1)? {
+                // `? g`: each of the group's members is optional.
+                if optional && inner.node.occurrence.is_none() {
+                    inner.node.occurrence = Some(Spanned::new(AstOcc::Optional, inner.span));
+                }
+                out.push(inner);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The alternatives of the group named `name` (each a list of entries), when
+    /// it is a group: a group rule, extensions with `//=`, or a group socket
+    /// (`$$g`), which may have none. `None` when `name` is a type.
+    fn group_alternatives(&self, name: &str) -> Option<Vec<Vec<Spanned<cddlc_parser::MemberEntry>>>> {
+        let mut alts = Vec::new();
+        let mut found = false;
+        for sr in &self.module.rules {
+            let r = &sr.node;
+            if r.name.node.0 != name || !r.generic_params.is_empty() {
+                continue;
+            }
+            found = true;
+            let group = match &r.kind {
+                RuleKind::Group { group, .. } => strip_parens(&group.node),
+                RuleKind::Type { ty, .. } => match single_type2(&ty.node) {
+                    Some(Type2::Group(g)) => strip_parens(&g.node),
+                    _ => return None,
+                },
+            };
+            // `t = (int / uint)`: a parenthesized type.
+            if let [gc] = group.choices.as_slice() {
+                if let [e] = gc.entries.as_slice() {
+                    if e.node.occurrence.is_none() {
+                        if let MemberKind::Type(t) = &e.node.kind {
+                            if !matches!(single_type2(&t.node), Some(Type2::Typename { .. } | Type2::Unwrap(_))) {
+                                return None;
+                            }
+                        }
+                    }
+                }
+            }
+            alts.extend(group.choices.iter().map(|c| c.entries.clone()));
+        }
+        (found || name.starts_with("$$")).then_some(alts)
+    }
+
+    /// The alternatives of the map or array type `~name` unwraps.
+    fn unwrap_alternatives(&self, name: &str) -> Option<Vec<Vec<Spanned<cddlc_parser::MemberEntry>>>> {
+        let rule = self.module.rules.iter().map(|sr| &sr.node)
+            .find(|r| r.name.node.0 == name && r.generic_params.is_empty())?;
+        let RuleKind::Type { ty, extend: false } = &rule.kind else { return None };
+        match single_type2(&ty.node)? {
+            Type2::Map(g) | Type2::Array(g) => Some(g.node.choices.iter().map(|c| c.entries.clone()).collect()),
+            _ => None,
         }
     }
 
@@ -553,6 +697,8 @@ impl<'m> LowerCtx<'m> {
         choices: &[GroupChoice],
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
+        let expanded = self.expand_groups(name, choices, false)?;
+        let choices = expanded.as_slice();
         let fields = choices.iter()
             .flat_map(|gc| gc.entries.iter())
             .map(|e| self.lower_member_entry(e, name))
@@ -677,6 +823,8 @@ impl<'m> LowerCtx<'m> {
         choices: &[GroupChoice],
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
+        let expanded = self.expand_groups(name, choices, true)?;
+        let choices = expanded.as_slice();
         // Detect homogeneous array: single entry with occurrence
         let entries: Vec<_> = choices.iter()
             .flat_map(|gc| gc.entries.iter())
@@ -1079,6 +1227,8 @@ impl<'m> LowerCtx<'m> {
     }
 
     fn lower_group_extend(&mut self, name: &str, choices: &[GroupChoice]) -> Result<(), IrError> {
+        let expanded = self.expand_groups(name, choices, false)?;
+        let choices = expanded.as_slice();
         // `//=` extension: add new fields to an existing struct
         let new_fields: Vec<FieldDef> = choices.iter()
             .flat_map(|gc| gc.entries.iter())
@@ -1342,6 +1492,31 @@ impl<'m> LowerCtx<'m> {
             }
         }
     }
+}
+
+/// The one Type2 of a type with no choices or operators.
+fn single_type2(ty: &Type) -> Option<&Type2> {
+    match ty.choices.as_slice() {
+        [t1] if t1.node.ops.is_empty() => Some(&t1.node.base.node),
+        _ => None,
+    }
+}
+
+/// A group without its redundant parentheses: `( a: uint )` parses as a group
+/// whose one entry is the parenthesized group.
+fn strip_parens(g: &cddlc_parser::GroupEntry) -> &cddlc_parser::GroupEntry {
+    if let [gc] = g.choices.as_slice() {
+        if let [e] = gc.entries.as_slice() {
+            if e.node.occurrence.is_none() {
+                if let MemberKind::Type(t) = &e.node.kind {
+                    if let Some(Type2::Group(inner)) = single_type2(&t.node) {
+                        return strip_parens(&inner.node);
+                    }
+                }
+            }
+        }
+    }
+    g
 }
 
 // ── Topological sort ──────────────────────────────────────────────────────────

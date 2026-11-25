@@ -1,0 +1,24 @@
+; Reference schema: groups inlined where they are used (RFC 8610 §2.1.2,
+; §3.7, §3.9): group references, a group made optional with ?, an unwrapped
+; map (~), a group socket ($$), and a group in a record array.
+
+message = {
+    header,
+    ? annotation,
+    ~stamp,
+    $$message-ext,
+    body: tstr,
+}
+
+header = ( id: uint, kind: tstr )
+
+annotation = ( note: tstr, ? author: tstr )
+
+stamp = { created: uint }
+
+$$message-ext //= ( version: uint )
+
+; A record whose first members come from a group
+point = [coords, label: tstr]
+
+coords = ( x: int, y: int )

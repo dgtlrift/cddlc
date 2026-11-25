@@ -788,3 +788,56 @@ fn mixed_map_limits() {
         assert!(err.contains(want), "{src}: {err}");
     }
 }
+
+// ── Groups inlined where they are used (dgtlrift/cddlc#83) ───────────────────
+
+/// The member names and occurrences of the struct `name`.
+fn members(m: &IrModule, name: &str) -> Vec<(String, bool)> {
+    let Some(TypeDef::Struct(st)) = m.get(name) else { panic!("{name}: {:?}", m.get(name)) };
+    st.fields.iter().map(|f| (f.name.to_string(), f.occurrence.is_required())).collect()
+}
+
+#[test]
+fn groups_are_inlined() {
+    let want = vec![("a".to_string(), true), ("b".to_string(), true)];
+    for src in [
+        "r = { g, b: tstr }\ng = ( a: uint )\n",
+        "r = { ~base, b: tstr }\nbase = { a: uint }\n",
+        "r = { $$g, b: tstr }\n$$g //= ( a: uint )\n",
+        "r = { (a: uint), b: tstr }\n",
+        "r = { g, b: tstr }\ng = ( h )\nh = ( a: uint )\n",
+    ] {
+        assert_eq!(members(&compile(src), "r"), want, "{src}");
+    }
+    // In a record array too.
+    let m = compile("r = [g, b: tstr]\ng = ( a: uint )\n");
+    assert_eq!(members(&m, "r"), want);
+
+    // `? g` makes each of its members optional; an empty socket adds none.
+    let m = compile("r = { ? g, b: tstr, $$none }\ng = ( a: uint, ? c: tstr )\n");
+    assert_eq!(members(&m, "r"), vec![("a".into(), false), ("c".into(), false), ("b".into(), true)]);
+
+    // A group used only by inlining isn't a type of its own.
+    let m = compile("r = { g }\ng = ( a: uint )\n");
+    assert!(m.get("g").is_none());
+}
+
+#[test]
+fn parenthesized_type_rule_is_a_type() {
+    let m = compile("t = (int / uint)\n");
+    assert!(matches!(m.get("t"), Some(TypeDef::Enum(_))), "{:?}", m.get("t"));
+}
+
+#[test]
+fn group_inlining_limits() {
+    for (src, want) in [
+        ("r = { * g }\ng = ( a: uint )\n", "repeated group in a map"),
+        ("r = { g }\ng = ( a: uint, g )\n", "includes itself"),
+        ("r = { g }\ng = ( a: uint // b: tstr )\n", "choice between groups"),
+        ("r = { ~t }\nt = uint\n", "other than a map or array"),
+    ] {
+        let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
+        let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect(src).to_string();
+        assert!(err.contains(want), "{src}: {err}");
+    }
+}
