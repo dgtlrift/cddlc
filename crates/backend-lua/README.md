@@ -58,6 +58,7 @@ are raised with `error()` and name the type and member
 | map (struct) | a table with the type as metatable: `T.new({ member = ... })`; members are snake_case, optional ones `nil` when absent |
 | enum | `{ kind = "Name", value = ... }`, made by `T.Name(value)` or `T.Name()` |
 | array | a sequence with the type as metatable: `T.new({ ... })` |
+| table (`{ * tstr => V }`) | a table from key to value with the type as metatable: `T.new({ [key] = value })`; keys are text, written in sorted order |
 | alias | the plain Lua value: `T.encode("...")` |
 | `uint` / `int` | integers; a uint above 2^63 is its 64-bit pattern (a negative integer), compared with `math.ult` |
 | `float16`, `float32` / `float64` | numbers, written as CBOR float32 / float64 |

@@ -29,7 +29,7 @@ use crate::lower_constraints::{lower_type_op, lower_value};
 use crate::prelude::is_prelude;
 use crate::types::{
     AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
-    FieldDef, FieldKey, IrModule, LiteralValue, Occurrence,
+    FieldDef, FieldKey, IrModule, LiteralValue, MapDef, MapRest, Occurrence,
     Primitive, Sources, StructDef, StructEncoding, TypeDef, TypeRef,
 };
 
@@ -111,6 +111,21 @@ impl<'m> LowerCtx<'m> {
             let rule = &sr.node;
             if rule.generic_params.is_empty() {
                 self.lower_rule(rule)?;
+            }
+        }
+
+        // The generated struct codecs read a map's keys as text, so the keys of
+        // a map's other entries are text too (checked once every alias is lowered).
+        for def in self.output.values() {
+            if let TypeDef::Struct(st) = def {
+                if let Some(rest) = &st.rest {
+                    if !self.is_text(&rest.key_ty) {
+                        return Err(IrError::Unsupported {
+                            rule:   st.name.to_string(),
+                            reason: "a computed key other than tstr alongside named members".into(),
+                        });
+                    }
+                }
             }
         }
 
@@ -255,8 +270,21 @@ impl<'m> LowerCtx<'m> {
                 Ok(TypeDef::Alias(def))
             }
 
-            // Any / MajorType → alias to Any
-            Type2::Any | Type2::MajorType(_) => {
+            // `#mt.ai` → the type it stands for (RFC 8610 §3.6)
+            Type2::MajorType(mt, ai) => {
+                let (ty, constraints) = major_type(*mt, *ai);
+                Ok(TypeDef::Alias(AliasDef {
+                    name:        name.into(),
+                    ty,
+                    constraints,
+                    tagged:      meta.tag,
+                    doc:         meta.doc.clone(),
+                    deprecated:  meta.deprecated,
+                }))
+            }
+
+            // Any → alias to Any
+            Type2::Any => {
                 Ok(TypeDef::Alias(AliasDef {
                     name:        name.into(),
                     ty:          TypeRef::Primitive(Primitive::Any),
@@ -375,22 +403,148 @@ impl<'m> LowerCtx<'m> {
         choices: &[GroupChoice],
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
+        // A map whose only member has a computed key (`{ * tstr => uint }`) is a
+        // table: any number of entries whose keys and values have the given
+        // types (RFC 8610 §3.5.1, dgtlrift/cddlc#82).
+        if let [gc] = choices {
+            if let [entry] = gc.entries.as_slice() {
+                if let MemberKind::KeyValue { key, value, .. } = &entry.node.kind {
+                    if let cddlc_parser::MemberKey::Type(key_ty) = &key.node {
+                        return self.lower_table(name, entry, key_ty, &value.node, meta);
+                    }
+                }
+            }
+        }
+
         // For now we take the first (and usually only) group choice.
         // Group choices (//= extensions) are handled by lower_group_extend.
-        let fields = choices.iter()
-            .flat_map(|gc| gc.entries.iter())
-            .map(|e| self.lower_member_entry(e, name))
-            .collect::<Result<Vec<_>, _>>()?;
+        // A member with a computed key holds the map's other entries
+        // (`{ a: uint, * tstr => any }`, dgtlrift/cddlc#82).
+        let mut fields = Vec::new();
+        let mut computed = None;
+        for e in choices.iter().flat_map(|gc| gc.entries.iter()) {
+            match &e.node.kind {
+                MemberKind::KeyValue { key, value, .. }
+                    if matches!(key.node, cddlc_parser::MemberKey::Type(_)) =>
+                {
+                    let cddlc_parser::MemberKey::Type(key_ty) = &key.node else { unreachable!() };
+                    if computed.is_some() {
+                        return Err(IrError::Unsupported {
+                            rule:   name.into(),
+                            reason: "a map with more than one member with a computed key".into(),
+                        });
+                    }
+                    computed = Some(self.lower_computed_entry(name, e, key_ty, &value.node, meta)?);
+                }
+                _ => fields.push(self.lower_member_entry(e, name)?),
+            }
+        }
+        let rest = computed.map(|(key_ty, val_ty, occurrence)| {
+            let taken = |n: &str| fields.iter().any(|f: &FieldDef| f.name == n);
+            let name = if taken("extra") { "extra_entries" } else { "extra" };
+            MapRest { name: name.into(), key_ty, val_ty, occurrence }
+        });
 
         Ok(TypeDef::Struct(StructDef {
             name:       name.into(),
             fields,
             encoding:   StructEncoding::Map,
+            rest,
             tagged:     meta.tag,
             dcbor:      false,
             doc:        meta.doc.clone(),
             deprecated: meta.deprecated,
         }))
+    }
+
+    /// Whether `ty` is `tstr`, directly or through aliases.
+    fn is_text(&self, ty: &TypeRef) -> bool {
+        match ty {
+            TypeRef::Primitive(Primitive::Tstr) => true,
+            TypeRef::Named(n) => match self.output.get(n.as_str()) {
+                Some(TypeDef::Alias(a)) => self.is_text(&a.ty),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Lower `{ occ K => V }` to a [`MapDef`].
+    fn lower_table(
+        &mut self,
+        name:   &str,
+        entry:  &Spanned<cddlc_parser::MemberEntry>,
+        key_ty: &Type,
+        val_ty: &Type,
+        meta:   &PragmaMeta,
+    ) -> Result<TypeDef, IrError> {
+        let (key_ty, val_ty, occurrence) = self.lower_computed_entry(name, entry, key_ty, val_ty, meta)?;
+        Ok(TypeDef::Map(MapDef {
+            name:       name.into(),
+            key_ty,
+            val_ty,
+            occurrence,
+            tagged:     meta.tag,
+            doc:        meta.doc.clone(),
+            deprecated: meta.deprecated,
+        }))
+    }
+
+    /// The key type, value type and occurrence of a member with a computed key
+    /// (`* tstr => uint`).
+    fn lower_computed_entry(
+        &mut self,
+        name:   &str,
+        entry:  &Spanned<cddlc_parser::MemberEntry>,
+        key_ty: &Type,
+        val_ty: &Type,
+        meta:   &PragmaMeta,
+    ) -> Result<(TypeRef, TypeRef, Occurrence), IrError> {
+        let me = &entry.node;
+        // A `; @capacity` on the member wins over one on the rule.
+        let mut occ_meta = PragmaMeta::from_pragmas(&me.pragmas);
+        if occ_meta.capacity.is_none() {
+            occ_meta.capacity = meta.capacity;
+        }
+        let occurrence = self.lower_occurrence(
+            me.occurrence.as_ref().map(|o| &o.node),
+            name,
+            &occ_meta,
+        );
+        let (key_ty, key_cs) = self.lower_type_to_ref(key_ty, name)?;
+        let key_ty = self.constrained_alias(name, "key", key_ty, key_cs);
+        let (val_ty, val_cs) = self.lower_field_type(val_ty, name, "value")?;
+        let val_ty = self.constrained_alias(name, "value", val_ty, val_cs);
+        Ok((key_ty, val_ty, occurrence))
+    }
+
+    /// A map key or value type with control operators (`{ * tstr => uint .le 9 }`)
+    /// becomes a named alias (`<rule>-value`) that carries them, since a
+    /// [`MapDef`] holds bare types.
+    fn constrained_alias(
+        &mut self,
+        rule:        &str,
+        part:        &str,
+        ty:          TypeRef,
+        constraints: Vec<Constraint>,
+    ) -> TypeRef {
+        if constraints.is_empty() {
+            return ty;
+        }
+        let mut name: SmolStr = format!("{rule}-{part}").into();
+        while self.output.contains_key(&name) || self.known_rules.contains(&name) {
+            name = format!("{name}-type").into();
+        }
+        self.known_rules.insert(name.clone());
+        self.output.insert(name.clone(), TypeDef::Alias(AliasDef {
+            name:        name.clone(),
+            ty,
+            constraints,
+            tagged:      None,
+            doc:         None,
+            deprecated:  false,
+        }));
+        TypeRef::Named(name)
     }
 
     fn lower_group_as_struct(
@@ -408,6 +562,7 @@ impl<'m> LowerCtx<'m> {
             name:       name.into(),
             fields,
             encoding:   StructEncoding::Map,
+            rest:       None,
             tagged:     meta.tag,
             dcbor:      false,
             doc:        meta.doc.clone(),
@@ -430,6 +585,15 @@ impl<'m> LowerCtx<'m> {
         );
 
         match &me.kind {
+            // In a group or record, a computed key can't be a named member.
+            MemberKind::KeyValue { key, .. }
+                if matches!(key.node, cddlc_parser::MemberKey::Type(_)) =>
+            {
+                Err(IrError::Unsupported {
+                    rule:   rule_name.into(),
+                    reason: "a member with a computed key outside a map".into(),
+                })
+            }
             MemberKind::KeyValue { key, value, .. } => {
                 let field_name: SmolStr = match &key.node {
                     cddlc_parser::MemberKey::Bareword(id) => id.0.clone(),
@@ -687,6 +851,7 @@ impl<'m> LowerCtx<'m> {
                     name:       name.into(),
                     fields:     fields?,
                     encoding:   StructEncoding::Map,
+                    rest:       None,
                     tagged:     meta.tag,
                     dcbor:      false,
                     doc:        meta.doc.clone(),
@@ -710,6 +875,14 @@ impl<'m> LowerCtx<'m> {
         );
 
         match &me.kind {
+            MemberKind::KeyValue { key, .. }
+                if matches!(key.node, cddlc_parser::MemberKey::Type(_)) =>
+            {
+                Err(IrError::Unsupported {
+                    rule:   rule_name.into(),
+                    reason: "a member with a computed key in a generic group".into(),
+                })
+            }
             MemberKind::KeyValue { key, value, .. } => {
                 let field_name: SmolStr = match &key.node {
                     cddlc_parser::MemberKey::Bareword(id) => id.0.clone(),
@@ -926,6 +1099,7 @@ impl<'m> LowerCtx<'m> {
                     name:       name.into(),
                     fields:     new_fields,
                     encoding:   StructEncoding::Map,
+                    rest:       None,
                     tagged:     None,
                     dcbor:      false,
                     doc:        None,
@@ -943,8 +1117,11 @@ impl<'m> LowerCtx<'m> {
         if let Some(p) = Primitive::from_prelude(name) {
             return Ok(TypeRef::Primitive(p));
         }
+        if let Some(tr) = crate::prelude::prelude_typeref(name) {
+            return Ok(tr);
+        }
         if is_prelude(name) {
-            return Ok(TypeRef::Primitive(Primitive::Any)); // tagged prelude types
+            return Ok(TypeRef::Primitive(Primitive::Any));
         }
         if self.known_rules.contains(name) {
             return Ok(TypeRef::Named(name.into()));
@@ -1049,6 +1226,10 @@ impl<'m> LowerCtx<'m> {
                 constraints.push(Constraint::Eq(lower_value(v)));
             }
         }
+        // A major type's constraints (`#1` is a negative integer).
+        if let Type2::MajorType(mt, ai) = &t1.base.node {
+            constraints.extend(major_type(*mt, *ai).1);
+        }
         // So are the prelude's `true` and `false` (dgtlrift/cddlc#15).
         if let Some(b) = bool_value_name(&t1.base.node) {
             if t1.ops.is_empty() {
@@ -1096,7 +1277,8 @@ impl<'m> LowerCtx<'m> {
                 let inner_tr = self.lower_type_single(&inner.node, rule_name)?;
                 Ok(TypeRef::Tagged(CborTag(*tag), Box::new(inner_tr)))
             }
-            Type2::Any | Type2::MajorType(_) => Ok(TypeRef::Primitive(Primitive::Any)),
+            Type2::MajorType(mt, ai) => Ok(major_type(*mt, *ai).0),
+            Type2::Any => Ok(TypeRef::Primitive(Primitive::Any)),
             Type2::Unwrap(id) => self.resolve_typeref(id.node.as_str(), rule_name),
             Type2::Map(_) | Type2::Array(_) | Type2::Group(_) => {
                 // Inline complex type — generate a synthetic named type
@@ -1216,6 +1398,10 @@ fn collect_deps(def: &TypeDef) -> Vec<SmolStr> {
             for f in &s.fields {
                 collect_typeref_deps(&f.ty, &mut deps);
             }
+            if let Some(r) = &s.rest {
+                collect_typeref_deps(&r.key_ty, &mut deps);
+                collect_typeref_deps(&r.val_ty, &mut deps);
+            }
         }
         TypeDef::Enum(e) => {
             for v in &e.variants {
@@ -1293,6 +1479,30 @@ fn pascal_case(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The type `#mt` or `#mt.ai` stands for (RFC 8610 §3.6), and its constraints.
+/// For major types 0 and 1 an additional information below 24 is the value
+/// itself; for 7 it picks a simple value or float width. Arrays, maps, bare
+/// tags and other simple values aren't modelled, and are `any`.
+fn major_type(mt: u8, ai: Option<u64>) -> (TypeRef, Vec<Constraint>) {
+    let p = TypeRef::Primitive;
+    match (mt, ai) {
+        (0, Some(n)) if n < 24 => (p(Primitive::Uint), vec![Constraint::Eq(LiteralValue::Uint(n))]),
+        (0, _)                 => (p(Primitive::Uint), vec![]),
+        (1, Some(n)) if n < 24 => (p(Primitive::Int), vec![Constraint::Eq(LiteralValue::Int(-1 - n as i64))]),
+        (1, _)                 => (p(Primitive::Int), vec![Constraint::ValueRangeInt { min: None, max: Some(-1), inclusive: true }]),
+        (2, _)                 => (p(Primitive::Bstr), vec![]),
+        (3, _)                 => (p(Primitive::Tstr), vec![]),
+        (7, Some(20))          => (p(Primitive::Bool), vec![Constraint::Eq(LiteralValue::Bool(false))]),
+        (7, Some(21))          => (p(Primitive::Bool), vec![Constraint::Eq(LiteralValue::Bool(true))]),
+        (7, Some(22))          => (p(Primitive::Null), vec![]),
+        (7, Some(23))          => (p(Primitive::Undefined), vec![]),
+        (7, Some(25))          => (p(Primitive::Float16), vec![]),
+        (7, Some(26))          => (p(Primitive::Float32), vec![]),
+        (7, Some(27))          => (p(Primitive::Float64), vec![]),
+        _                      => (p(Primitive::Any), vec![]),
+    }
 }
 
 fn literal_to_typeref(lit: &LiteralValue) -> TypeRef {

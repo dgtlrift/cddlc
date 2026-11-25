@@ -17,7 +17,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, IrModule, LiteralValue, Occurrence,
-    Primitive, StructDef, TypeDef, TypeRef,
+    MapDef, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 /// The fxamacker/cbor release generated CBOR modules require.
@@ -278,6 +278,22 @@ func decFloat64(r []byte, at string) (float64, error) {
 		return float64(i), err
 	}
 	return 0, mismatch(at, "a number", r)
+}
+
+// decChoice reads a choice of primitive types: the first alternative that
+// accepts r, as that alternative's Go type.
+func decChoice(r []byte, at string, alts ...func([]byte, string) (any, error)) (any, error) {
+	for _, alt := range alts {
+		if v, err := alt(r, at); err == nil {
+			return v, nil
+		}
+	}
+	return nil, fmt.Errorf("%s: no alternative of the choice matches %s", at, kindNames[kindOf(r)])
+}
+
+// asAny adapts a typed decoder to decChoice.
+func asAny[T any](dec func([]byte, string) (T, error)) func([]byte, string) (any, error) {
+	return func(r []byte, at string) (any, error) { return dec(r, at) }
 }
 
 func decFloat32(r []byte, at string) (float32, error) {
@@ -555,13 +571,24 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     w.line(&format!("// Package {pkg} encodes and decodes the types of the {} CDDL schema.", module.name));
     w.line(&format!("package {pkg}"));
     w.blank();
+    // Tables (`{ * tstr => uint }`) bring their own helpers.
+    let tables = module.types.values().any(|d| matches!(d, TypeDef::Map(_)));
+    // Maps with other entries write them in key order.
+    let rests = module.types.values().any(|d| matches!(d, TypeDef::Struct(s) if s.rest.is_some()));
     w.line("import (");
     if opts.is_json() {
-        for imp in ["\"bytes\"", "\"encoding/base64\"", "\"encoding/json\"", "\"fmt\"", "\"strings\""] {
+        let mut imps = vec!["\"bytes\"", "\"encoding/base64\"", "\"encoding/json\"", "\"fmt\""];
+        if tables { imps.push("\"slices\""); }
+        if rests { imps.push("\"sort\""); }
+        imps.push("\"strings\"");
+        for imp in imps {
             w.line(&format!("\t{imp}"));
         }
     } else {
+        if tables { w.line("\t\"bytes\""); }
         w.line("\t\"fmt\"");
+        if tables { w.line("\t\"slices\""); }
+        if rests { w.line("\t\"sort\""); }
         w.blank();
         w.line("\t\"github.com/fxamacker/cbor/v2\"");
     }
@@ -579,6 +606,17 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     for line in helpers.lines().chain([""]).chain(COMMON_HELPERS.lines()) {
         if line.is_empty() { w.blank() } else { w.line(line) }
     }
+    if rests {
+        for line in [""].into_iter().chain(SORTED_KEYS_HELPER.lines()) {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
+    }
+    if tables {
+        let entries = if opts.is_json() { JSON_TABLE_HELPERS } else { CBOR_TABLE_HELPERS };
+        for line in [""].into_iter().chain(TABLE_HELPERS.lines()).chain([""]).chain(entries.lines()) {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
+    }
     tabify(w.finish())
 }
 
@@ -588,7 +626,7 @@ fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &Code
         TypeDef::Enum(e)   => emit_enum(w, e, opts),
         TypeDef::Array(a)  => emit_array(w, a, opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map(w, m, opts),
     }
 }
 
@@ -719,6 +757,24 @@ fn enc_each(ty: &TypeRef, expr: &str) -> String {
     )
 }
 
+/// The runtime decoder for a primitive alternative of a choice.
+fn prim_decoder(ty: &TypeRef) -> Option<&'static str> {
+    Some(match ty {
+        TypeRef::Primitive(p) => match p {
+            Primitive::Uint => "decUint",
+            Primitive::Int => "decInt",
+            Primitive::Bool => "decBool",
+            Primitive::Float16 | Primitive::Float32 => "decFloat32",
+            Primitive::Float64 | Primitive::Float => "decFloat64",
+            Primitive::Tstr => "decText",
+            Primitive::Bstr => "decBytes",
+            Primitive::Null | Primitive::Undefined => "decNull",
+            Primitive::Any => return None,
+        },
+        _ => return None,
+    })
+}
+
 /// Statements setting `dst` (of type `go_type(ty)`) from the encoded `src`, each
 /// value's type checked; on failure the enclosing function returns the error.
 fn emit_decode(w: &mut IndentWriter, ty: &TypeRef, src: &str, dst: &str, at: &str) {
@@ -739,6 +795,22 @@ fn emit_decode(w: &mut IndentWriter, ty: &TypeRef, src: &str, dst: &str, at: &st
             w.indent();
             // `val`, not `x`: the destination is often a local named `x`.
             w.line(&format!("val, err := {f}({src}, {at_lit})"));
+            w.line("if err != nil {");
+            w.line("    return err");
+            w.line("}");
+            w.line(&format!("{dst} = val"));
+            w.dedent();
+            w.line("}");
+        }
+        // A choice of primitives: each alternative's decoder, in order, so a
+        // value comes back as its alternative's type (an `int` as int64).
+        TypeRef::Choice(alts) if alts.iter().all(|a| prim_decoder(a).is_some()) => {
+            let decs: Vec<String> = alts.iter()
+                .map(|a| format!("asAny({})", prim_decoder(a).unwrap()))
+                .collect();
+            w.line("{");
+            w.indent();
+            w.line(&format!("val, err := decChoice({src}, {at_lit}, {})", decs.join(", ")));
             w.line("if err != nil {");
             w.line("    return err");
             w.line("}");
@@ -925,9 +997,13 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     if s.deprecated { w.line("//"); w.line("// Deprecated: marked deprecated in the schema."); }
     w.line(&format!("type {name} struct {{"));
     w.indent();
-    let fields: Vec<_> = s.fields.iter()
+    let mut fields: Vec<_> = s.fields.iter()
         .map(|f| (f.doc.as_deref(), go_field_name(&f.name), go_field_type(&f.ty, &f.occurrence)))
         .collect();
+    // The map's other entries (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        fields.push((Some("The map's other entries."), go_field_name(&r.name), format!("map[string]{}", go_type(&r.val_ty))));
+    }
     emit_fields(w, &fields);
     w.dedent();
     w.line("}");
@@ -982,6 +1058,22 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
             o if is_repeated(o) => w.line(&format!("e.put({key})({})", enc_each(&f.ty, &field))),
             _ => w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &field))),
         }
+    }
+    // The other entries after the named members, in key order.
+    if let Some(r) = &s.rest {
+        let field = format!("v.{}", go_field_name(&r.name));
+        let named: Vec<String> = s.fields.iter().map(|f| go_str(&f.name)).collect();
+        w.line(&format!("for _, k := range sortedKeys({field}) {{"));
+        w.indent();
+        if !named.is_empty() {
+            w.line("switch k {");
+            w.line(&format!("case {}:", named.join(", ")));
+            w.line(&format!("    return nil, fmt.Errorf(\"%s: other entry %q is a named member's key\", {}, k)", go_str(&name)));
+            w.line("}");
+        }
+        w.line(&format!("e.put(k)({})", enc_expr(&r.val_ty, &format!("{field}[k]"))));
+        w.dedent();
+        w.line("}");
     }
     let tag = if opts.is_json() { None } else { s.tagged };
     return_encoded(w, tag, "e.finish()");
@@ -1049,6 +1141,26 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
                 w.line("}");
             }
         }
+    }
+    if let Some(r) = &s.rest {
+        let field = format!("out.{}", go_field_name(&r.name));
+        let named: Vec<String> = s.fields.iter().map(|f| go_str(&f.name)).collect();
+        w.line("for k, r := range m {");
+        w.indent();
+        if !named.is_empty() {
+            w.line("switch k {");
+            w.line(&format!("case {}:", named.join(", ")));
+            w.line("    continue");
+            w.line("}");
+        }
+        w.line(&format!("var x {}", go_type(&r.val_ty)));
+        emit_decode(w, &r.val_ty, "r", "x", &format!("{name} value"));
+        w.line(&format!("if {field} == nil {{"));
+        w.line(&format!("    {field} = map[string]{}{{}}", go_type(&r.val_ty)));
+        w.line("}");
+        w.line(&format!("{field}[k] = x"));
+        w.dedent();
+        w.line("}");
     }
     w.line("if err := out.Validate(); err != nil {");
     w.line("    return err");
@@ -1459,6 +1571,55 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     emit_encode_decode(w, &name, opts);
 }
 
+// ── Map ───────────────────────────────────────────────────────────────────────
+
+/// A table (`{ * tstr => uint }`): a Go map (dgtlrift/cddlc#82).
+fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    let name = to_pascal_case(&m.name);
+    let key = go_type(&m.key_ty);
+    let val = go_type(&m.val_ty);
+    cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("//"));
+    if m.deprecated { w.line("//"); w.line("// Deprecated: marked deprecated in the schema."); }
+    w.line(&format!("type {name} map[{key}]{val}"));
+    w.blank();
+
+    let tag = if opts.is_json() { None } else { m.tagged };
+    w.line(&format!("// {} writes v as a {} map, in the order of its encoded keys.", marshal_name(opts), format_name(opts)));
+    w.line(&format!("func (v {name}) {}() ([]byte, error) {{", marshal_name(opts)));
+    w.indent();
+    let each = format!(
+        "encodeTable(map[{key}]{val}(v), func(x {val}) ([]byte, error) {{ return {} }})",
+        enc_expr(&m.val_ty, "x")
+    );
+    return_encoded(w, tag, &each);
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("// {} reads v from a {} map, checking each entry's types.", unmarshal_name(opts), format_name(opts)));
+    w.line(&format!("func (v *{name}) {}(data []byte) error {{", unmarshal_name(opts)));
+    w.indent();
+    untag_input(w, tag, &name);
+    w.line(&format!("entries, err := decodeTable[{key}](r, {})", go_str(&name)));
+    w.line("if err != nil {");
+    w.line("    return err");
+    w.line("}");
+    w.line(&format!("out := make({name}, len(entries))"));
+    w.line("for k, r := range entries {");
+    w.indent();
+    w.line(&format!("var x {val}"));
+    emit_decode(w, &m.val_ty, "r", "x", &format!("{name} value"));
+    w.line("out[k] = x");
+    w.dedent();
+    w.line("}");
+    w.line("*v = out");
+    w.line("return nil");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    emit_encode_decode(w, &name, opts);
+}
+
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
@@ -1512,6 +1673,81 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
 
 // ── Test file ─────────────────────────────────────────────────────────────────
 
+/// Table helpers (dgtlrift/cddlc#82): entries are written in the order of
+/// their encoded keys, so the output is deterministic.
+const TABLE_HELPERS: &str = r#"// encodeTable writes a table's entries in the order of their encoded keys.
+func encodeTable[K comparable, V any](m map[K]V, val func(V) ([]byte, error)) ([]byte, error) {
+	type entry struct{ k, v []byte }
+	es := make([]entry, 0, len(m))
+	for k, x := range m {
+		kb, err := marshal(k)
+		if err != nil {
+			return nil, err
+		}
+		vb, err := val(x)
+		if err != nil {
+			return nil, fmt.Errorf("[%v]: %w", k, err)
+		}
+		es = append(es, entry{kb, vb})
+	}
+	slices.SortFunc(es, func(a, b entry) int { return bytes.Compare(a.k, b.k) })
+	keys := make([][]byte, len(es))
+	vals := make([][]byte, len(es))
+	for i, e := range es {
+		keys[i], vals[i] = e.k, e.v
+	}
+	return encodeEntries(keys, vals)
+}
+
+// decodeTable reads a map's entries, each key as a K.
+func decodeTable[K comparable](r []byte, at string) (map[K]raw, error) {
+	if kindOf(r) != kindMap {
+		return nil, mismatch(at, "a map", r)
+	}
+	var m map[K]raw
+	if err := unmarshal(r, &m); err != nil {
+		return nil, fmt.Errorf("%s: %w", at, err)
+	}
+	return m, nil
+}"#;
+
+const CBOR_TABLE_HELPERS: &str = r#"// encodeEntries writes encoded keys and values as a CBOR map.
+func encodeEntries(keys, vals [][]byte) ([]byte, error) {
+	out := head(5, uint64(len(keys)))
+	for i, k := range keys {
+		out = append(out, k...)
+		out = append(out, vals[i]...)
+	}
+	return out, nil
+}"#;
+
+const JSON_TABLE_HELPERS: &str = r#"// encodeEntries writes encoded keys and values as a JSON object.
+func encodeEntries(keys, vals [][]byte) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(k)
+		buf.WriteByte(':')
+		buf.Write(vals[i])
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
+}"#;
+
+/// A map's other entries are written in key order.
+const SORTED_KEYS_HELPER: &str = r#"// sortedKeys returns m's keys in order.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}"#;
+
 const TEST_HELPERS: &str = r#"type encodable interface {
 	Encode() ([]byte, error)
 }
@@ -1556,7 +1792,7 @@ fn emit_tests(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
             TypeDef::Enum(e) => emit_enum_tests(&mut w, e, module, opts),
             TypeDef::Alias(a) => emit_alias_tests(&mut w, a, module),
             TypeDef::Array(a) => emit_array_tests(&mut w, a, module),
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => emit_map_tests(&mut w, m, module),
         }
     }
     tabify(w.finish())
@@ -1645,16 +1881,36 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, module: &IrModule) {
     test_fn(w, &format!("Test{name}RoundtripItems"), &[format!("roundtrip(t, {name}{{{item}, {item}}}, Decode{name})")]);
 }
 
+fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, module: &IrModule) {
+    let name = to_pascal_case(&m.name);
+    test_fn(w, &format!("Test{name}RoundtripEmpty"), &[format!("roundtrip(t, {name}{{}}, Decode{name})")]);
+    test_fn(w, &format!("Test{name}RoundtripEntries"), &[format!("roundtrip(t, {}, Decode{name})", go_map_value(m, module, true, 1))]);
+}
+
 // ── Test values ───────────────────────────────────────────────────────────────
 
 /// Nesting depth past which a named type's test value is not built further.
 const MAX_FIXTURE_DEPTH: usize = 4;
 
+/// A table with one entry.
+fn go_map_value(m: &MapDef, module: &IrModule, explicit: bool, depth: usize) -> String {
+    let key = go_value(&m.key_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
+    let val = go_value(&m.val_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
+    format!("{}{{{key}: {val}}}", to_pascal_case(&m.name))
+}
+
 fn go_struct_value(s: &StructDef, module: &IrModule, explicit: bool, depth: usize) -> String {
-    let fields: Vec<String> = s.fields.iter().map(|f| {
+    let mut fields: Vec<String> = s.fields.iter().map(|f| {
         let v = go_value(&f.ty, &f.occurrence, &f.constraints, module, explicit, depth + 1);
         format!("{}: {v}", go_field_name(&f.name))
     }).collect();
+    // One other entry when explicit or when the map needs one; else none (nil).
+    if let Some(r) = &s.rest {
+        if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
+            let v = go_value(&r.val_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
+            fields.push(format!("{}: map[string]{}{{\"other-key\": {v}}}", go_field_name(&r.name), go_type(&r.val_ty)));
+        }
+    }
     format!("{}{{{}}}", to_pascal_case(&s.name), fields.join(", "))
 }
 
@@ -1672,6 +1928,10 @@ fn typed_literal(p: &Primitive, lit: &LiteralValue) -> Option<String> {
 fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: &IrModule, explicit: bool, depth: usize) -> String {
     match occ {
         Occurrence::Optional if !explicit => return "nil".into(),
+        // A choice's field is `*any`, so its pointer must be one too.
+        Occurrence::Optional if matches!(ty, TypeRef::Choice(_)) => {
+            return format!("ptr[any]({})", go_value(ty, &Occurrence::Required, constraints, module, explicit, depth));
+        }
         Occurrence::Optional => return format!("ptr({})", go_value(ty, &Occurrence::Required, constraints, module, explicit, depth)),
         Occurrence::ZeroOrMore { .. } | Occurrence::Bounded { .. } => return format!("[]{}{{}}", go_type(ty)),
         Occurrence::OneOrMore { .. } => {
@@ -1714,7 +1974,11 @@ fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: 
             Primitive::Null | Primitive::Undefined => "Null{}".into(),
         },
         TypeRef::Tagged(_, inner) => go_value(inner, &Occurrence::Required, constraints, module, explicit, depth),
-        TypeRef::Choice(_) => "nil".into(),
+        // A choice's first alternative (nil would be null, not a valid value).
+        TypeRef::Choice(alts) => match alts.first() {
+            Some(first) => go_value(first, &Occurrence::Required, &[], module, explicit, depth),
+            None => "nil".into(),
+        },
         TypeRef::Named(n) => {
             let tn = to_pascal_case(n);
             if depth > MAX_FIXTURE_DEPTH {
@@ -1725,7 +1989,8 @@ fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: 
                 Some(TypeDef::Alias(a)) => format!("{tn}({})", go_value(&a.ty, &Occurrence::Required, &a.constraints, module, explicit, depth + 1)),
                 Some(TypeDef::Enum(e)) => e.variants.first().map(|v| go_variant_value(e, v, module, depth)).unwrap_or_else(|| format!("{tn}{{}}")),
                 Some(TypeDef::Array(_)) => format!("{tn}{{}}"),
-                Some(TypeDef::Map(_)) | None => format!("{tn}{{}}"),
+                Some(TypeDef::Map(m)) => go_map_value(m, module, explicit, depth),
+                None => format!("{tn}{{}}"),
             }
         }
     }

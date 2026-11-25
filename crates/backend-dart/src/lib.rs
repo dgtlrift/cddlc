@@ -228,6 +228,11 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
         let fname     = dart_field(&f.name);
         w.line(&format!("final {dart_type} {fname};"));
     }
+    // The map's other entries (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        w.line("/// The map's other entries.");
+        w.line(&format!("final Map<String, {}> {};", typeref_to_dart(&r.val_ty, opts), dart_field(&r.name)));
+    }
     w.blank();
 
     // Constructor
@@ -240,6 +245,9 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
         } else {
             w.line(&format!("required this.{fname},"));
         }
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("this.{} = const {{}},", dart_field(&r.name)));
     }
     w.dedent();
     w.line("});");
@@ -364,6 +372,12 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
     w.line("}");
 }
 
+/// The keys of a struct's named members, as a Dart set literal.
+fn named_keys(s: &StructDef) -> String {
+    let keys: Vec<String> = s.fields.iter().map(|f| format!("'{}'", field_key_str(&f.key))).collect();
+    format!("const <String>{{{}}}", keys.join(", "))
+}
+
 fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
     w.line(&format!("factory {class_name}.fromJson(Map<String, dynamic> json) => {class_name}("));
     w.indent();
@@ -381,6 +395,13 @@ fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
             let conv = json_from_expr(&f.ty, &format!("json['{key}']"), module, opts);
             w.line(&format!("{fname}: {conv},"));
         }
+    }
+    if let Some(r) = &s.rest {
+        let conv = json_from_expr(&r.val_ty, "e.value", module, opts);
+        w.line(&format!(
+            "{}: {{for (final e in json.entries) if (!{}.contains(e.key)) e.key: {conv}}},",
+            dart_field(&r.name), named_keys(s)
+        ));
     }
     w.dedent();
     w.line(");");
@@ -414,6 +435,10 @@ fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
             w.line(&format!("'{key}': {val},"));
         }
     }
+    if let Some(r) = &s.rest {
+        let val = json_to_expr(&r.val_ty, "e.value", module, opts);
+        w.line(&format!("for (final e in {}.entries) e.key: {val},", dart_field(&r.name)));
+    }
     w.dedent();
     w.line("};");
 }
@@ -446,6 +471,13 @@ fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
             let conv = cbor_from_expr(&f.ty, &format!("m[{cbor_key}]!"), module, opts);
             w.line(&format!("{fname}: {conv},"));
         }
+    }
+    if let Some(r) = &s.rest {
+        let conv = cbor_from_expr(&r.val_ty, "e.value", module, opts);
+        w.line(&format!(
+            "{}: {{for (final e in m.entries) if (!{}.contains(e.key.toString())) (e.key as CborString).toString(): {conv}}},",
+            dart_field(&r.name), named_keys(s)
+        ));
     }
     w.dedent();
     w.line(");");
@@ -481,6 +513,10 @@ fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
             let val = cbor_to_expr(&f.ty, &fname, module, opts);
             w.line(&format!("{cbor_key}: {val},"));
         }
+    }
+    if let Some(r) = &s.rest {
+        let val = cbor_to_expr(&r.val_ty, "e.value", module, opts);
+        w.line(&format!("for (final e in {}.entries) CborString(e.key): {val},", dart_field(&r.name)));
     }
     w.dedent();
     let tags = match s.tagged {
@@ -839,7 +875,7 @@ fn emit_tests(module: &IrModule, lib_name: &str, opts: &CodegenOptions) -> Strin
 
     for (_, def) in &module.types {
         if let TypeDef::Struct(s) = def {
-            emit_struct_test(&mut w, s, opts);
+            emit_struct_test(&mut w, module, s, opts);
         }
         if let TypeDef::Enum(e) = def {
             emit_enum_test(&mut w, e, opts);
@@ -854,14 +890,19 @@ fn emit_tests(module: &IrModule, lib_name: &str, opts: &CodegenOptions) -> Strin
     w.finish()
 }
 
-fn emit_struct_test(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &CodegenOptions) {
     let class_name = to_pascal_case(&s.name);
 
-    // Skip structs that can't be trivially default-constructed in the test
+    // Skip structs that can't be trivially default-constructed in the test; a
+    // table member is a map literal.
     let skip = s.fields.iter().any(|f| {
         f.occurrence.is_repeated()
             || (!matches!(f.occurrence, Occurrence::Optional)
-                && matches!(&f.ty, TypeRef::Named(_) | TypeRef::Choice(_)))
+                && match &f.ty {
+                    TypeRef::Named(n) => !matches!(module.get(n), Some(TypeDef::Map(_))),
+                    TypeRef::Choice(_) => true,
+                    _ => false,
+                })
     });
     if skip { return; }
 
@@ -873,8 +914,25 @@ fn emit_struct_test(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) 
     w.indent();
     for f in &s.fields {
         let fname   = dart_field(&f.name);
-        let default = test_default_for(&f.ty, &f.occurrence, opts);
+        let default = match (&f.ty, &f.occurrence) {
+            (TypeRef::Named(n), Occurrence::Required) => match module.get(n) {
+                Some(TypeDef::Map(m)) => test_table_for(m, opts),
+                _ => test_default_for(&f.ty, &f.occurrence, opts),
+            },
+            _ => test_default_for(&f.ty, &f.occurrence, opts),
+        };
         w.line(&format!("{fname}: {default},"));
+    }
+    // One other entry when its value is a primitive.
+    if let Some(r) = &s.rest {
+        if let TypeRef::Primitive(_) = &r.val_ty {
+            w.line(&format!(
+                "{}: <String, {}>{{'other-key': {}}},",
+                dart_field(&r.name),
+                typeref_to_dart(&r.val_ty, opts),
+                test_default_for(&r.val_ty, &Occurrence::Required, opts)
+            ));
+        }
     }
     w.dedent();
     w.line(");");
@@ -891,6 +949,10 @@ fn emit_struct_test(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) 
     for f in &s.fields {
         if matches!(f.occurrence, Occurrence::Optional) { continue; }
         let fname = dart_field(&f.name);
+        w.line(&format!("expect(decoded.{fname}, equals(obj.{fname}));"));
+    }
+    if let Some(r) = &s.rest {
+        let fname = dart_field(&r.name);
         w.line(&format!("expect(decoded.{fname}, equals(obj.{fname}));"));
     }
 
@@ -997,9 +1059,15 @@ fn json_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                         format!("({expr} as List).map((e) => {item}).toList()")
                     }
                 }
-                Some(TypeDef::Map(_)) => {
-                    // typedef Map<K,V> — pass through as dynamic map
-                    format!("({expr} as Map).cast()")
+                Some(TypeDef::Map(m)) => {
+                    // typedef Map<K,V> — each entry converted (dgtlrift/cddlc#82)
+                    format!(
+                        "({expr} as Map).map<{}, {}>((k, v) => MapEntry({}, {}))",
+                        typeref_to_dart(&m.key_ty, opts),
+                        typeref_to_dart(&m.val_ty, opts),
+                        json_from_expr(&m.key_ty, "k", module, opts),
+                        json_from_expr(&m.val_ty, "v", module, opts)
+                    )
                 }
                 Some(TypeDef::Enum(_)) => {
                     // Enum class has fromJson(dynamic)
@@ -1031,7 +1099,11 @@ fn json_to_expr(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOpti
                     if item == "e" { field.to_owned() }
                     else { format!("{field}.map((e) => {item}).toList()") }
                 }
-                Some(TypeDef::Map(_)) => field.to_owned(),
+                Some(TypeDef::Map(m)) => {
+                    let v = json_to_expr(&m.val_ty, "v", module, opts);
+                    if v == "v" { field.to_owned() }
+                    else { format!("{field}.map((k, v) => MapEntry(k, {v}))") }
+                }
                 _ => format!("{field}.toJson()"),
             }
         }
@@ -1066,7 +1138,19 @@ fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                     let item = cbor_from_expr(&a.element, "e", module, opts);
                     format!("({expr} as CborList).map((e) => {item}).toList()")
                 }
-                Some(TypeDef::Map(_)) => format!("{expr} as Map"),
+                Some(TypeDef::Map(m)) => {
+                    let raw = match m.tagged {
+                        Some(tag) => format!("_untag({}, {expr}, '{}')", tag.0, to_pascal_case(n)),
+                        None => expr.to_owned(),
+                    };
+                    format!(
+                        "({raw} as CborMap).map<{}, {}>((k, v) => MapEntry({}, {}))",
+                        typeref_to_dart(&m.key_ty, opts),
+                        typeref_to_dart(&m.val_ty, opts),
+                        cbor_from_expr(&m.key_ty, "k", module, opts),
+                        cbor_from_expr(&m.val_ty, "v", module, opts)
+                    )
+                }
                 Some(TypeDef::Enum(_)) => {
                     let cls = to_pascal_case(n);
                     format!("{cls}._fromCborValue({expr})")
@@ -1133,7 +1217,11 @@ fn cbor_to_expr_tagged(ty: &TypeRef, field: &str, module: &IrModule, opts: &Code
                 Some(TypeDef::Map(m)) => {
                     let tags = match m.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
                     let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
-                    format!("CborMap({field}{t})")
+                    format!(
+                        "CborMap({field}.map<CborValue, CborValue>((k, v) => MapEntry({}, {})){t})",
+                        cbor_to_expr(&m.key_ty, "k", module, opts),
+                        cbor_to_expr(&m.val_ty, "v", module, opts)
+                    )
                 }
                 Some(TypeDef::Enum(_)) | Some(TypeDef::Struct(_)) | None =>
                     format!("{field}._toCborValue({tags})"),
@@ -1154,6 +1242,20 @@ fn cbor_map_key(key: &FieldKey) -> String {
 }
 
 // ── Test default values ───────────────────────────────────────────────────────
+
+/// A table literal for a test: one entry when its key and value are
+/// primitives, else empty.
+fn test_table_for(m: &MapDef, opts: &CodegenOptions) -> String {
+    let (k, v) = (typeref_to_dart(&m.key_ty, opts), typeref_to_dart(&m.val_ty, opts));
+    match (&m.key_ty, &m.val_ty) {
+        (TypeRef::Primitive(_), TypeRef::Primitive(_)) => format!(
+            "<{k}, {v}>{{{}: {}}}",
+            test_default_for(&m.key_ty, &Occurrence::Required, opts),
+            test_default_for(&m.val_ty, &Occurrence::Required, opts)
+        ),
+        _ => format!("<{k}, {v}>{{}}"),
+    }
+}
 
 fn test_default_for(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     if matches!(occ, Occurrence::Optional) {

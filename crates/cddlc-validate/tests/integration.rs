@@ -325,6 +325,23 @@ fn literal_fields_are_enforced() {
     assert_fails(&m, "start", &json(r#"{"t":1,"cat":"kernel","type":"SimEnd"}"#));
 }
 
+// ── Prelude types (dgtlrift/cddlc#88) ────────────────────────────────────────
+
+#[test]
+fn prelude_types_validate_as_defined() {
+    let m = lower("r = { n: number, at: tdate }\n");
+    assert_ok(&m, "r", &json(r#"{"n": 1.5, "at": "2026-01-01T00:00:00Z"}"#));
+    assert_ok(&m, "r", &json(r#"{"n": 2, "at": "2026-01-01T00:00:00Z"}"#));
+    assert_fails(&m, "r", &json(r#"{"n": "x", "at": "2026-01-01T00:00:00Z"}"#));
+    assert_fails(&m, "r", &json(r#"{"n": 1, "at": 5}"#));
+
+    // A bignum that fits reaches the validator as an integer.
+    let m = lower("r = biguint\n");
+    assert_ok(&m, "r", &Value::from(ciborium::Value::Integer(5.into())));
+    let tagged = ciborium::Value::Tag(2, Box::new(ciborium::Value::Bytes(vec![1, 0, 0, 0, 0, 0, 0, 0, 0])));
+    assert_ok(&m, "r", &Value::from(tagged));
+}
+
 // ── Record arrays (dgtlrift/cddlc#81) ────────────────────────────────────────
 
 #[test]
@@ -339,4 +356,45 @@ fn records_validate_as_arrays() {
     assert_fails(&m, "r", &json(r#"[1, "x", true, 4]"#));
     let errors = assert_fails(&m, "r", &json(r#"["x", 1]"#));
     assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "[0]");
+}
+
+// ── Tables (dgtlrift/cddlc#82) ────────────────────────────────────────────────
+
+#[test]
+fn tables_validate_each_entry() {
+    let m = lower("r = { * tstr => uint }\n");
+    assert_ok(&m, "r", &json(r#"{}"#));
+    assert_ok(&m, "r", &json(r#"{"x": 1, "y": 2}"#));
+    let errors = assert_fails(&m, "r", &json(r#"{"x": 1, "y": "two"}"#));
+    assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "{y}");
+    assert_fails(&m, "r", &json(r#"[1]"#));
+
+    // `+` needs an entry; a key must have the key type (here in CBOR).
+    let m = lower("r = { + uint => tstr }\n");
+    assert_fails(&m, "r", &Value::from(ciborium::Value::Map(vec![])));
+    let entry = |k: ciborium::Value| ciborium::Value::Map(vec![(k, ciborium::Value::Text("a".into()))]);
+    assert_ok(&m, "r", &Value::from(entry(ciborium::Value::Integer(1.into()))));
+    let errors = assert_fails(&m, "r", &Value::from(entry(ciborium::Value::Text("1".into()))));
+    assert!(errors[0].message.contains("invalid key"), "{errors:?}");
+
+    // A table member, with a constrained value.
+    let m = lower("r = { scores: { * tstr => uint .le 100 } }\n");
+    assert_ok(&m, "r", &json(r#"{"scores": {"a": 100}}"#));
+    assert_fails(&m, "r", &json(r#"{"scores": {"a": 101}}"#));
+}
+
+#[test]
+fn mixed_maps_validate_other_entries() {
+    let m = lower("r = { id: uint, ? name: tstr, * tstr => uint }\n");
+    assert_ok(&m, "r", &json(r#"{"id": 1}"#));
+    assert_ok(&m, "r", &json(r#"{"id": 1, "name": "n", "x": 2, "y": 3}"#));
+    // A named member keeps its own type; other entries have the value type.
+    assert_fails(&m, "r", &json(r#"{"id": 1, "name": 5}"#));
+    let errors = assert_fails(&m, "r", &json(r#"{"id": 1, "x": "two"}"#));
+    assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "{x}");
+    assert_fails(&m, "r", &json(r#"{"x": 2}"#));
+
+    let m = lower("r = { id: uint, + tstr => uint }\n");
+    assert_fails(&m, "r", &json(r#"{"id": 1}"#));
+    assert_ok(&m, "r", &json(r#"{"id": 1, "x": 2}"#));
 }

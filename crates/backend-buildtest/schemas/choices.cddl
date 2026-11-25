@@ -1,0 +1,7 @@
+; Reference schema: members whose type is an inline choice of primitives
+
+reading = {
+    value: int / float,
+    stamp: #6.1(int / float),
+    ? flag: bool / uint,
+}

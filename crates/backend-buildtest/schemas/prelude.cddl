@@ -1,0 +1,9 @@
+; Reference schema: prelude types (RFC 8610 Appendix D) that aren't primitives
+
+event = {
+    at:     tdate,
+    epoch:  time,
+    amount: number,
+    link:   uri,
+    ? big:  biguint,
+}

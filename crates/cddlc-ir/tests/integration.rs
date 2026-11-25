@@ -651,6 +651,46 @@ fn test_size_error_is_readable() {
     assert!(!err.contains("Spanned"), "{err}");
 }
 
+// ── Prelude types (dgtlrift/cddlc#88) ────────────────────────────────────────
+
+#[test]
+fn prelude_types_lower_to_their_definitions() {
+    let ty = |name: &str| match compile(&format!("r = {{ v: {name} }}\n")).get("r") {
+        Some(TypeDef::Struct(s)) => s.fields[0].ty.clone(),
+        other => panic!("{name}: {other:?}"),
+    };
+    let p = TypeRef::Primitive;
+    let tag = |n: u64, t: TypeRef| TypeRef::Tagged(CborTag(n), Box::new(t));
+    let number = TypeRef::Choice(vec![p(Primitive::Int), p(Primitive::Float)]);
+    assert_eq!(ty("number"), number);
+    assert_eq!(ty("tdate"), tag(0, p(Primitive::Tstr)));
+    assert_eq!(ty("time"), tag(1, number));
+    assert_eq!(ty("biguint"), tag(2, p(Primitive::Bstr)));
+    assert_eq!(ty("uri"), tag(32, p(Primitive::Tstr)));
+    assert_eq!(ty("cbor-any"), tag(55799, p(Primitive::Any)));
+    assert_eq!(ty("unsigned"), TypeRef::Choice(vec![p(Primitive::Uint), tag(2, p(Primitive::Bstr))]));
+}
+
+// ── Major types (dgtlrift/cddlc#89) ──────────────────────────────────────────
+
+#[test]
+fn major_types_lower_to_their_types() {
+    let alias = |src: &str| match compile(src).get("r") {
+        Some(TypeDef::Alias(a)) => (a.ty.clone(), a.constraints.clone()),
+        other => panic!("{src}: {other:?}"),
+    };
+    assert_eq!(alias("r = #0\n"), (TypeRef::Primitive(Primitive::Uint), vec![]));
+    assert_eq!(alias("r = #1\n").1, vec![Constraint::ValueRangeInt { min: None, max: Some(-1), inclusive: true }]);
+    assert_eq!(alias("r = #3\n").0, TypeRef::Primitive(Primitive::Tstr));
+    assert_eq!(alias("r = #7.25\n").0, TypeRef::Primitive(Primitive::Float16));
+    assert_eq!(alias("r = #7.22\n").0, TypeRef::Primitive(Primitive::Null));
+    assert_eq!(alias("r = #4\n").0, TypeRef::Primitive(Primitive::Any));
+    // As a member, with its constraint.
+    let Some(TypeDef::Struct(s)) = compile("r = { n: #1 }\n").get("r").cloned() else { panic!() };
+    assert_eq!(s.fields[0].ty, TypeRef::Primitive(Primitive::Int));
+    assert_eq!(s.fields[0].constraints, vec![Constraint::ValueRangeInt { min: None, max: Some(-1), inclusive: true }]);
+}
+
 // ── Record arrays (dgtlrift/cddlc#81) ────────────────────────────────────────
 
 fn record(m: &IrModule, name: &str) -> (Vec<String>, cddlc_ir::StructEncoding) {
@@ -687,5 +727,64 @@ fn record_optional_members_must_come_last() {
         let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
         let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect(src).to_string();
         assert!(err.contains("optional members must come last"), "{src}: {err}");
+    }
+}
+
+// ── Tables (dgtlrift/cddlc#82) ────────────────────────────────────────────────
+
+#[test]
+fn computed_key_map_lowers_to_map_def() {
+    let m = compile("r = { * tstr => uint }\n");
+    let Some(TypeDef::Map(t)) = m.get("r") else { panic!("{:?}", m.get("r")) };
+    assert_eq!(t.key_ty, TypeRef::Primitive(Primitive::Tstr));
+    assert_eq!(t.val_ty, TypeRef::Primitive(Primitive::Uint));
+    assert!(matches!(t.occurrence, Occurrence::ZeroOrMore { .. }));
+
+    let m = compile("r = { + uint => tstr }\n");
+    let Some(TypeDef::Map(t)) = m.get("r") else { panic!() };
+    assert_eq!(t.key_ty, TypeRef::Primitive(Primitive::Uint));
+    assert!(matches!(t.occurrence, Occurrence::OneOrMore { .. }));
+}
+
+#[test]
+fn table_member_and_constrained_value() {
+    // An inline table member is a table type of its own.
+    let m = compile("r = { counts: { * tstr => uint } }\n");
+    assert!(matches!(m.get("r-counts"), Some(TypeDef::Map(_))));
+
+    // A value with control operators becomes an alias that carries them.
+    let m = compile("r = { * tstr => uint .le 9 }\n");
+    let Some(TypeDef::Map(t)) = m.get("r") else { panic!() };
+    assert_eq!(t.val_ty, TypeRef::Named("r-value".into()));
+    let Some(TypeDef::Alias(a)) = m.get("r-value") else { panic!() };
+    assert!(!a.constraints.is_empty());
+}
+
+#[test]
+fn mixed_map_has_rest() {
+    let m = compile("r = { a: uint, ? extra: tstr, * tstr => any }\n");
+    let Some(TypeDef::Struct(st)) = m.get("r") else { panic!("{:?}", m.get("r")) };
+    assert_eq!(st.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a", "extra"]);
+    let rest = st.rest.as_ref().expect("rest");
+    // A member called `extra` moves the other entries' name aside.
+    assert_eq!(rest.name, "extra_entries");
+    assert_eq!(rest.key_ty, TypeRef::Primitive(Primitive::Tstr));
+    assert_eq!(rest.val_ty, TypeRef::Primitive(Primitive::Any));
+
+    // A key alias defined later is text too.
+    let m = compile("r = { a: uint, + label => uint }\nlabel = tstr\n");
+    let Some(TypeDef::Struct(st)) = m.get("r") else { panic!() };
+    assert!(matches!(st.rest.as_ref().unwrap().occurrence, Occurrence::OneOrMore { .. }));
+}
+
+#[test]
+fn mixed_map_limits() {
+    for (src, want) in [
+        ("r = { a: uint, * int => any }\n", "other than tstr"),
+        ("r = { a: uint, * tstr => any, * int => any }\n", "more than one member with a computed key"),
+    ] {
+        let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
+        let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect(src).to_string();
+        assert!(err.contains(want), "{src}: {err}");
     }
 }
