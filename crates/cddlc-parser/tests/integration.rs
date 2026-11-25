@@ -675,4 +675,67 @@ fn a_comment_above_the_first_member_documents_it() {
     );
     // A blank line still cuts it off.
     assert_eq!(member_docs("r = {\n  ; Header.\n\n  id: uint,\n}\n"), [vec![None]]);
+// ── Optional commas and error positions (dgtlrift/cddlc#108) ─────────────────
+
+/// The entries of each alternative of the map, array or group `r`.
+fn entry_counts(src: &str) -> Vec<usize> {
+    let m = parse(src);
+    let group = match &m.rules[0].node.kind {
+        RuleKind::Type { ty, .. } => match &ty.node.choices[0].node.base.node {
+            Type2::Map(g) | Type2::Array(g) | Type2::Group(g) => g.node.clone(),
+            other => panic!("{src}: {other:?}"),
+        },
+        // `r = ( ... )`: a group rule whose one entry is the parenthesized group.
+        RuleKind::Group { group, .. } => match &group.node.choices[0].entries[0].node.kind {
+            cddlc_parser::MemberKind::Type(t) => match &t.node.choices[0].node.base.node {
+                Type2::Group(g) => g.node.clone(),
+                other => panic!("{src}: {other:?}"),
+            },
+            other => panic!("{src}: {other:?}"),
+        },
+    };
+    group.choices.iter().map(|c| c.entries.len()).collect()
+}
+
+#[test]
+fn group_entries_need_no_comma() {
+    // RFC 8610 Appendix B: `optcom = S ["," S]`.
+    assert_eq!(entry_counts("r = { x: uint\n      y: tstr }\n"), [2]);
+    assert_eq!(entry_counts("r = { x: uint y: tstr, z: bool }\n"), [3]);
+    assert_eq!(entry_counts("r = [ uint\n  tstr ]\n"), [2]);
+    assert_eq!(entry_counts("r = ( a: \"x\"\n  ext )\next = ( * tstr => any )\n"), [2]);
+    assert_eq!(entry_counts("r = { a: 1 b: 2 // c: 3\n  d: 4 }\n"), [2, 2]);
+    // A choice of types can still span lines.
+    assert_eq!(entry_counts("r = { x: uint\n    / tstr\n  y: bool }\n"), [2]);
+}
+
+#[test]
+fn comma_less_entries_keep_their_comments() {
+    // As they would with commas.
+    let docs = |src: &str| -> Vec<Option<String>> {
+        let m = parse(src);
+        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!() };
+        let Type2::Map(g) = &ty.node.choices[0].node.base.node else { panic!() };
+        g.node.choices[0].entries.iter().map(|e| e.node.doc.clone()).collect()
+    };
+    let without = docs("r = {\n  ; The id.\n  id: uint     ; trailing\n  ; The name.\n  name: tstr\n}\n");
+    let with = docs("r = {\n  ; The id.\n  id: uint,    ; trailing\n  ; The name.\n  name: tstr\n}\n");
+    assert_eq!(without, with);
+    assert_eq!(without[1].as_deref(), Some("The name."));
+}
+
+/// The line, column and message of the syntax error in `src`.
+fn syntax_error(src: &str) -> (usize, usize, String) {
+    match parse_cddl(src, path()) {
+        Err(cddlc_parser::ParseError::Syntax { line, col, message, .. }) => (line, col, message),
+        Err(e) => panic!("{src}: {e}"),
+        Ok(_) => panic!("{src}: parsed"),
+    }
+}
+
+#[test]
+fn syntax_errors_point_where_the_parse_stopped() {
+    assert_eq!(syntax_error("ok = uint\nr = { x: uint  y:: tstr }\n"), (2, 17, "expected type expression".into()));
+    assert_eq!(syntax_error("r = { x: uint, y: tstr\n"), (2, 1, "expected '}' to close map".into()));
+    assert_eq!(syntax_error("r = [ uint,\n"), (2, 1, "expected ']' to close array".into()));
 }

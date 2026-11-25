@@ -11,21 +11,21 @@ the wire format for a given schema.
 Add `--interop` to any `cddlc` invocation:
 
 ```bash
-cddlc my_schema.cddl --interop -o generated
+cddlc generate my_schema.cddl --interop -o generated
 ```
 
 You can combine it with a specific language target so you get both the
 serialisation library and the interop harness in one pass:
 
 ```bash
-cddlc my_schema.cddl -l c --interop -o generated
+cddlc generate my_schema.cddl -l c --interop -o generated
 ```
 
 To limit which harnesses are emitted (e.g. when only some runtimes are
 available in your CI environment):
 
 ```bash
-cddlc my_schema.cddl --interop --interop-langs rust,python -o generated
+cddlc generate my_schema.cddl --interop --interop-langs rust,python -o generated
 ```
 
 ### Output layout
