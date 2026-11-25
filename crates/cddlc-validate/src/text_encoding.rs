@@ -132,3 +132,62 @@ fn base10(text: &str) -> Result<Value, String> {
         text.parse::<u64>().map(Value::Uint).map_err(|_| format!("'{text}' is out of range"))
     }
 }
+
+/// `value` as text in `encoding`: the inverse of [`decode`], for samples.
+/// `None` when the value isn't of the kind the encoding holds.
+pub fn encode(encoding: TextEncoding, value: &Value) -> Option<String> {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use TextEncoding as E;
+    let bytes = || match value {
+        Value::Bytes(b) => Some(b.as_slice()),
+        _ => None,
+    };
+    Some(match encoding {
+        E::B64u | E::B64uSloppy => URL_SAFE_NO_PAD.encode(bytes()?),
+        E::B64c | E::B64cSloppy => STANDARD.encode(bytes()?),
+        E::Hex | E::HexLc => bytes()?.iter().map(|b| format!("{b:02x}")).collect(),
+        E::HexUc => bytes()?.iter().map(|b| format!("{b:02X}")).collect(),
+        E::B32 => base32_encode(bytes()?, b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"),
+        E::H32 => base32_encode(bytes()?, b"0123456789ABCDEFGHIJKLMNOPQRSTUV"),
+        E::B45 => base45_encode(bytes()?),
+        E::Base10 => match value {
+            Value::Uint(n) => n.to_string(),
+            Value::Int(n) => n.to_string(),
+            _ => return None,
+        },
+        E::Json => crate::sample::to_json(value).to_string(),
+    })
+}
+
+fn base32_encode(b: &[u8], alphabet: &[u8; 32]) -> String {
+    let (mut bits, mut n, mut out) = (0u32, 0u32, String::new());
+    for &x in b {
+        bits = (bits << 8) | x as u32;
+        n += 8;
+        while n >= 5 {
+            n -= 5;
+            out.push(alphabet[((bits >> n) & 31) as usize] as char);
+        }
+    }
+    if n > 0 {
+        out.push(alphabet[((bits << (5 - n)) & 31) as usize] as char);
+    }
+    out
+}
+
+fn base45_encode(b: &[u8]) -> String {
+    const ALPHABET: &[u8; 45] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+    let mut out = String::new();
+    for chunk in b.chunks(2) {
+        let (mut n, digits) = match chunk {
+            [a, b] => ((*a as u32) << 8 | *b as u32, 3),
+            [a] => (*a as u32, 2),
+            _ => unreachable!(),
+        };
+        for _ in 0..digits {
+            out.push(ALPHABET[(n % 45) as usize] as char);
+            n /= 45;
+        }
+    }
+    out
+}
