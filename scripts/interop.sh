@@ -45,19 +45,19 @@ run_one() {
         c)
             cp "$harness/test_interop.c" "$pkg/test/"
             add_cmake_test "$pkg" test/test_interop.c
-            (cd "$pkg" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug >/dev/null \
-                && cmake --build build >/dev/null && ctest --test-dir build --output-on-failure) ;;
+            (cd "$pkg" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+                && cmake --build build && ctest --test-dir build --output-on-failure) ;;
         cpp)
             cp "$harness/test_interop.cpp" "$pkg/test/"
             add_cmake_test "$pkg" test/test_interop.cpp
-            (cd "$pkg" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug >/dev/null \
-                && cmake --build build >/dev/null && ctest --test-dir build --output-on-failure) ;;
+            (cd "$pkg" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+                && cmake --build build && ctest --test-dir build --output-on-failure) ;;
         csharp)
             cp "$harness/InteropTests.cs" "$pkg/tests/"
             (cd "$pkg" && dotnet test --nologo -v quiet) ;;
         nodejs)
             cp "$harness/interop.test.ts" "$pkg/tests/"
-            (cd "$pkg" && npm install --no-audit --no-fund >/dev/null && npm run build >/dev/null && npm test) ;;
+            (cd "$pkg" && npm install --no-audit --no-fund && npm run build && npm test) ;;
         python)
             cp "$harness/test_interop.py" "$pkg/tests/"
             (cd "$pkg" && PYTHONPATH=src "${CDDLC_PYTHON:-python3}" -m pytest -q tests) ;;

@@ -1292,6 +1292,11 @@ impl<'m> LowerCtx<'m> {
         rule_name:  &str,
         field_name: &str,
     ) -> Result<(TypeRef, Vec<Constraint>), IrError> {
+        // A parenthesized type (`kind: ("a" / "b")`) is the type inside it
+        // (RFC 8610 §3.1); the parser reads `( ... )` as an inline group.
+        if let Some(inner) = paren_type(ty) {
+            return self.lower_field_type(inner, rule_name, field_name);
+        }
         // An inline array or map (`names: [* tstr]`, `pos: { x: int, y: int }`) becomes a
         // synthesized named type (`<rule>-<field>`), lowered as a rule of that shape would
         // be. Lowered through `lower_type_to_ref` it would be `Primitive::Any`, which the
@@ -1498,6 +1503,19 @@ impl<'m> LowerCtx<'m> {
 fn single_type2(ty: &Type) -> Option<&Type2> {
     match ty.choices.as_slice() {
         [t1] if t1.node.ops.is_empty() => Some(&t1.node.base.node),
+        _ => None,
+    }
+}
+
+/// The type inside parentheses, `( type )`: a group of one entry that is a
+/// bare type (no key, no occurrence).
+fn paren_type(ty: &Type) -> Option<&Type> {
+    let Some(Type2::Group(g)) = single_type2(ty) else { return None };
+    let [gc] = g.node.choices.as_slice() else { return None };
+    let [e] = gc.entries.as_slice() else { return None };
+    if e.node.occurrence.is_some() { return None }
+    match &e.node.kind {
+        MemberKind::Type(t) => Some(&t.node),
         _ => None,
     }
 }

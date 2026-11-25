@@ -472,6 +472,16 @@ fn test_inline_literal_choice_becomes_named_enum() {
 }
 
 #[test]
+fn test_parenthesized_member_type_is_the_type_inside() {
+    // `( type )` is the type, not an inline group lowered to `any`.
+    let m = compile(r#"sim-end = { reason: ("until" / "stopped"), n: (uint) }"#);
+    let Some(TypeDef::Struct(s)) = m.get("sim-end") else { panic!("expected struct") };
+    assert_eq!(s.fields[0].ty, TypeRef::Named("sim-end-reason".into()));
+    assert_eq!(s.fields[1].ty, TypeRef::Primitive(cddlc_ir::Primitive::Uint));
+    assert!(matches!(m.get("sim-end-reason"), Some(TypeDef::Enum(_))));
+}
+
+#[test]
 fn test_inline_mixed_choice_stays_choice() {
     let m = compile("rec = { v: uint / tstr }");
     let Some(TypeDef::Struct(s)) = m.get("rec") else { panic!("expected struct") };
