@@ -91,6 +91,14 @@ fn is_container(name: &str, module: Option<&IrModule>) -> bool {
     matches!(module.and_then(|m| m.get(name)), Some(TypeDef::Array(_) | TypeDef::Map(_)))
 }
 
+/// Whether `name` is encoded and decoded by its own `encode_<name>` /
+/// `decode_<name>` functions: an array or table with `--no-std`, and always
+/// an array of a repeated group, whose members sit inline (dgtlrift/cddlc#90).
+fn has_codec_fns(name: &str, module: Option<&IrModule>, opts: &CodegenOptions) -> bool {
+    (opts.no_std && is_container(name, module))
+        || matches!(module.and_then(|m| m.get(name)), Some(TypeDef::Array(a)) if a.flat)
+}
+
 /// The integer of an integer-literal enum variant (the `2` in `1 / 2 / 3`).
 fn int_literal(v: &EnumVariant) -> Option<&LiteralValue> {
     match (&v.ty, literal_eq(&v.constraints)) {
@@ -854,7 +862,7 @@ fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
                 w.line(&format!("{}::{}(f) => {{ e.f64(*f as f64)?; }}", type_vname, vname));
             }
             // With `--no-std`, an array or table variant has its own encoder.
-            TypeRef::Named(n) if opts.no_std && is_container(n, Some(module)) => {
+            TypeRef::Named(n) if has_codec_fns(n, Some(module), opts) => {
                 w.line(&format!("{}::{}(inner) => {{ encode_{}(inner, e, ctx)?; }}", type_vname, vname, to_snake_case(n)));
             }
             TypeRef::Named(_) => {
@@ -1012,7 +1020,7 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
                 w.line("{");
                 w.indent();
                 w.line("let mut probe = d.clone();");
-                if opts.no_std && is_container(n, Some(module)) {
+                if has_codec_fns(n, Some(module), opts) {
                     w.line(&format!("if let Ok(inner) = decode_{}(&mut probe, ctx) {{", to_snake_case(n)));
                 } else {
                     w.line(&format!(
@@ -1051,6 +1059,10 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module:
     if a.deprecated { w.line("#[deprecated]"); }
 
     let type_name = to_pascal_case(&a.name);
+    if a.flat {
+        emit_flat_array(w, a, opts, module);
+        return;
+    }
     if opts.no_std {
         emit_array_no_std(w, a, opts, module);
         return;
@@ -1180,6 +1192,99 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &Ir
     w.line(&format!("let key = {};", decode_expr_for_in_module(&m.key_ty, opts, Some(module))));
     w.line(&format!("let value = {};", decode_expr_for_in_module(&m.val_ty, opts, Some(module))));
     w.line("out.insert(key, value).map_err(|_| DecodeError::message(\"map larger than its capacity\"))?;");
+    w.dedent();
+    w.line("}");
+    w.line("Ok(out)");
+    w.dedent();
+    w.line("}");
+}
+
+/// An array of a repeated group (`[* (a: uint, b: tstr)]`): a list of its
+/// `<name>-entry` records, whose members sit inline in one CBOR array
+/// (`[1, "x", 2, "y"]`), so it has its own encode/decode functions
+/// (dgtlrift/cddlc#90).
+fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module: &IrModule) {
+    let type_name = to_pascal_case(&a.name);
+    let snake = to_snake_case(&a.name);
+    let TypeRef::Named(entry) = &a.element else { return };
+    let Some(TypeDef::Struct(rec)) = module.get(entry) else { return };
+    let elem = to_pascal_case(entry);
+    let width = rec.fields.len();
+    let cap = capacity_value(
+        a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
+    if opts.no_std {
+        w.line(&format!("pub type {type_name} = heapless::Vec<{elem}, {cap}>;"));
+    } else {
+        w.line("#[allow(unexpected_cfgs)]");
+        w.line("#[cfg(not(feature = \"no-std\"))]");
+        w.line(&format!("pub type {type_name} = Vec<{elem}>;"));
+        w.line("#[allow(unexpected_cfgs)]");
+        w.line("#[cfg(feature = \"no-std\")]");
+        w.line(&format!("pub type {type_name} = heapless::Vec<{elem}, {cap}>;"));
+    }
+    w.blank();
+    w.line(&format!("/// Writes a `{type_name}`: each `{elem}`'s {width} members, inline, in one CBOR array."));
+    w.line("#[allow(unused_variables)]");
+    w.line(&format!(
+        "pub fn encode_{snake}<C, W: Write>(val: &{type_name}, e: &mut Encoder<W>, ctx: &mut C) -> Result<(), EncodeError<W::Error>> {{"
+    ));
+    w.indent();
+    if let Some(tag) = a.tagged {
+        w.line(&format!("e.tag(minicbor::data::Tag::new({}))?;", tag.0));
+    }
+    w.line(&format!("e.array(val.len() as u64 * {width})?;"));
+    w.line("for item in val.iter() {");
+    w.indent();
+    for f in &rec.fields {
+        emit_encode_value(w, &f.ty, &format!("item.{}", field_ident(&f.name)), &Occurrence::Required, opts, Some(module));
+    }
+    w.dedent();
+    w.line("}");
+    w.line("Ok(())");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("/// Reads a `{type_name}`: groups of {width} items, each one `{elem}`."));
+    w.line("#[allow(unused_variables, unused_mut)]");
+    w.line(&format!(
+        "pub fn decode_{snake}(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<{type_name}, DecodeError> {{"
+    ));
+    w.indent();
+    if let Some(tag) = a.tagged {
+        w.line(&format!("if d.tag()? != minicbor::data::Tag::new({}) {{ return Err(DecodeError::message(\"unexpected CBOR tag\")); }}", tag.0));
+    }
+    w.line("let len = d.array()?;");
+    w.line(&format!(
+        "if let Some(n) = len {{ if n % {width} != 0 {{ return Err(DecodeError::message(\"{}: a partial group\")); }} }}",
+        a.name
+    ));
+    w.line(&format!("let mut out = {type_name}::new();"));
+    w.line("let mut i = 0u64;");
+    w.line("loop {");
+    w.indent();
+    w.line(&format!("match len {{ Some(n) if i >= n / {width} => break, None if d.datatype()? == minicbor::data::Type::Break => {{ d.skip()?; break }}, _ => {{}} }}"));
+    w.line("i += 1;");
+    let mut names = Vec::new();
+    for f in &rec.fields {
+        let local = field_local(&f.name);
+        w.line(&format!("let {local} = {{ let val = {};", decode_expr_for_in_module(&f.ty, opts, Some(module))));
+        w.indent();
+        emit_field_validation(w, &f.constraints, "val", &f.name);
+        w.line("val };");
+        w.dedent();
+        names.push(format!("{}: {local}", field_ident(&f.name)));
+    }
+    w.line(&format!("let item = {elem} {{ {} }};", names.join(", ")));
+    if opts.no_std {
+        w.line("out.push(item).map_err(|_| DecodeError::message(\"array longer than its capacity\"))?;");
+    } else {
+        w.line("#[cfg(not(feature = \"no-std\"))]");
+        w.line("out.push(item);");
+        w.line("#[cfg(feature = \"no-std\")]");
+        w.line("out.push(item).map_err(|_| DecodeError::message(\"array longer than its capacity\"))?;");
+    }
     w.dedent();
     w.line("}");
     w.line("Ok(out)");
@@ -1471,7 +1576,7 @@ fn emit_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: &Co
             w.line(&format!("{enc}?;"));
         }
         // minicbor can't encode a `heapless::Vec` (`--no-std`): the array's own function does.
-        TypeRef::Named(n) if opts.no_std && is_container(n, module) => {
+        TypeRef::Named(n) if has_codec_fns(n, module, opts) => {
             w.line(&format!("encode_{}(&{expr}, e, ctx)?;", to_snake_case(n)));
         }
         TypeRef::Named(_) => {
@@ -1539,7 +1644,7 @@ fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option
         TypeRef::Named(n) => {
             // Array type aliases (Vec<T>) decode via minicbor's blanket impl
             let is_array = is_container(n, module);
-            if is_array && opts.no_std {
+            if has_codec_fns(n, module, opts) {
                 // minicbor can't decode a `heapless::Vec`: the array's own function does.
                 format!("decode_{}(d, ctx)?", to_snake_case(n))
             } else if is_array {
@@ -2008,6 +2113,25 @@ fn emit_array_roundtrip(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOption
     // Arrays are type aliases — test via the element type directly
     let type_name = to_pascal_case(&a.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&a.name));
+    if a.flat {
+        // A repeated group goes through its own encode/decode functions.
+        let snake = to_snake_case(&a.name);
+        if !opts.no_std {
+            w.line("#[allow(unexpected_cfgs)]");
+            w.line("#[cfg(not(feature = \"no-std\"))]");
+        }
+        w.line("#[test]");
+        w.line(&format!("fn {test_name}_empty() {{"));
+        w.indent();
+        w.line(&format!("let original = {type_name}::new();"));
+        w.line("let mut buf = Vec::new();");
+        w.line(&format!("encode_{snake}(&original, &mut minicbor::Encoder::new(&mut buf), &mut ()).expect(\"encode\");"));
+        w.line(&format!("let decoded = decode_{snake}(&mut minicbor::Decoder::new(&buf), &mut ()).expect(\"decode\");"));
+        w.line("assert_eq!(original, decoded);");
+        w.dedent();
+        w.line("}");
+        return;
+    }
     if opts.no_std {
         // A heapless array goes through its own encode/decode functions.
         let snake = to_snake_case(&a.name);
@@ -2356,6 +2480,18 @@ fn serde_field_attrs_json(
     let cddl_snake = to_snake_case(fname_cddl);
     if fname_cddl != cddl_snake || fname_cddl != fname_rust {
         attrs.push(format!("rename = {:?}", fname_cddl));
+    }
+    // An array of a repeated group: its records' members inline (dgtlrift/cddlc#90).
+    if let TypeRef::Named(n) = ty {
+        if matches!(module.get(n), Some(TypeDef::Array(a)) if a.flat) {
+            match occ {
+                Occurrence::Optional => {
+                    attrs.push(format!("with = \"{}_flat_option\"", to_snake_case(n)));
+                    attrs.push("default".into());
+                }
+                _ => attrs.push(format!("with = \"{}_flat\"", to_snake_case(n))),
+            }
+        }
     }
     // Byte strings: base64url in JSON, native in CBOR (see `base64url_serde`).
     if let Some(shape) = byte_shape(ty, module) {
@@ -2759,6 +2895,13 @@ fn emit_array_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
     let type_name = to_pascal_case(&a.name);
     let elem_ty   = typeref_to_rust(&a.element, opts);
     let bytes     = byte_shape(&a.element, module) == Some(ByteShape::One);
+    if let Some(TypeDef::Struct(rec)) = match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => module.get(n),
+        _ => None,
+    } {
+        emit_flat_array_json(w, a, &elem_ty, rec.fields.len());
+        return;
+    }
 
     w.line(&format!("pub type {type_name} = Vec<{elem_ty}>;"));
     w.blank();
@@ -2782,6 +2925,80 @@ fn emit_array_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
         w.line("serde_json::from_slice(data)");
     }
     w.dedent();
+    w.line("}");
+}
+
+/// An array of a repeated group in JSON: its records' members, inline, in one
+/// array (dgtlrift/cddlc#90). `<name>_flat` (and `<name>_flat_option`) are serde
+/// `with` modules, for the array itself and for a member that holds one.
+fn emit_flat_array_json(w: &mut IndentWriter, a: &ArrayDef, elem_ty: &str, width: usize) {
+    let type_name = to_pascal_case(&a.name);
+    let snake = to_snake_case(&a.name);
+    w.line(&format!("pub type {type_name} = Vec<{elem_ty}>;"));
+    w.blank();
+    w.line(&format!("/// `{type_name}` in JSON: each `{elem_ty}`'s {width} members, inline, in one array."));
+    w.line(&format!("pub mod {snake}_flat {{"));
+    w.indent();
+    w.line("use super::*;");
+    w.line(&format!("pub fn serialize<S: serde::Serializer>(val: &[{elem_ty}], s: S) -> Result<S::Ok, S::Error> {{"));
+    w.indent();
+    w.line("use serde::ser::Error as _;");
+    w.line("let mut items = Vec::new();");
+    w.line("for item in val {");
+    w.indent();
+    w.line("match serde_json::to_value(item).map_err(S::Error::custom)? {");
+    w.line("    serde_json::Value::Array(m) => items.extend(m),");
+    w.line(&format!("    _ => return Err(S::Error::custom(\"{}: a record that isn't an array\")),", a.name));
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.line("serde::Serialize::serialize(&items, s)");
+    w.dedent();
+    w.line("}");
+    w.line(&format!("pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<{elem_ty}>, D::Error> {{"));
+    w.indent();
+    w.line("use serde::de::Error as _;");
+    w.line("let items = <Vec<serde_json::Value> as serde::Deserialize>::deserialize(d)?;");
+    w.line(&format!("if items.len() % {width} != 0 {{ return Err(D::Error::custom(\"{}: a partial group\")); }}", a.name));
+    w.line(&format!(
+        "items.chunks({width}).map(|c| serde_json::from_value(serde_json::Value::Array(c.to_vec())).map_err(D::Error::custom)).collect()"
+    ));
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("/// An optional member holding a `{type_name}`."));
+    w.line("#[allow(dead_code)]");
+    w.line(&format!("pub mod {snake}_flat_option {{"));
+    w.indent();
+    w.line("use super::*;");
+    w.line(&format!("pub fn serialize<S: serde::Serializer>(val: &Option<Vec<{elem_ty}>>, s: S) -> Result<S::Ok, S::Error> {{"));
+    w.line(&format!("    match val {{ Some(v) => super::{snake}_flat::serialize(v, s), None => s.serialize_none() }}"));
+    w.line("}");
+    w.line(&format!("pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<{elem_ty}>>, D::Error> {{"));
+    w.indent();
+    w.line(&format!("struct W(Vec<{elem_ty}>);"));
+    w.line("impl<'de> serde::Deserialize<'de> for W {");
+    w.line(&format!("    fn deserialize<D2: serde::Deserializer<'de>>(d: D2) -> Result<Self, D2::Error> {{ super::{snake}_flat::deserialize(d).map(W) }}"));
+    w.line("}");
+    w.line("Ok(<Option<W> as serde::Deserialize>::deserialize(d)?.map(|w| w.0))");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"));
+    w.line("    let mut out = Vec::new();");
+    w.line(&format!("    {snake}_flat::serialize(val, &mut serde_json::Serializer::new(&mut out)).expect(\"encode\");"));
+    w.line("    out");
+    w.line("}");
+    w.blank();
+    w.line(&format!("pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"));
+    w.line("    let mut de = serde_json::Deserializer::from_slice(data);");
+    w.line(&format!("    let val = {snake}_flat::deserialize(&mut de)?;"));
+    w.line("    de.end()?;");
+    w.line("    Ok(val)");
     w.line("}");
 }
 

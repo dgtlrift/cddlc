@@ -1048,3 +1048,43 @@ fn printf_and_join_warn() {
     let r = compile_warns("r = tstr .printf [\"%d\", 1]\n");
     assert!(r.warnings.iter().any(|w| w.message.contains("'.printf' isn't checked")), "{:?}", r.warnings);
 }
+
+// ── Repeated groups in arrays (dgtlrift/cddlc#90) ─────────────────────────────
+
+#[test]
+fn test_array_of_repeated_inline_group() {
+    let m = compile("r = [ * ( a: uint, b: tstr ) ]");
+    let TypeDef::Array(a) = m.get("r").unwrap() else { panic!("not an array") };
+    assert!(a.flat);
+    assert!(matches!(a.occurrence, Occurrence::ZeroOrMore { .. }));
+    assert!(matches!(&a.element, TypeRef::Named(n) if n == "r-entry"));
+    let TypeDef::Struct(s) = m.get("r-entry").unwrap() else { panic!("not a record") };
+    assert_eq!(s.encoding, cddlc_ir::StructEncoding::Array);
+    let names: Vec<_> = s.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["a", "b"]);
+}
+
+#[test]
+fn test_array_of_repeated_group_rule() {
+    let m = compile("r = [ + pair ]\npair = ( key: tstr, value: int )");
+    let TypeDef::Array(a) = m.get("r").unwrap() else { panic!("not an array") };
+    assert!(a.flat);
+    assert!(matches!(a.occurrence, Occurrence::OneOrMore { .. }));
+    let TypeDef::Struct(s) = m.get("r-entry").unwrap() else { panic!("not a record") };
+    assert_eq!(s.fields.len(), 2);
+}
+
+#[test]
+fn test_array_of_repeated_single_member_group_is_plain() {
+    let m = compile("r = [ * ( a: uint ) ]");
+    let TypeDef::Array(a) = m.get("r").unwrap() else { panic!("not an array") };
+    assert!(!a.flat);
+    assert!(matches!(a.element, TypeRef::Primitive(Primitive::Uint)));
+}
+
+#[test]
+fn test_array_of_repeated_group_with_optional_member_unsupported() {
+    let parsed = parse_cddl("r = [ * ( a: uint, ? b: tstr ) ]", PathBuf::from("t.cddl")).unwrap();
+    let err = lower(&parsed.value, 16, 64).err().expect("should fail").to_string();
+    assert!(err.contains("each repetition must have the same members"), "{err}");
+}

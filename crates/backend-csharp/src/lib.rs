@@ -152,18 +152,21 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
 
     // Emit each type
     for (_, def) in &module.types {
-        emit_type(&mut w, def, &ns, opts);
+        emit_type(&mut w, def, module, &ns, opts);
         w.blank();
     }
 
     w.finish()
 }
 
-fn emit_type(w: &mut IndentWriter, def: &TypeDef, ns: &str, opts: &CodegenOptions) {
+fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, ns: &str, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, s, opts),
         TypeDef::Enum(e)   => emit_enum(w, e, ns, opts),
-        TypeDef::Array(a)  => emit_array(w, a, opts),
+        TypeDef::Array(a)  => match flat_record(a, module) {
+            Some(rec) => emit_flat_array(w, a, rec, opts),
+            None => emit_array(w, a, opts),
+        },
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
         TypeDef::Map(m)    => emit_map(w, m, opts),
     }
@@ -950,6 +953,150 @@ fn emit_choice_member_converter(w: &mut IndentWriter, name: &str, ty: &TypeRef, 
 }
 
 // ── Array ─────────────────────────────────────────────────────────────────────
+
+/// The record an array of a repeated group holds, whose members sit inline
+/// in the array (dgtlrift/cddlc#90).
+fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m StructDef> {
+    match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match module.get(n) {
+            Some(TypeDef::Struct(s)) => Some(s),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// An array of a repeated group (`[* (a: uint, b: tstr)]`): a list of its
+/// records, whose members are written inline, one group after another
+/// (`[1, "x", 2, "y"]`).
+fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &CodegenOptions) {
+    emit_doc_comment(w, a.doc.as_deref());
+    if a.deprecated { w.line("[Obsolete]"); }
+
+    let type_name = to_pascal_case(&a.name);
+    let elem_ty   = cs_typeref(&a.element, opts);
+    let width     = rec.fields.len();
+
+    if opts.is_json() { w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]")); }
+    w.line(&format!("public sealed class {type_name}"));
+    w.line("{");
+    w.indent();
+    w.line(&format!("public List<{elem_ty}> Items {{ get; }} = new();"));
+    w.blank();
+    w.line(&format!("public static {type_name} Default => new();"));
+    w.blank();
+
+    if opts.is_json() {
+        w.line("public byte[] ToJson() => Cddl.Json(writer =>");
+        w.line("{");
+        w.indent();
+        w.line("var options = JsonSerializerOptions.Default;");
+        w.line("writer.WriteStartArray();");
+        w.line("foreach (var item in Items)");
+        w.line("{");
+        w.indent();
+        for f in &rec.fields {
+            w.line(&cs_json_write_stmt(&f.ty, &format!("item.{}", to_pascal_case(&f.name)), opts));
+        }
+        w.dedent();
+        w.line("}");
+        w.line("writer.WriteEndArray();");
+        w.dedent();
+        w.line("});");
+        w.blank();
+        w.line(&format!("public static {type_name} FromJson(byte[] data)"));
+        w.line("{");
+        w.indent();
+        w.line("using var doc = JsonDocument.Parse(data);");
+        w.line("var a = doc.RootElement;");
+        w.line(&format!(
+            "if (a.ValueKind != JsonValueKind.Array || a.GetArrayLength() % {width} != 0) throw new JsonException(\"{type_name}: expected an array of groups of {width}\");"
+        ));
+        w.line(&format!("var result = new {type_name}();"));
+        w.line(&format!("for (int i = 0; i < a.GetArrayLength(); i += {width})"));
+        w.line("{");
+        w.indent();
+        w.line(&format!("result.Items.Add(new {elem_ty}"));
+        w.line("{");
+        w.indent();
+        for (j, f) in rec.fields.iter().enumerate() {
+            w.line(&format!("{} = {},", to_pascal_case(&f.name), cs_json_from_element(&f.ty, &format!("a[i + {j}]"), opts)));
+        }
+        w.dedent();
+        w.line("});");
+        w.dedent();
+        w.line("}");
+        w.line("return result;");
+        w.dedent();
+        w.line("}");
+    } else {
+        w.line("public void Encode(CborWriter writer)");
+        w.line("{");
+        w.indent();
+        if let Some(tag) = a.tagged {
+            w.line(&format!("writer.WriteTag((CborTag){});", tag.0));
+        }
+        w.line(&format!("writer.WriteStartArray(Items.Count * {width});"));
+        w.line("foreach (var item in Items)");
+        w.line("{");
+        w.indent();
+        for f in &rec.fields {
+            emit_cs_encode_value(w, &f.ty, &format!("item.{}", to_pascal_case(&f.name)), &Occurrence::Required, opts);
+        }
+        w.dedent();
+        w.line("}");
+        w.line("writer.WriteEndArray();");
+        w.dedent();
+        w.line("}");
+        w.blank();
+
+        w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+        w.line("{");
+        w.indent();
+        if let Some(tag) = a.tagged {
+            w.line("var tag = reader.ReadTag();");
+            w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+        }
+        w.line(&format!("var result = new {type_name}();"));
+        w.line("var length = reader.ReadStartArray();");
+        w.line(&format!(
+            "if (length is int n && n % {width} != 0) throw new CborContentException(\"{type_name}: a partial group\");"
+        ));
+        w.line("var count  = length ?? int.MaxValue;");
+        w.line(&format!("for (int i = 0; i < count; i += {width})"));
+        w.line("{");
+        w.indent();
+        w.line("if (length == null && reader.PeekState() == CborReaderState.EndArray) break;");
+        for f in &rec.fields {
+            let ty    = cs_field_type(&f.ty, &Occurrence::Required, opts);
+            let local = format!("m_{}", to_snake_case(&f.name));
+            let def   = cs_default_value(&f.ty, &Occurrence::Required, opts);
+            w.line(&format!("{ty} {local} = {def};"));
+            emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &Occurrence::Required, opts);
+        }
+        w.line(&format!("result.Items.Add(new {elem_ty}"));
+        w.line("{");
+        w.indent();
+        for f in &rec.fields {
+            w.line(&format!("{} = m_{},", to_pascal_case(&f.name), to_snake_case(&f.name)));
+        }
+        w.dedent();
+        w.line("});");
+        w.dedent();
+        w.line("}");
+        w.line("reader.ReadEndArray();");
+        w.line("return result;");
+        w.dedent();
+        w.line("}");
+    }
+
+    w.dedent();
+    w.line("}");
+    if opts.is_json() {
+        w.blank();
+        emit_delegating_json_converter(w, &type_name);
+    }
+}
 
 fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     emit_doc_comment(w, a.doc.as_deref());
