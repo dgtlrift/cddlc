@@ -32,29 +32,44 @@ flowchart LR
 ```csharp
 public sealed class Device
 {
-    public string  Id     { get; set; } = "";
+    public string  Id     { get; set; } = string.Empty;
     public bool    Active { get; set; }
-    public string? Label  { get; set; }    // nullable optional
+    public string? Label  { get; set; }    // optional: null when absent
 
-    public byte[] EncodeCbor()                              { … }
-    public static Device DecodeCbor(ReadOnlySpan<byte> data) { … }
+    public static Device Default => new();
 
-    public string EncodeJson()                              { … }
-    public static Device DecodeJson(string json)            { … }
+    public void Encode(CborWriter writer)          { … }   // --format cbor
+    public static Device Decode(CborReader reader) { … }
+
+    public byte[] ToJson()                         { … }   // --format json
+    public static Device FromJson(byte[] data)     { … }
 }
 ```
 
-- Optional fields use C# nullable reference types (`string?`, `int?`).
-- CBOR encode uses `CborWriter`; decode uses `CborReader`.
-- JSON uses `System.Text.Json` serialisation.
+- Optional members are nullable (`string?`, `long?`). An absent one is left out of the
+  map rather than written as `null`.
+- A record (`[x: int, y: int]`) is a class too, encoded as an array of its members' values
+  in order; in JSON a generated `JsonConverter` writes it as an array.
+- A member whose type is an inline choice of different C# types (`int / float`) is an
+  `object` holding one of them. Encoding writes the alternative the value holds; decoding
+  tries the alternatives in order.
+- Floats are written at their CDDL width (`float32` as four bytes); with `--dcbor`, in the
+  shortest form that keeps the value.
 
 ### Enums
 
 ```csharp
-public enum Status { Ok, Warn, Error }
+public abstract class Status
+{
+    public sealed class Ok : Status { public static readonly Ok Instance = new(); … }
+    …
+    public static Status Decode(CborReader reader) { … }
+}
 ```
 
-String enums encode as CBOR text strings; integer enums encode as CBOR integers.
+A variant that is a literal (`"ok"`, `1`, `nil`) is a singleton that writes its literal;
+any other variant holds a value of its type. Decoding returns the first variant, in the
+CDDL's order, that the item matches.
 
 ### Arrays
 
@@ -93,9 +108,6 @@ Requires .NET 8 SDK or later.
 
 ## Known gaps and future enhancements
 
-- **Record arrays** (`[a: uint, b: tstr]`, RFC 8610 §3.4) are still written as
-  maps, unlike the other backends (dgtlrift/cddlc#81); the fix is drafted and
-  awaits testing with the .NET SDK.
 - **Partial constraint validation**: `.size` and numeric range constraints emit
   `ArgumentException` guards; `.regexp` constraints reach the IR but are not emitted in
   the generated code.
