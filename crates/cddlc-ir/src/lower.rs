@@ -385,7 +385,7 @@ impl<'m> LowerCtx<'m> {
     }
 
     fn classify_enum_variant(
-        &self,
+        &mut self,
         t2:        &Type2,
         index:     usize,
         rule_name: &str,
@@ -408,6 +408,24 @@ impl<'m> LowerCtx<'m> {
                 let n = name.node.as_str();
                 let tr = self.resolve_typeref(n, rule_name)?;
                 Ok((pascal_case(n).into(), tr, vec![]))
+            }
+            // An inline array or map (`null / [a, b]`, `{ + text => text } / null`)
+            // is a type of its own, `<rule>-alt<i>`, as a member's is
+            // (dgtlrift/cddlc#138).
+            Type2::Array(group) | Type2::Map(group) => {
+                let mut name: SmolStr = format!("{rule_name}-alt{index}").into();
+                while self.output.contains_key(&name) || self.known_rules.contains(&name) {
+                    name = format!("{name}-type").into();
+                }
+                self.known_rules.insert(name.clone());
+                let meta = PragmaMeta::default();
+                let def = if matches!(t2, Type2::Array(_)) {
+                    self.lower_array_type(&name, &group.node.choices, &meta)?
+                } else {
+                    self.lower_map_as_struct(&name, &group.node.choices, &meta)?
+                };
+                self.output.insert(name.clone(), def);
+                Ok((format!("Variant{index}").into(), TypeRef::Named(name), vec![]))
             }
             _ => {
                 Ok((format!("Variant{index}").into(),

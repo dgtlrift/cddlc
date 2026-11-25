@@ -388,9 +388,10 @@ fn write_variant(enc: &mut Enc, v: &EnumVariant, module: &IrModule, opts: &Codeg
         _ => None,
     });
     match &v.ty {
-        TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
+        TypeRef::Primitive(Primitive::Tstr) => {
             enc.str(&cddlc_codegen::enum_variant_text(v)).ok().map(|_| ())
         }
+        TypeRef::Primitive(Primitive::Null) => enc.null().ok().map(|_| ()),
         TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
             encode_field_val(enc, &int_literal.unwrap_or(FieldVal::Uint(0)))
         }
