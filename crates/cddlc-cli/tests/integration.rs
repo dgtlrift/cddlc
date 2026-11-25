@@ -537,3 +537,41 @@ fn comments_and_source_lines_become_docs() {
     let quiet = generate_commented(&["--no-source-comments"]);
     assert!(quiet.contains("/// A thing.\n") && !quiet.contains("cddl: "), "{quiet}");
 }
+
+// ── sample (dgtlrift/cddlc#110) ──────────────────────────────────────────────
+
+#[test]
+fn sample_writes_an_example_that_validate_accepts() {
+    let dir = tempdir();
+    let schema = dir.join("s.cddl");
+    fs::write(&schema, "reading = {\n  id: uint .ge 1,\n  kind: \"temp\",\n  ? note: tstr,\n  key: bstr .size 2,\n}\n").unwrap();
+    let s = schema.to_str().unwrap();
+
+    let (json, err, ok) = run(&["sample", "--cddl", s]);
+    assert!(ok, "{err}");
+    assert_eq!(json, "{\n  \"id\": 1,\n  \"kind\": \"temp\",\n  \"note\": \"text\",\n  \"key\": \"AAA\"\n}\n");
+
+    let (diag, err, ok) = run(&["sample", "--cddl", s, "--format", "diag", "--minimal"]);
+    assert!(ok, "{err}");
+    assert_eq!(diag, "{\"id\": 1, \"kind\": \"temp\", \"key\": h'0000'}\n");
+
+    // The CBOR and JSON it writes validate.
+    for (fmt, flag) in [("cbor", "--cbor"), ("json", "--json")] {
+        let out = dir.join(format!("sample.{fmt}"));
+        let (_, err, ok) = run(&["sample", "--cddl", s, "--format", fmt, "-o", out.to_str().unwrap()]);
+        assert!(ok, "{err}");
+        let (stdout, err, ok) = run(&["validate", "--cddl", s, flag, out.to_str().unwrap()]);
+        assert!(ok && stdout.contains("OK"), "{stdout}{err}");
+    }
+}
+
+#[test]
+fn sample_warns_and_fails_when_its_example_does_not_validate() {
+    let dir = tempdir();
+    let schema = dir.join("s.cddl");
+    fs::write(&schema, "r = { code: tstr .regexp \"[A-Z]{3}\" }\n").unwrap();
+    let (stdout, err, ok) = run(&["sample", "--cddl", schema.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(stdout.contains("\"code\""), "{stdout}");
+    assert!(err.contains("doesn't validate") && err.contains("does not match pattern"), "{err}");
+}
