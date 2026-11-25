@@ -27,6 +27,62 @@ fn field_local(name: &str) -> String {
     format!("f_{}", field_ident(name).trim_start_matches("r#"))
 }
 
+// ── Recursion ─────────────────────────────────────────────────────────────────
+
+/// The type a member or variant holds inline (not in a `Vec` or map): a named
+/// type, through any tag.
+fn inline_named(ty: &TypeRef) -> Option<&str> {
+    match ty {
+        TypeRef::Named(n) => Some(n.as_str()),
+        TypeRef::Tagged(_, inner) => inline_named(inner),
+        // A choice is held as its first alternative (see `typeref_to_rust`).
+        TypeRef::Choice(cs) => cs.first().and_then(inline_named),
+        _ => None,
+    }
+}
+
+/// The types `name` holds inline: its required and optional members' and its
+/// variants' named types.
+fn inline_edges<'m>(name: &str, module: &'m IrModule) -> Vec<&'m str> {
+    match module.get(name) {
+        Some(TypeDef::Struct(s)) => s.fields.iter()
+            .filter(|f| matches!(f.occurrence, Occurrence::Required | Occurrence::Optional))
+            .filter_map(|f| inline_named(&f.ty))
+            .collect(),
+        Some(TypeDef::Enum(e)) => e.variants.iter().filter_map(|v| inline_named(&v.ty)).collect(),
+        _ => vec![],
+    }
+}
+
+/// Whether a member or variant of `from` holding `ty` must be a `Box`: `ty`
+/// holds `from` again, inline, so the type would have infinite size
+/// (dgtlrift/cddlc#139). A `Vec` or map in between already puts it on the heap.
+fn is_boxed(from: &str, ty: &TypeRef, module: &IrModule) -> bool {
+    let Some(start) = inline_named(ty) else { return false };
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut stack = vec![start];
+    while let Some(n) = stack.pop() {
+        if n == from {
+            return true;
+        }
+        if seen.insert(n) {
+            stack.extend(inline_edges(n, module));
+        }
+    }
+    false
+}
+
+/// Whether any member or variant in the module is a `Box`.
+fn module_has_boxes(module: &IrModule) -> bool {
+    module.types.iter().any(|(name, def)| match def {
+        TypeDef::Struct(s) => s.fields.iter().any(|f| {
+            matches!(f.occurrence, Occurrence::Required | Occurrence::Optional) && is_boxed(name, &f.ty, module)
+        }),
+        TypeDef::Enum(e) => e.variants.iter().any(|v| is_boxed(name, &v.ty, module)),
+        _ => false,
+    })
+}
+
 /// A valid Rust identifier for a CDDL field name (see [`cddlc_codegen::rust_field_ident`]).
 /// Serde derives strip the `r#`, and the JSON backend adds an explicit rename
 /// whenever the identifier differs.
@@ -153,7 +209,7 @@ impl Backend for RustBackend {
         let crate_name = format!("{}-{fmt_tag}", module.name);
         let lib_src    = if opts.is_json() { emit_module_json(module, opts) } else { emit_module(module, opts) };
         let tests_src  = if opts.is_json() { emit_roundtrip_tests_json(module, opts) } else { emit_roundtrip_tests(module, opts) };
-        let cargo_toml = emit_cargo_toml(&crate_name, opts);
+        let cargo_toml = emit_cargo_toml(&crate_name, opts, module_has_boxes(module));
 
         Ok(CodegenOutput {
             files: vec![
@@ -181,6 +237,15 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
 
     // File header
     emit_header(&mut w, opts);
+    if module_has_boxes(module) {
+        w.line("// A recursive type holds a `Box`: no-std needs `alloc` (dgtlrift/cddlc#139).");
+        w.line("#[cfg(feature = \"no-std\")]");
+        w.line("extern crate alloc;");
+        w.line("#[cfg(feature = \"no-std\")]");
+        w.line("#[allow(unused_imports)]");
+        w.line("use alloc::boxed::Box;");
+        w.blank();
+    }
     if cddlc_codegen::module_uses_bits(module) {
         w.blank();
         emit_bits_check(&mut w);
@@ -358,7 +423,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, modul
     w.indent();
     for f in &s.fields {
         emit_doc(w, f.doc.as_deref());
-        let ty_str = field_type_str(&f.ty, &f.occurrence, opts);
+        let ty_str = member_type(&s.name, f, opts, module);
         w.line(&format!("pub {}: {},", field_ident(&f.name), ty_str));
     }
     if let Some(r) = &s.rest {
@@ -590,7 +655,13 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("Ok(Self {");
     w.indent();
     for f in &s.fields {
-        w.line(&format!("{}: {},", field_ident(&f.name), field_local(&f.name)));
+        let local = field_local(&f.name);
+        let value = match (is_boxed(&s.name, &f.ty, module), f.occurrence.is_required()) {
+            (true, true) => format!("Box::new({local})"),
+            (true, false) => format!("{local}.map(Box::new)"),
+            (false, _) => local,
+        };
+        w.line(&format!("{}: {value},", field_ident(&f.name)));
     }
     w.dedent();
     w.line("})");
@@ -629,8 +700,9 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     // double-wrap with Option<Option<T>>; other occurrences use field_type_str.
     for f in &s.fields {
         let var_ty = match &f.occurrence {
+            Occurrence::Optional if is_boxed(&s.name, &f.ty, module) => format!("Box<{}>", typeref_to_rust(&f.ty, opts)),
             Occurrence::Optional => typeref_to_rust(&f.ty, opts),
-            _ => field_type_str(&f.ty, &f.occurrence, opts),
+            _ => member_type(&s.name, f, opts, module),
         };
         w.line(&format!("let mut {}: Option<{}> = None;", field_local(&f.name), var_ty));
     }
@@ -660,7 +732,11 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         // Inline validation
         emit_field_validation(w, &f.constraints, "val", &f.name);
 
-        w.line(&format!("{local} = Some(val);"));
+        if is_boxed(&s.name, &f.ty, module) {
+            w.line(&format!("{local} = Some(Box::new(val));"));
+        } else {
+            w.line(&format!("{local} = Some(val);"));
+        }
         w.dedent();
         w.line("}");
     }
@@ -751,7 +827,11 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &
                 w.line(&format!("{vname}({rt}),"));
             }
             TypeRef::Named(n) => {
-                w.line(&format!("{vname}({}),", to_pascal_case(n)));
+                if is_boxed(&e.name, &v.ty, module) {
+                    w.line(&format!("{vname}(Box<{}>),", to_pascal_case(n)));
+                } else {
+                    w.line(&format!("{vname}({}),", to_pascal_case(n)));
+                }
             }
             _ => w.line(&format!("{vname},")),
         }
@@ -1058,7 +1138,11 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
                 }
                 w.indent();
                 w.line("*d = probe;");
-                w.line(&format!("return Ok({enum_name}::{vname}(inner));"));
+                if is_boxed(&e.name, &v.ty, module) {
+                    w.line(&format!("return Ok({enum_name}::{vname}(Box::new(inner)));"));
+                } else {
+                    w.line(&format!("return Ok({enum_name}::{vname}(inner));"));
+                }
                 w.dedent();
                 w.line("}");
                 w.dedent();
@@ -1729,6 +1813,20 @@ fn emit_field_validation(
 
 // ── Type string helpers ───────────────────────────────────────────────────────
 
+/// A struct member's Rust type: [`field_type_str`], with a `Box` around a
+/// type that holds the struct again (dgtlrift/cddlc#139).
+fn member_type(struct_name: &str, f: &FieldDef, opts: &CodegenOptions, module: &IrModule) -> String {
+    if is_boxed(struct_name, &f.ty, module) {
+        let base = typeref_to_rust(&f.ty, opts);
+        match f.occurrence {
+            Occurrence::Optional => return format!("Option<Box<{base}>>"),
+            Occurrence::Required => return format!("Box<{base}>"),
+            _ => {}
+        }
+    }
+    field_type_str(&f.ty, &f.occurrence, opts)
+}
+
 fn field_type_str(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     let base = typeref_to_rust(ty, opts);
     match occ {
@@ -1777,7 +1875,7 @@ fn emit_doc(w: &mut IndentWriter, doc: Option<&str>) {
 }
 // ── Cargo.toml generation ─────────────────────────────────────────────────────
 
-fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions) -> String {
+fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions, boxes: bool) -> String {
     let mut s = String::new();
     s.push_str(&cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Hash));
     s.push_str("[package]\n");
@@ -1807,10 +1905,13 @@ fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions) -> String {
         // Outside no-std the types are `Vec` and `String`, which need minicbor's alloc.
         s.push_str("default = [\"alloc\"]\n");
         s.push_str("alloc   = [\"minicbor/alloc\"]\n");
-        if opts.no_std {
-            s.push_str("no-std  = []\n");
-        } else {
-            s.push_str("no-std  = [\"heapless\"]\n");
+        // A recursive type holds a `Box`, so even no-std needs an allocator
+        // (dgtlrift/cddlc#139).
+        match (opts.no_std, boxes) {
+            (true, false) => s.push_str("no-std  = []\n"),
+            (true, true) => s.push_str("no-std  = [\"alloc\"]\n"),
+            (false, false) => s.push_str("no-std  = [\"heapless\"]\n"),
+            (false, true) => s.push_str("no-std  = [\"heapless\", \"alloc\"]\n"),
         }
         s.push('\n');
         s.push_str("[dev-dependencies]\n");
@@ -1907,6 +2008,11 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
             }
             _ => default_value_expr(&f.ty, &f.occurrence, opts),
         };
+        let val = if f.occurrence.is_required() && is_boxed(&s.name, &f.ty, module) {
+            format!("Box::new({val})")
+        } else {
+            val
+        };
         w.line(&format!("{fname}: {val},"));
     }
     if let Some(r) = &s.rest {
@@ -1981,7 +2087,11 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opt
                 format!("{}::{}", type_name, vname),
             // A variant of a map type (dgtlrift/cddlc#102).
             TypeRef::Named(n) if is_map_struct(n, module) =>
-                format!("{}::{}({}::default())", type_name, vname, to_pascal_case(n)),
+                if is_boxed(&e.name, &v.ty, module) {
+                    format!("{}::{}(Box::new({}::default()))", type_name, vname, to_pascal_case(n))
+                } else {
+                    format!("{}::{}({}::default())", type_name, vname, to_pascal_case(n))
+                },
             _ => continue,
         };
 
@@ -2632,7 +2742,7 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
                 markers.push((marker, lit.clone()));
                 ty
             }
-            None => field_type_str(&f.ty, &f.occurrence, opts),
+            None => member_type(&s.name, f, opts, module),
         };
         w.line(&format!("pub {fname}: {ty_str},"));
         field_types.push(ty_str);
@@ -2869,7 +2979,11 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
                             Some(shape) => format!("#[serde(with = {:?})] ", bytes_with(shape, &Occurrence::Required).0),
                             None => String::new(),
                         };
-                        (format!("{vname}({attr}{tn}),"), format!("{type_name}::{vname}({tn}::default())"))
+                        if is_boxed(&e.name, &v.ty, module) {
+                            (format!("{vname}({attr}Box<{tn}>),"), format!("{type_name}::{vname}(Box::new({tn}::default()))"))
+                        } else {
+                            (format!("{vname}({attr}{tn}),"), format!("{type_name}::{vname}({tn}::default())"))
+                        }
                     }
                     _ => (format!("{vname},"), format!("{type_name}::{vname}")),
                 }
@@ -3152,7 +3266,7 @@ fn emit_roundtrip_tests_json(module: &IrModule, opts: &CodegenOptions) -> String
 
     for (_, def) in &module.types {
         match def {
-            TypeDef::Struct(s) => emit_struct_roundtrip_json(&mut w, s, opts),
+            TypeDef::Struct(s) => emit_struct_roundtrip_json(&mut w, s, opts, module),
             TypeDef::Enum(e)   => emit_enum_roundtrip_json(&mut w, e, module),
             TypeDef::Alias(a)  => emit_alias_roundtrip_json(&mut w, a, opts),
             TypeDef::Array(a)  => emit_array_roundtrip_json(&mut w, a),
@@ -3172,7 +3286,7 @@ fn emit_cbor_roundtrip(w: &mut IndentWriter, type_name: &str) {
     w.line("assert_eq!(original, decoded);");
 }
 
-fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&s.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&s.name));
 
@@ -3197,6 +3311,8 @@ fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &Codege
         let fname = field_ident(&f.name);
         let val = if field_literal(f).is_some() {
             "Default::default()".to_owned()
+        } else if f.occurrence.is_required() && is_boxed(&s.name, &f.ty, module) {
+            format!("Box::new({})", default_value_expr(&f.ty, &f.occurrence, opts))
         } else {
             default_value_expr(&f.ty, &f.occurrence, opts)
         };
@@ -3254,7 +3370,11 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
             TypeRef::Primitive(Primitive::Null) => format!("{}::{}", type_name, vname),
             // A variant of a map type (dgtlrift/cddlc#102).
             TypeRef::Named(n) if is_map_struct(n, module) =>
-                format!("{}::{}({}::default())", type_name, vname, to_pascal_case(n)),
+                if is_boxed(&e.name, &v.ty, module) {
+                    format!("{}::{}(Box::new({}::default()))", type_name, vname, to_pascal_case(n))
+                } else {
+                    format!("{}::{}({}::default())", type_name, vname, to_pascal_case(n))
+                },
             _ => continue,
         };
 
