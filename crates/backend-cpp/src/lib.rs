@@ -2134,7 +2134,16 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.indent();
             // Element by element, so named elements use their own conversion.
             w.line("nlohmann::json arr = nlohmann::json::array();");
-            w.line(&format!("for (const auto& item : val) arr.push_back({});", cpp_json_to_val(&a.element, "item", module)));
+            let flat = flat_record(a, module).map(|r| r.fields.len());
+            if flat.is_some() {
+                // A repeated group: each record's members, inline (dgtlrift/cddlc#90).
+                w.line(&format!(
+                    "for (const auto& item : val) for (auto& m : {}) arr.push_back(m);",
+                    cpp_json_to_val(&a.element, "item", module)
+                ));
+            } else {
+                w.line(&format!("for (const auto& item : val) arr.push_back({});", cpp_json_to_val(&a.element, "item", module)));
+            }
             w.line("auto s = arr.dump();");
             w.line("return std::vector<uint8_t>(s.begin(), s.end());");
             w.dedent();
@@ -2145,7 +2154,20 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("{ctype} out;"));
-            w.line(&format!("for (const auto& item : j) out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+            if let Some(n) = flat {
+                w.line(&format!(
+                    "if (!j.is_array() || j.size() % {n} != 0) throw std::runtime_error(\"{ctype}: a partial group\");"
+                ));
+                w.line(&format!("for (std::size_t i = 0; i < j.size(); i += {n}) {{"));
+                w.indent();
+                w.line("nlohmann::json item = nlohmann::json::array();");
+                w.line(&format!("for (std::size_t k = 0; k < {n}; k++) item.push_back(j[i + k]);"));
+                w.line(&format!("out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+                w.dedent();
+                w.line("}");
+            } else {
+                w.line(&format!("for (const auto& item : j) out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+            }
             w.line("return out;");
             w.dedent();
             w.line("}");

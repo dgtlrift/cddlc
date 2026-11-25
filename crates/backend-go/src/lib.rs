@@ -220,6 +220,51 @@ func encodeEach[T any](items []T, f func(T) ([]byte, error)) ([]byte, error) {
 	return encodeArray(out)
 }
 
+// encodeFlat writes the members of each item's array inline, in one array:
+// an array of a repeated group (`[* (a: uint, b: tstr)]`).
+func encodeFlat[T any](items []T, f func(T) ([]byte, error)) ([]byte, error) {
+	out := make([][]byte, 0, len(items))
+	for i, it := range items {
+		b, err := f(it)
+		if err != nil {
+			return nil, fmt.Errorf("[%d]: %w", i, err)
+		}
+		members, err := decodeArray(b, fmt.Sprintf("[%d]", i))
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range members {
+			out = append(out, []byte(m))
+		}
+	}
+	return encodeArray(out)
+}
+
+// decodeFlat reads an array of a repeated group of n members: one array of
+// the members of each group, in turn.
+func decodeFlat(r []byte, n int, at string) ([][]byte, error) {
+	items, err := decodeArray(r, at)
+	if err != nil {
+		return nil, err
+	}
+	if len(items)%n != 0 {
+		return nil, fmt.Errorf("%s: a partial group", at)
+	}
+	out := make([][]byte, 0, len(items)/n)
+	for i := 0; i < len(items); i += n {
+		group := make([][]byte, 0, n)
+		for _, m := range items[i : i+n] {
+			group = append(group, []byte(m))
+		}
+		b, err := encodeArray(group)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
 func decodeMap(r []byte, at string) (map[string]raw, error) {
 	if kindOf(r) != kindMap {
 		return nil, mismatch(at, "a map", r)
@@ -624,7 +669,7 @@ fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &Code
     match def {
         TypeDef::Struct(s) => emit_struct(w, s, module, opts),
         TypeDef::Enum(e)   => emit_enum(w, e, opts),
-        TypeDef::Array(a)  => emit_array(w, a, opts),
+        TypeDef::Array(a)  => emit_array(w, a, flat_width(a, module), opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
         TypeDef::Map(m)    => emit_map(w, m, opts),
     }
@@ -1555,7 +1600,19 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
 // ── Array ─────────────────────────────────────────────────────────────────────
 
-fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
+/// For an array of a repeated group, the number of members in the group,
+/// which sit inline in the array (dgtlrift/cddlc#90).
+fn flat_width(a: &ArrayDef, module: &IrModule) -> Option<usize> {
+    match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match module.get(n) {
+            Some(TypeDef::Struct(s)) => Some(s.fields.len()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn emit_array(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, opts: &CodegenOptions) {
     let name = to_pascal_case(&a.name);
     let elem = go_type(&a.element);
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("//"));
@@ -1567,7 +1624,10 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.line(&format!("// {} writes v as a {} array.", marshal_name(opts), format_name(opts)));
     w.line(&format!("func (v {name}) {}() ([]byte, error) {{", marshal_name(opts)));
     w.indent();
-    return_encoded(w, tag, &enc_each(&a.element, &format!("[]{elem}(v)")));
+    let each = enc_each(&a.element, &format!("[]{elem}(v)"));
+    // A repeated group: each record's members, inline.
+    let each = if flat.is_some() { each.replacen("encodeEach(", "encodeFlat(", 1) } else { each };
+    return_encoded(w, tag, &each);
     w.dedent();
     w.line("}");
     w.blank();
@@ -1576,7 +1636,10 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.line(&format!("func (v *{name}) {}(data []byte) error {{", unmarshal_name(opts)));
     w.indent();
     untag_input(w, tag, &name);
-    w.line(&format!("items, err := decodeArray(r, {})", go_str(&name)));
+    match flat {
+        Some(n) => w.line(&format!("items, err := decodeFlat(r, {n}, {})", go_str(&name))),
+        None => w.line(&format!("items, err := decodeArray(r, {})", go_str(&name))),
+    }
     w.line("if err != nil {");
     w.line("    return err");
     w.line("}");

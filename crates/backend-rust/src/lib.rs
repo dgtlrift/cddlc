@@ -2481,6 +2481,18 @@ fn serde_field_attrs_json(
     if fname_cddl != cddl_snake || fname_cddl != fname_rust {
         attrs.push(format!("rename = {:?}", fname_cddl));
     }
+    // An array of a repeated group: its records' members inline (dgtlrift/cddlc#90).
+    if let TypeRef::Named(n) = ty {
+        if matches!(module.get(n), Some(TypeDef::Array(a)) if a.flat) {
+            match occ {
+                Occurrence::Optional => {
+                    attrs.push(format!("with = \"{}_flat_option\"", to_snake_case(n)));
+                    attrs.push("default".into());
+                }
+                _ => attrs.push(format!("with = \"{}_flat\"", to_snake_case(n))),
+            }
+        }
+    }
     // Byte strings: base64url in JSON, native in CBOR (see `base64url_serde`).
     if let Some(shape) = byte_shape(ty, module) {
         let (with, default) = bytes_with(shape, occ);
@@ -2883,6 +2895,13 @@ fn emit_array_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
     let type_name = to_pascal_case(&a.name);
     let elem_ty   = typeref_to_rust(&a.element, opts);
     let bytes     = byte_shape(&a.element, module) == Some(ByteShape::One);
+    if let Some(TypeDef::Struct(rec)) = match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => module.get(n),
+        _ => None,
+    } {
+        emit_flat_array_json(w, a, &elem_ty, rec.fields.len());
+        return;
+    }
 
     w.line(&format!("pub type {type_name} = Vec<{elem_ty}>;"));
     w.blank();
@@ -2906,6 +2925,80 @@ fn emit_array_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
         w.line("serde_json::from_slice(data)");
     }
     w.dedent();
+    w.line("}");
+}
+
+/// An array of a repeated group in JSON: its records' members, inline, in one
+/// array (dgtlrift/cddlc#90). `<name>_flat` (and `<name>_flat_option`) are serde
+/// `with` modules, for the array itself and for a member that holds one.
+fn emit_flat_array_json(w: &mut IndentWriter, a: &ArrayDef, elem_ty: &str, width: usize) {
+    let type_name = to_pascal_case(&a.name);
+    let snake = to_snake_case(&a.name);
+    w.line(&format!("pub type {type_name} = Vec<{elem_ty}>;"));
+    w.blank();
+    w.line(&format!("/// `{type_name}` in JSON: each `{elem_ty}`'s {width} members, inline, in one array."));
+    w.line(&format!("pub mod {snake}_flat {{"));
+    w.indent();
+    w.line("use super::*;");
+    w.line(&format!("pub fn serialize<S: serde::Serializer>(val: &[{elem_ty}], s: S) -> Result<S::Ok, S::Error> {{"));
+    w.indent();
+    w.line("use serde::ser::Error as _;");
+    w.line("let mut items = Vec::new();");
+    w.line("for item in val {");
+    w.indent();
+    w.line("match serde_json::to_value(item).map_err(S::Error::custom)? {");
+    w.line("    serde_json::Value::Array(m) => items.extend(m),");
+    w.line(&format!("    _ => return Err(S::Error::custom(\"{}: a record that isn't an array\")),", a.name));
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.line("serde::Serialize::serialize(&items, s)");
+    w.dedent();
+    w.line("}");
+    w.line(&format!("pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<{elem_ty}>, D::Error> {{"));
+    w.indent();
+    w.line("use serde::de::Error as _;");
+    w.line("let items = <Vec<serde_json::Value> as serde::Deserialize>::deserialize(d)?;");
+    w.line(&format!("if items.len() % {width} != 0 {{ return Err(D::Error::custom(\"{}: a partial group\")); }}", a.name));
+    w.line(&format!(
+        "items.chunks({width}).map(|c| serde_json::from_value(serde_json::Value::Array(c.to_vec())).map_err(D::Error::custom)).collect()"
+    ));
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("/// An optional member holding a `{type_name}`."));
+    w.line("#[allow(dead_code)]");
+    w.line(&format!("pub mod {snake}_flat_option {{"));
+    w.indent();
+    w.line("use super::*;");
+    w.line(&format!("pub fn serialize<S: serde::Serializer>(val: &Option<Vec<{elem_ty}>>, s: S) -> Result<S::Ok, S::Error> {{"));
+    w.line(&format!("    match val {{ Some(v) => super::{snake}_flat::serialize(v, s), None => s.serialize_none() }}"));
+    w.line("}");
+    w.line(&format!("pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<{elem_ty}>>, D::Error> {{"));
+    w.indent();
+    w.line(&format!("struct W(Vec<{elem_ty}>);"));
+    w.line("impl<'de> serde::Deserialize<'de> for W {");
+    w.line(&format!("    fn deserialize<D2: serde::Deserializer<'de>>(d: D2) -> Result<Self, D2::Error> {{ super::{snake}_flat::deserialize(d).map(W) }}"));
+    w.line("}");
+    w.line("Ok(<Option<W> as serde::Deserialize>::deserialize(d)?.map(|w| w.0))");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!("pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"));
+    w.line("    let mut out = Vec::new();");
+    w.line(&format!("    {snake}_flat::serialize(val, &mut serde_json::Serializer::new(&mut out)).expect(\"encode\");"));
+    w.line("    out");
+    w.line("}");
+    w.blank();
+    w.line(&format!("pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"));
+    w.line("    let mut de = serde_json::Deserializer::from_slice(data);");
+    w.line(&format!("    let val = {snake}_flat::deserialize(&mut de)?;"));
+    w.line("    de.end()?;");
+    w.line("    Ok(val)");
     w.line("}");
 }
 
