@@ -834,8 +834,12 @@ fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
             TypeRef::Primitive(Primitive::Tstr) => {
                 w.line(&format!("{}::{}(s) => {{ e.str(s.as_str())?; }}", type_vname, vname));
             }
-            TypeRef::Primitive(Primitive::Bstr) => {
+            // `any` is held as bytes, as a member of type `any` is.
+            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
                 w.line(&format!("{}::{}(b) => {{ e.bytes(b.as_slice())?; }}", type_vname, vname));
+            }
+            TypeRef::Primitive(Primitive::Undefined) => {
+                w.line(&format!("{}::{}(_) => {{ e.undefined()?; }}", type_vname, vname));
             }
             TypeRef::Primitive(Primitive::Bool) => {
                 w.line(&format!("{}::{}(b) => {{ e.bool(*b)?; }}", type_vname, vname));
@@ -927,15 +931,19 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
         w.line("let s = d.str()?;");
         w.line("match s {");
         w.indent();
+        let val: &str = if opts.no_std { "cddlc_text(s)?" } else { "s.to_string()" };
         for v in &e.variants {
-            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
+            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && literal_eq(&v.constraints).is_some() {
                 let vname    = to_pascal_case(&v.name);
                 let cddl_str = variant_str(v);
-                let val: &str = if opts.no_std { "cddlc_text(s)?" } else { "s.to_string()" };
                 w.line(&format!("{:?} => Ok({}::{}({val})),", cddl_str, enum_name, vname));
             }
         }
-        w.line("_ => Err(DecodeError::message(\"unknown enum variant\")),");
+        // A `tstr` alternative without a literal takes any other text.
+        match e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && literal_eq(&v.constraints).is_none()) {
+            Some(v) => w.line(&format!("_ => Ok({}::{}({val})),", enum_name, to_pascal_case(&v.name))),
+            None => w.line("_ => Err(DecodeError::message(\"unknown enum variant\")),"),
+        }
         w.dedent();
         w.line("}");
         w.dedent();
@@ -1007,6 +1015,26 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
         }
         w.dedent();
         w.line("}");
+    }
+
+    // Byte strings (`any` is held as bytes), null, undefined and floats.
+    let first = |pred: &dyn Fn(&Primitive) -> bool| e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(p) if pred(p)));
+    if let Some(v) = first(&|p| *p == Primitive::Bstr).or_else(|| first(&|p| *p == Primitive::Any)) {
+        let val = if opts.no_std { "cddlc_bytes(d.bytes()?)?" } else { "d.bytes()?.to_vec()" };
+        w.line(&format!("minicbor::data::Type::Bytes => Ok({enum_name}::{}({val})),", to_pascal_case(&v.name)));
+    }
+    if let Some(v) = first(&|p| *p == Primitive::Null) {
+        w.line(&format!("minicbor::data::Type::Null => {{ d.skip()?; Ok({enum_name}::{}) }}", to_pascal_case(&v.name)));
+    }
+    if let Some(v) = first(&|p| *p == Primitive::Undefined) {
+        w.line(&format!("minicbor::data::Type::Undefined => {{ d.skip()?; Ok({enum_name}::{}(())) }}", to_pascal_case(&v.name)));
+    }
+    if let Some(v) = first(&|p| is_float(p)) {
+        let TypeRef::Primitive(p) = &v.ty else { unreachable!() };
+        w.line(&format!(
+            "minicbor::data::Type::F16 | minicbor::data::Type::F32 | minicbor::data::Type::F64 => Ok({enum_name}::{}(d.{}()?)),",
+            to_pascal_case(&v.name), decode_fn_for_primitive(p)
+        ));
     }
 
     if has_map {
