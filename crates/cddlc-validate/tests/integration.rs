@@ -432,3 +432,26 @@ fn enumerations_validate_values() {
     assert_fails(&m, "r", &json("3"));
     assert_fails(&m, "r", &json(r#"{"red": 1}"#));
 }
+
+// ── Control operators (dgtlrift/cddlc#86) ────────────────────────────────────
+
+#[test]
+fn control_operators_are_checked() {
+    for (src, ok, bad) in [
+        ("r = uint .within (1..5)\n", "3", "9"),
+        ("r = uint .and (1..5)\n", "3", "9"),
+        ("r = uint .and small\nsmall = uint .le 5\n", "5", "6"),
+        ("r = uint .bits f\nf = &( a: 0, b: 1 )\n", "3", "4"),
+        ("r = uint .bits &( a: 0, b: 1 )\n", "1", "4"),
+        ("r = 1 .plus 2\n", "3", "4"),
+        ("r = \"a\" .cat \"b\"\n", r#""ab""#, r#""a""#),
+    ] {
+        let m = lower(src);
+        assert_ok(&m, "r", &json(ok));
+        assert_fails(&m, "r", &json(bad));
+    }
+    // A byte string's bits: bit 9 is bit 1 of the second byte.
+    let m = lower("r = bstr .bits &( a: 9 )\n");
+    assert_ok(&m, "r", &Value::from(ciborium::Value::Bytes(vec![0, 2])));
+    assert_fails(&m, "r", &Value::from(ciborium::Value::Bytes(vec![1])));
+}

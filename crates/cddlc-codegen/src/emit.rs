@@ -156,7 +156,8 @@ pub fn constraint_to_rust_check(c: &Constraint, val_expr: &str) -> Option<String
         Constraint::Default(_)
         | Constraint::Regexp { hook: None, .. }
         | Constraint::CborEmbedded(_)
-        | Constraint::CborSeq(_) => None,
+        | Constraint::CborSeq(_)
+        | Constraint::Bits(_) => None,
     }
 }
 

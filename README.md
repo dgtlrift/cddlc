@@ -284,6 +284,7 @@ with `* tstr => any`.
 | Generics | `pair<T> = [T, T]` | Monomorphised at use sites |
 | Imports | `; @import "common.cddl"` | Transitive, cycle-detected |
 | Constraints | `.size`, `.range`, `.ge`, `.le`, `.gt`, `.lt`, `.eq`, `.ne`, `.regexp`, `.cbor`, `.cborseq` | |
+| Type operators | `.within`, `.and`, `.bits`, `.plus`, `.cat` | `.within` / `.and` add the other type's constraints; `.plus` / `.cat` of literals compute one; `.bits` is checked by `cddlc validate` only. `.abnf` and other operators cddlc can't check warn |
 | Embedded CBOR | `.cbor T`, `.cborseq T` | Inner `bstr` decoded as `T` |
 
 ---
