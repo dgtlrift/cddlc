@@ -909,6 +909,15 @@ fn go_check(c: &Constraint, p: &Primitive, x: &str) -> Option<String> {
         Constraint::Ne(LiteralValue::Bytes(b)) if len_ok => Some(format!("string({x}) != {}", go_bytes_str(b))),
         Constraint::Eq(v) => literal_fits(v, p).then(|| go_literal(v)).flatten().map(|l| format!("{x} == {l}")),
         Constraint::Ne(v) => literal_fits(v, p).then(|| go_literal(v)).flatten().map(|l| format!("{x} != {l}")),
+        // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
+        Constraint::Bits(bits) if is_uint => Some(format!("{x}&^{:#x} == 0", cddlc_codegen::bits_mask_u64(bits))),
+        Constraint::Bits(bits) if matches!(p, Primitive::Bstr) => {
+            let m = cddlc_codegen::bits_mask_bytes(bits);
+            Some(format!(
+                "func(v []byte) bool {{ m := {}; for i, b := range v {{ var k byte; if i < len(m) {{ k = m[i] }}; if b&^k != 0 {{ return false }} }}; return true }}({x})",
+                go_bytes_lit(&m)
+            ))
+        }
         _ => None,
     }
 }
@@ -1965,6 +1974,9 @@ fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: 
         }
         for c in constraints {
             match (c, p) {
+                // `.bits`: every allowed bit set (dgtlrift/cddlc#107).
+                (Constraint::Bits(b), Primitive::Uint) => return format!("uint64({:#x})", cddlc_codegen::bits_mask_u64(b)),
+                (Constraint::Bits(b), Primitive::Bstr) => return go_bytes_lit(&cddlc_codegen::bits_mask_bytes(b)),
                 (Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. }, Primitive::Tstr) => return go_str(&"a".repeat(*n)),
                 (Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. }, Primitive::Bstr | Primitive::Any) => return format!("make([]byte, {n})"),
                 (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) => return format!("int64({lo})"),
@@ -2022,6 +2034,16 @@ fn go_invalid_value(constraints: &[Constraint], ty: &TypeRef) -> Option<String> 
             (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) if *lo > i64::MIN => return Some(format!("int64({})", lo - 1)),
             (Constraint::ValueRangeUint { min: Some(lo), .. }, Primitive::Uint) if *lo > 0 => return Some(format!("uint64({})", lo - 1)),
             (Constraint::ValueRangeUint { max: Some(hi), .. }, Primitive::Uint) if *hi < u64::MAX => return Some(format!("uint64({})", hi + 1)),
+            // `.bits`: the lowest bit it doesn't allow.
+            (Constraint::Bits(b), Primitive::Uint | Primitive::Bstr) => {
+                let Some(bad) = (0u64..64).find(|n| !b.contains(n)) else { continue };
+                if *p == Primitive::Uint {
+                    return Some(format!("uint64({:#x})", 1u64 << bad));
+                }
+                let mut bytes = vec![0u8; bad as usize / 8 + 1];
+                bytes[bad as usize / 8] = 1 << (bad % 8);
+                return Some(go_bytes_lit(&bytes));
+            }
             _ => {}
         }
     }

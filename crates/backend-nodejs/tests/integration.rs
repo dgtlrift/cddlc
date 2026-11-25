@@ -842,3 +842,15 @@ fn test_package_targets_cborg7_ts6() {
     assert!(g.tsconfig.contains("\"esModuleInterop\":  true"), "{}", g.tsconfig);
     assert!(g.source.contains("(decode: () => unknown) => new CborTagged(tag, decode())"), "{}", g.source);
 }
+
+#[test]
+fn test_size_range_alias_test_values_respect_the_range() {
+    // Valid: the shortest allowed; invalid: one shorter (dgtlrift/cddlc#123's names.cddl).
+    let pkg = compile("owner = tstr .size (1..16)\nkey = bstr .size (4..8)\nany-len = tstr .size (0..3)\n");
+    assert!(pkg.tests.contains("validateOwner('a'.repeat(1))"), "{}", pkg.tests);
+    assert!(pkg.tests.contains("validateOwner('a'.repeat(0) as any)"), "{}", pkg.tests);
+    assert!(pkg.tests.contains("validateKey(new Uint8Array(4))"), "{}", pkg.tests);
+    assert!(pkg.tests.contains("validateKey(new Uint8Array(3) as any)"), "{}", pkg.tests);
+    // No shorter size: one longer.
+    assert!(pkg.tests.contains("validateAnyLen('a'.repeat(4) as any)"), "{}", pkg.tests);
+}

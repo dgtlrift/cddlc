@@ -6,7 +6,7 @@ use std::process;
 
 use clap::Parser;
 
-use args::{Cli, Command, GenerateArgs, ValidateArgs};
+use args::{Cli, Command, GenerateArgs, SampleArgs, SampleFormat, ValidateArgs};
 mod build_info;
 use cddlc_codegen::{Backend, CodegenOptions};
 use cddlc_ir::{lower, IrModule};
@@ -18,6 +18,7 @@ fn main() {
     let result = match &cli.command {
         Command::Generate(args) => run_generate(args),
         Command::Validate(args) => run_validate(args),
+        Command::Sample(args) => run_sample(args),
     };
 
     match result {
@@ -283,6 +284,57 @@ fn run_validate(args: &ValidateArgs) -> Result<bool, Box<dyn std::error::Error>>
     }
 
     Ok(all_ok)
+}
+
+// ── sample ───────────────────────────────────────────────────────────────────
+
+/// Writes an example value of the type, checked against the schema. Returns
+/// `Ok(false)` (after writing it) when the example doesn't validate: a
+/// constraint cddlc can't solve, such as `.regexp`.
+fn run_sample(args: &SampleArgs) -> Result<bool, Box<dyn std::error::Error>> {
+    use cddlc_validate::sample;
+    use std::io::Write as _;
+
+    let lower_result = load_and_lower(
+        std::slice::from_ref(&args.cddl), &args.include_dir, args.verbose, args.debug_parse,
+        16, 64,
+    )?;
+    let ir: &IrModule = &lower_result.module;
+    let type_name = args.type_name.as_deref().unwrap_or(ir.root.as_str());
+    if type_name.is_empty() {
+        return Err("schema defines no rules".into());
+    }
+
+    let opts = sample::SampleOptions { minimal: args.minimal };
+    let value = sample::sample(ir, Some(type_name), opts)?;
+
+    let (bytes, source) = match args.format {
+        SampleFormat::Json => {
+            (sample::to_json_text(&value).into_bytes(), cddlc_validate::Source::Json)
+        }
+        SampleFormat::Cbor => (sample::to_cbor(&value), cddlc_validate::Source::Cbor),
+        SampleFormat::Diag => (format!("{}\n", sample::to_diag(&value)).into_bytes(), cddlc_validate::Source::Cbor),
+    };
+    match &args.output {
+        Some(path) => std::fs::write(path, &bytes)?,
+        None => std::io::stdout().write_all(&bytes)?,
+    }
+
+    // What a reader of this format gets back must validate.
+    let check = match args.format {
+        SampleFormat::Json => cddlc_validate::Value::from(serde_json::from_slice::<serde_json::Value>(&bytes)?),
+        _ => value,
+    };
+    match cddlc_validate::validate_from(ir, Some(type_name), &check, source) {
+        Ok(()) => Ok(true),
+        Err(errors) => {
+            eprintln!("warning: the sample of '{type_name}' doesn't validate ({} error(s)):", errors.len());
+            for e in &errors {
+                eprintln!("  {e}");
+            }
+            Ok(false)
+        }
+    }
 }
 
 fn validate_one(
