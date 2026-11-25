@@ -422,6 +422,20 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 `scripts/interop.sh <lang>` runs the interop vectors for every reference schema through that
 language's harness, as CI does after the build tests.
 
+To see which languages this machine can test, and how to install the rest, run
+`target/debug/cddlc-toolchains` (built by `cargo build`). A language whose toolchain is missing
+is skipped, and its install command is printed once. The command is for this host's package
+manager: apt, dnf, zypper, pacman, apk, Homebrew or Chocolatey. Set `CDDLC_PKG_MANAGER` to pick
+another. With `CDDLC_REQUIRE_TOOLS=1`, as in CI, a missing toolchain fails instead.
+
+A build that can't reach a package registry (a rate limit such as Maven Central's 429, a
+timeout, DNS) is retried `CDDLC_NETWORK_RETRIES` times (default 2). If it still can't, it's
+reported as *unavailable*, and in CI as a GitHub Actions warning, not as a failure. A registry
+outage therefore doesn't fail a required check on an ordinary pull request. A release PR
+(release-plz's `release-plz-*` branch, or the `release` label) is different: CI sets
+`CDDLC_REQUIRE_REGISTRIES`, and an unavailable schema fails it, so a release can't go out
+with a language that wasn't tested. CI also caches each language's downloads between runs.
+
 ### Published schemas
 
 `crates/cddlc-cli/tests/corpus/` holds CDDL written by others: the RFC collection that
