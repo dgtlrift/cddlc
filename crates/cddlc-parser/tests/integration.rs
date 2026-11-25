@@ -675,6 +675,8 @@ fn a_comment_above_the_first_member_documents_it() {
     );
     // A blank line still cuts it off.
     assert_eq!(member_docs("r = {\n  ; Header.\n\n  id: uint,\n}\n"), [vec![None]]);
+}
+
 // ── Optional commas and error positions (dgtlrift/cddlc#108) ─────────────────
 
 /// The entries of each alternative of the map, array or group `r`.
