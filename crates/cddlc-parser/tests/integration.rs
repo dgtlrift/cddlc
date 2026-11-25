@@ -591,3 +591,59 @@ n = uint
         assert_eq!(keys, [true, true, true]);
     }
 }
+
+// ── Major types and cuts (dgtlrift/cddlc#89) ─────────────────────────────────
+
+#[test]
+fn major_types_with_additional_information() {
+
+    for (src, want) in [("r = #7.25\n", (7, Some(25))), ("r = #7.16\n", (7, Some(16))), ("r = #0\n", (0, None))] {
+        let m = parse(src);
+        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!("{src}") };
+        match &ty.node.choices[0].node.base.node {
+            Type2::MajorType(mt, ai) => assert_eq!((*mt, *ai), want, "{src}"),
+            other => panic!("{src}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn map_cut_before_arrow() {
+    let m = parse("r = { \"a\" ^ => uint, * tstr => any }\n");
+    assert_eq!(m.rules.len(), 1);
+}
+
+// ── Member keys (dgtlrift/cddlc#82) ──────────────────────────────────────────
+
+/// The key of each member of the map rule `r`.
+fn member_keys(src: &str) -> Vec<cddlc_parser::MemberKey> {
+    let m = parse(src);
+    let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!("{src}") };
+    let Type2::Map(group) = &ty.node.choices[0].node.base.node else { panic!("{src}") };
+    group.node.choices[0].entries.iter().map(|e| match &e.node.kind {
+        cddlc_parser::MemberKind::KeyValue { key, .. } => key.node.clone(),
+        other => panic!("{src}: {other:?}"),
+    }).collect()
+}
+
+#[test]
+fn member_keys_label_value_or_type() {
+    use cddlc_parser::MemberKey;
+    // `name:` and `"name" =>` are text keys; `1 =>` a value key.
+    let keys = member_keys("r = { a: uint, \"b\" => uint, 1 => uint }\n");
+    assert!(matches!(&keys[0], MemberKey::Bareword(id) if id.0 == "a"), "{keys:?}");
+    assert!(matches!(&keys[1], MemberKey::Value(_)), "{keys:?}");
+    assert!(matches!(&keys[2], MemberKey::Value(_)), "{keys:?}");
+
+    // Any other key before `=>` is a type, which a map matches with any number of entries.
+    for src in [
+        "r = { * tstr => uint }\n",
+        "r = { + label => uint }\nlabel = tstr\n",
+        "r = { * (int / uint) => tstr }\n",
+        "r = { * tstr .size 3 => uint }\n",
+        "r = { * tstr ^ => uint }\n",
+    ] {
+        let keys = member_keys(src);
+        assert!(matches!(&keys[0], MemberKey::Type(_)), "{src}: {keys:?}");
+    }
+}

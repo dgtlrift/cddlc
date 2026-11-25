@@ -13,7 +13,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Constraint, EnumDef,
-    IrModule, LiteralValue, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct CSharpBackend;
@@ -159,7 +159,7 @@ fn emit_type(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
         TypeDef::Enum(e)   => emit_enum(w, e, opts),
         TypeDef::Array(a)  => emit_array(w, a, opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map(w, m, opts),
     }
 }
 
@@ -194,6 +194,18 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let ty    = cs_field_type(&f.ty, &f.occurrence, opts);
         let pname = to_pascal_case(&f.name);
         w.line(&format!("public {ty} {pname} {{ get; set; }}"));
+    }
+    // The map's other entries (dgtlrift/cddlc#82). In JSON they are the
+    // serializer's extension data, so their values are JSON elements.
+    if let Some(r) = &s.rest {
+        w.line("/// <summary>The map's other entries.</summary>");
+        let pname = to_pascal_case(&r.name);
+        if opts.is_json() {
+            w.line("[JsonExtensionData]");
+            w.line(&format!("public Dictionary<string, JsonElement> {pname} {{ get; set; }} = new();"));
+        } else {
+            w.line(&format!("public Dictionary<string, {}> {pname} {{ get; set; }} = new();", cs_typeref(&r.val_ty, opts)));
+        }
     }
     w.blank();
 
@@ -405,11 +417,30 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         s.fields.iter().collect()
     };
 
-    w.line(&format!("writer.WriteStartMap({field_count});"));
+    let rest_count = s.rest.as_ref()
+        .map(|r| format!(" + this.{}.Count", to_pascal_case(&r.name)))
+        .unwrap_or_default();
+    w.line(&format!("writer.WriteStartMap({field_count}{rest_count});"));
     for f in &fields {
         let pname = to_pascal_case(&f.name);
         w.line(&format!("writer.WriteTextString({:?});", f.name.as_str()));
         emit_cs_encode_value(w, &f.ty, &format!("this.{pname}"), &f.occurrence, opts);
+    }
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        w.line(&format!("foreach (var kv in this.{})", to_pascal_case(&r.name)));
+        w.line("{");
+        w.indent();
+        if !named.is_empty() {
+            w.line(&format!(
+                "if (Array.IndexOf(new[] {{ {} }}, kv.Key) >= 0) throw new CborContentException($\"Other entry {{kv.Key}} is a named member's key\");",
+                named.join(", ")
+            ));
+        }
+        w.line("writer.WriteTextString(kv.Key);");
+        emit_cs_encode_value(w, &r.val_ty, "kv.Value", &Occurrence::Required, opts);
+        w.dedent();
+        w.line("}");
     }
     w.line("writer.WriteEndMap();");
 
@@ -445,6 +476,9 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         let def   = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
+    if let Some(r) = &s.rest {
+        w.line(&format!("var rest = new Dictionary<string, {}>();", cs_typeref(&r.val_ty, opts)));
+    }
     w.blank();
 
     w.line("var length = reader.ReadStartMap();");
@@ -468,10 +502,13 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.dedent();
     }
 
-    // Unknown fields — skip
+    // Other keys: the map's other entries, or unknown fields to skip.
     w.line("default:");
     w.indent();
-    w.line("reader.SkipValue();");
+    match &s.rest {
+        Some(r) => w.line(&format!("rest[key] = {};", cs_decode_expr(&r.val_ty, opts))),
+        None => w.line("reader.SkipValue();"),
+    }
     w.line("break;");
     w.dedent();
 
@@ -489,6 +526,9 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         let pname = to_pascal_case(&f.name);
         let local = to_snake_case(&f.name);
         w.line(&format!("{pname} = {local},"));
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("{} = rest,", to_pascal_case(&r.name)));
     }
     w.dedent();
     w.line("};");
@@ -870,6 +910,86 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
         w.line("reader.ReadEndArray();");
+        w.line("return result;");
+        w.dedent();
+        w.line("}");
+    }
+
+    w.dedent();
+    w.line("}");
+}
+
+// ── Map ───────────────────────────────────────────────────────────────────────
+
+/// A table (`{ * tstr => uint }`): a class holding a `Dictionary` (dgtlrift/cddlc#82).
+fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    emit_doc_comment(w, m.doc.as_deref());
+    if m.deprecated { w.line("[Obsolete]"); }
+
+    let type_name = to_pascal_case(&m.name);
+    let key_ty    = cs_typeref(&m.key_ty, opts);
+    let val_ty    = cs_typeref(&m.val_ty, opts);
+
+    w.line(&format!("public sealed class {type_name}"));
+    w.line("{");
+    w.indent();
+
+    w.line(&format!("public Dictionary<{key_ty}, {val_ty}> Entries {{ get; }} = new();"));
+    w.blank();
+
+    if opts.is_json() {
+        w.line("public byte[] ToJson()");
+        w.indent();
+        w.line("=> JsonSerializer.SerializeToUtf8Bytes(Entries);");
+        w.dedent();
+        w.blank();
+        w.line(&format!("public static {type_name} FromJson(byte[] data)"));
+        w.line("{");
+        w.indent();
+        w.line(&format!("var entries = JsonSerializer.Deserialize<Dictionary<{key_ty}, {val_ty}>>(data)!;"));
+        w.line(&format!("var result = new {type_name}();"));
+        w.line("foreach (var kv in entries) result.Entries.Add(kv.Key, kv.Value);");
+        w.line("return result;");
+        w.dedent();
+        w.line("}");
+    } else {
+        w.line("public void Encode(CborWriter writer)");
+        w.line("{");
+        w.indent();
+        if let Some(tag) = m.tagged {
+            w.line(&format!("writer.WriteTag((CborTag){});", tag.0));
+        }
+        w.line("writer.WriteStartMap(Entries.Count);");
+        w.line("foreach (var kv in Entries)");
+        w.line("{");
+        w.indent();
+        emit_cs_encode_value(w, &m.key_ty, "kv.Key", &Occurrence::Required, opts);
+        emit_cs_encode_value(w, &m.val_ty, "kv.Value", &Occurrence::Required, opts);
+        w.dedent();
+        w.line("}");
+        w.line("writer.WriteEndMap();");
+        w.dedent();
+        w.line("}");
+        w.blank();
+
+        w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+        w.line("{");
+        w.indent();
+        if let Some(tag) = m.tagged {
+            w.line("var tag = reader.ReadTag();");
+            w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+        }
+        w.line(&format!("var result = new {type_name}();"));
+        w.line("reader.ReadStartMap();");
+        w.line("while (reader.PeekState() != CborReaderState.EndMap)");
+        w.line("{");
+        w.indent();
+        w.line(&format!("var key = {};", cs_decode_expr(&m.key_ty, opts)));
+        w.line(&format!("var value = {};", cs_decode_expr(&m.val_ty, opts)));
+        w.line("if (!result.Entries.TryAdd(key, value)) throw new CborContentException(\"Duplicate map key\");");
+        w.dedent();
+        w.line("}");
+        w.line("reader.ReadEndMap();");
         w.line("return result;");
         w.dedent();
         w.line("}");
@@ -1300,7 +1420,7 @@ fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
         TypeDef::Enum(e)   => emit_enum_tests(w, e, opts),
         TypeDef::Alias(a)  => emit_alias_tests(w, a, opts),
         TypeDef::Array(a)  => emit_array_tests(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map_tests(w, m, opts),
     }
 }
 
@@ -1472,6 +1592,36 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.indent();
     w.line(&format!("var original = new {type_name}();"));
     if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    w.dedent();
+    w.line("}");
+}
+
+fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    let type_name = to_pascal_case(&m.name);
+
+    w.line("[Fact]");
+    w.line(&format!("public void {type_name}_Roundtrip_Empty()"));
+    w.line("{");
+    w.indent();
+    w.line(&format!("var original = new {type_name}();"));
+    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    w.line("Assert.Empty(decoded.Entries);");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line("[Fact]");
+    w.line(&format!("public void {type_name}_Roundtrip_Entry()"));
+    w.line("{");
+    w.indent();
+    w.line(&format!("var original = new {type_name}();"));
+    w.line(&format!(
+        "original.Entries.Add({}, {});",
+        cs_type_default(&m.key_ty, opts),
+        cs_type_default(&m.val_ty, opts)
+    ));
+    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    w.line("Assert.Single(decoded.Entries);");
     w.dedent();
     w.line("}");
 }

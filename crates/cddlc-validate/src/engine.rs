@@ -91,7 +91,7 @@ impl<'m> Ctx<'m> {
             TypeDef::Struct(s) => {
                 if let Some(payload) = self.unwrap_tag(s.tagged, value, path) {
                     match s.encoding {
-                        StructEncoding::Map   => self.check_struct(&s.fields, &s.name, payload, path),
+                        StructEncoding::Map   => self.check_struct(&s.fields, s.rest.as_ref(), &s.name, payload, path),
                         StructEncoding::Array => self.check_record(&s.fields, &s.name, payload, path),
                     }
                 }
@@ -107,15 +107,9 @@ impl<'m> Ctx<'m> {
                 }
             }
             TypeDef::Map(m) => {
-                // CDDL tables ({* K => V}) are not constructed by cddlc-ir's
-                // lowering pass today (nor fully handled by every codegen
-                // backend) — see cddlc-validate::lib docs. Fail clearly
-                // rather than silently mis-validating.
-                self.err(path, format!(
-                    "'{}' uses a CDDL table ({{* K => V}}), which this validator \
-                     does not yet support",
-                    m.name
-                ));
+                if let Some(payload) = self.unwrap_tag(m.tagged, value, path) {
+                    self.check_map(m, payload, path);
+                }
             }
             TypeDef::Alias(a) => {
                 if let Some(payload) = self.unwrap_tag(a.tagged, value, path) {
@@ -127,7 +121,7 @@ impl<'m> Ctx<'m> {
         self.depth -= 1;
     }
 
-    fn check_struct(&mut self, fields: &[FieldDef], name: &str, value: &Value, path: &mut Vec<PathSeg>) {
+    fn check_struct(&mut self, fields: &[FieldDef], rest: Option<&cddlc_ir::MapRest>, name: &str, value: &Value, path: &mut Vec<PathSeg>) {
         let Value::Map(entries) = value else {
             self.err(path, format!("expected a map for struct '{name}', found {}", kind_name(value)));
             return;
@@ -149,10 +143,26 @@ impl<'m> Ctx<'m> {
             }
         }
 
-        for (k, _) in entries {
-            if !fields.iter().any(|f| field_key_matches(&f.key, k)) {
+        // Entries no named member takes are the map's other entries, when it
+        // has a member with a computed key (dgtlrift/cddlc#82).
+        let others: Vec<&(Value, Value)> = entries.iter()
+            .filter(|(k, _)| !fields.iter().any(|f| field_key_matches(&f.key, k)))
+            .collect();
+        let Some(rest) = rest else {
+            for (k, _) in others {
                 self.err(path, format!("unknown field {}", describe_key(k)));
             }
+            return;
+        };
+        check_cardinality(&rest.occurrence, others.len(), name, self, path);
+        for (k, v) in others {
+            path.push(PathSeg::Key(key_label(k)));
+            if let Some(e) = self.try_check(&rest.key_ty, k, path).into_iter().next() {
+                self.err(path, format!("unknown field {}: {}", describe_key(k), e.message));
+            } else {
+                self.check_typeref(&rest.val_ty, v, path);
+            }
+            path.pop();
         }
     }
 
@@ -208,6 +218,34 @@ impl<'m> Ctx<'m> {
         }
     }
 
+    /// A table (`{ * K => V }`): every entry's key is a `K` and value a `V`,
+    /// and the number of entries fits the occurrence (dgtlrift/cddlc#82).
+    fn check_map(&mut self, m: &cddlc_ir::MapDef, value: &Value, path: &mut Vec<PathSeg>) {
+        let Value::Map(entries) = value else {
+            self.err(path, format!("expected a map for '{}', found {}", m.name, kind_name(value)));
+            return;
+        };
+        match m.occurrence {
+            // `{ tstr => uint }` has exactly one entry; `?` at most one.
+            Occurrence::Required if entries.len() != 1 => {
+                self.err(path, format!("'{}' requires exactly 1 entry, found {}", m.name, entries.len()));
+            }
+            Occurrence::Optional if entries.len() > 1 => {
+                self.err(path, format!("'{}' allows at most 1 entry, found {}", m.name, entries.len()));
+            }
+            ref occ => check_cardinality(occ, entries.len(), &m.name, self, path),
+        }
+        for (k, v) in entries {
+            path.push(PathSeg::Key(key_label(k)));
+            let key_errs = self.try_check(&m.key_ty, k, path);
+            if let Some(e) = key_errs.into_iter().next() {
+                self.err(path, format!("invalid key: {}", e.message));
+            }
+            self.check_typeref(&m.val_ty, v, path);
+            path.pop();
+        }
+    }
+
     // ── Type references ──────────────────────────────────────────────────
 
     fn check_typeref(&mut self, tr: &TypeRef, value: &Value, path: &mut Vec<PathSeg>) {
@@ -233,6 +271,12 @@ impl<'m> Ctx<'m> {
                     .join(" | ");
                 self.err(path, format!("value did not match any alternative: {detail}"));
             }
+            // A bignum (`biguint = #6.2(bstr)`, `bignint = #6.3(bstr)`): the CBOR
+            // decoder reads one that fits as a plain integer, dropping the tag.
+            TypeRef::Tagged(tag, inner)
+                if matches!((tag.0, inner.as_ref(), value),
+                    (2, TypeRef::Primitive(Primitive::Bstr), Value::Uint(_))
+                    | (3, TypeRef::Primitive(Primitive::Bstr), Value::Int(_))) => {}
             TypeRef::Tagged(tag, inner) => {
                 if let Some(payload) = self.unwrap_tag(Some(*tag), value, path) {
                     self.check_typeref(inner, payload, path);
@@ -550,6 +594,16 @@ fn literal_eq(lit: &LiteralValue, value: &Value) -> bool {
 
 fn decode_base64url(s: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()
+}
+
+/// A map key as shown in an error path (`{x}`, `{3}`).
+fn key_label(v: &Value) -> String {
+    match v {
+        Value::Text(s) => s.clone(),
+        Value::Uint(n) => n.to_string(),
+        Value::Int(n)  => n.to_string(),
+        other => kind_name(other).to_owned(),
+    }
 }
 
 fn describe_key(v: &Value) -> String {

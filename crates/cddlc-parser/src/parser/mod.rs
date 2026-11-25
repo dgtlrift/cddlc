@@ -601,10 +601,16 @@ fn parse_tagged(input: &mut &str) -> ModalResult<Type2> {
     })
 }
 
+/// `#mt` or `#mt.ai` (RFC 8610 §3.6); a bare `#` is any data item.
 fn parse_major_type(input: &mut &str) -> ModalResult<Type2> {
     literal("#").parse_next(input)?;
     if let Ok(d) = one_of::<_, _, ()>(['0','1','2','3','4','5','6','7']).parse_next(input) {
-        Ok(Type2::MajorType(d as u8 - b'0'))
+        let mut info = None;
+        if input.starts_with('.') && input[1..].starts_with(|c: char| c.is_ascii_digit()) {
+            *input = &input[1..];
+            info = Some(parse_uint_literal(input)?);
+        }
+        Ok(Type2::MajorType(d as u8 - b'0', info))
     } else {
         Ok(Type2::Any)
     }
@@ -823,55 +829,76 @@ fn parse_member_entry(input: &mut &str) -> ModalResult<MemberEntry> {
 
 /// Try to parse a key-value pair.  Returns `None` if the input doesn't look
 /// like `key:` or `key=>`.
+///
+/// RFC 8610 §3.5.1: `name:` and `"name" =>` are text keys, `1 =>` is a value
+/// key, and any other `type1 =>` (`tstr =>`, `(int / uint) =>`) is a type key,
+/// which a map matches with any number of entries (dgtlrift/cddlc#82).
 fn try_parse_key_value(input: &mut &str) -> ModalResult<Option<MemberKind>> {
-    // We need to look ahead to distinguish `ident :` from a bare type ref.
-    // Strategy: tentatively parse an ident, then check for `:` or `=>`.
-
-    // Save position
     let saved = *input;
 
-    // Attempt to read a memberkey
-    let key_result: ModalResult<MemberKey> = (|| {
-        ws0(input);
-        // Numeric value as key: `1 =>` or `1 :`
-        if let Ok(v) = parse_value(input) {
-            return Ok(MemberKey::Value(v));
-        }
-        // Ident as bareword key: `field-name :`
-        if let Ok(name) = parse_ident(input) {
-            return Ok(MemberKey::Bareword(Ident::new(name)));
-        }
-        Err(ErrMode::Backtrack(ContextError::new()))
-    })();
-
-    let key = match key_result {
-        Ok(k) => k,
-        Err(_) => {
-            *input = saved;
-            return Ok(None);
-        }
-    };
-
-    // Skip whitespace between key and operator — critical for `field : type`
+    // A literal value or a bare label, followed by `:` or `=>`.
     ws0(input);
-    let (cut, found) = if input.starts_with("=>") {
-        let _ = literal::<_, _, ContextError>("=>").parse_next(input)?;
-        (true, true)
-    } else if input.starts_with(':') && !input.starts_with("::") {
-        let _ = literal::<_, _, ContextError>(":").parse_next(input)?;
-        (false, true)
+    let simple: Option<MemberKey> = if let Ok(v) = parse_value(input) {
+        Some(MemberKey::Value(v))
+    } else if let Ok(name) = parse_ident(input) {
+        Some(MemberKey::Bareword(Ident::new(name)))
     } else {
-        (false, false)
+        None
     };
-
-    if !found {
-        *input = saved;
-        return Ok(None);
+    if let Some(key) = simple {
+        if let Some(cut) = parse_member_arrow(input, true)? {
+            // `name =>` names a type, not a text key.
+            let bare_type = matches!(key, MemberKey::Bareword(_)) && cut;
+            if !bare_type {
+                return finish_key_value(input, key, cut);
+            }
+        }
     }
 
+    // Any other type1 followed by `=>`.
+    *input = saved;
+    ws0(input);
+    if let Ok(t1) = parse_type1(input) {
+        if let Some(true) = parse_member_arrow(input, false)? {
+            return finish_key_value(input, MemberKey::Type(Type::single(t1)), true);
+        }
+    }
+
+    *input = saved;
+    Ok(None)
+}
+
+/// Parse the `:` / `[^] =>` after a member key: `Some(true)` for `=>`,
+/// `Some(false)` for `:` (when `colon` allows it), `None` when neither follows.
+fn parse_member_arrow(input: &mut &str, colon: bool) -> ModalResult<Option<bool>> {
+    let saved = *input;
+    // Skip whitespace between key and operator — critical for `field : type`
+    ws0(input);
+    // A cut (`"a" ^ => uint`, RFC 8610 §3.5.4) comes before `=>`.
+    let caret = input.starts_with('^');
+    if caret {
+        *input = &input[1..];
+        ws0(input);
+    }
+    if input.starts_with("=>") {
+        let _ = literal::<_, _, ContextError>("=>").parse_next(input)?;
+        Ok(Some(true))
+    } else if colon && !caret && input.starts_with(':') && !input.starts_with("::") {
+        let _ = literal::<_, _, ContextError>(":").parse_next(input)?;
+        Ok(Some(false))
+    } else {
+        *input = saved;
+        Ok(None)
+    }
+}
+
+fn finish_key_value(
+    input: &mut &str,
+    key:   MemberKey,
+    cut:   bool,
+) -> ModalResult<Option<MemberKind>> {
     ws0(input);
     let value = parse_type(input)?;
-
     Ok(Some(MemberKind::KeyValue {
         key:   Spanned::new(key, Span::new(0, 0)),
         value: Spanned::new(value, Span::new(0, 0)),

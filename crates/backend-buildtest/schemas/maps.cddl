@@ -1,0 +1,37 @@
+; Reference schema: tables (RFC 8610 §3.5.1), maps whose keys are computed
+; from a type, and maps with named members and other entries. JSON objects
+; have text keys, so these maps use tstr keys.
+
+inventory = {
+    name:     tstr,
+    counts:   counts,
+    ? labels: { * tstr => tstr },
+    places:   places,
+}
+
+; Text keys, unsigned values
+counts = { * tstr => uint }
+
+; At least one entry
+aliases = { + tstr => tstr }
+
+; Values of a named struct type
+places = { * tstr => place }
+
+place = { lat: float64, lon: float64 }
+
+; A constrained value type
+scores = { * tstr => uint .le 100 }
+
+; Named members and other entries
+device = {
+    id:     uint,
+    ? name: tstr,
+    * tstr => tstr,
+}
+
+; Other entries of a struct type, at least one
+sites = {
+    region: tstr,
+    + tstr => place,
+}

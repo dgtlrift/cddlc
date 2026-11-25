@@ -12,7 +12,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, FieldDef, IrModule, LiteralValue, Occurrence,
-    Primitive, StructDef, TypeDef, TypeRef,
+    MapDef, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 /// Self-contained streaming CBOR encoder emitted into every generated file.
@@ -310,7 +310,11 @@ fn module_tags(module: &IrModule) -> Vec<u64> {
                 out.extend(a.tagged.map(|t| t.0));
                 walk(&a.element, &mut out);
             }
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => {
+                out.extend(m.tagged.map(|t| t.0));
+                walk(&m.key_ty, &mut out);
+                walk(&m.val_ty, &mut out);
+            }
         }
     }
     out.sort_unstable();
@@ -485,7 +489,7 @@ fn emit_type(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
         TypeDef::Enum(e) => emit_enum(w, e, opts),
         TypeDef::Array(a) => emit_array(w, a, opts),
         TypeDef::Alias(a) => emit_alias(w, a, opts),
-        TypeDef::Map(_) => {}
+        TypeDef::Map(m) => emit_map(w, m, opts),
     }
 }
 
@@ -514,6 +518,11 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let ty = ts_struct_field_type(f, opts);
         let prop = to_snake_case(&f.name);
         w.line(&format!("readonly {prop}{opt}: {ty};"));
+    }
+    // The map's other entries (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        w.line("/** The map's other entries. */");
+        w.line(&format!("readonly {}: ReadonlyMap<string, {}>;", to_snake_case(&r.name), ts_typeref(&r.val_ty, opts)));
     }
     w.dedent();
     w.line("}");
@@ -696,6 +705,15 @@ fn emit_struct_encode_json(
             }
         }
     }
+    if let Some(r) = &s.rest {
+        let conv = ts_json_encode_expr(&r.val_ty, "value", opts);
+        w.line(&format!("for (const [key, value] of val.{}) {{", to_snake_case(&r.name)));
+        w.indent();
+        w.line(&format!("if (Object.prototype.hasOwnProperty.call(_map, key)) throw new Error(`{iname}: other entry ${{key}} is a named member's key`);"));
+        w.line(&format!("_map[key] = {conv};"));
+        w.dedent();
+        w.line("}");
+    }
     w.line("return new TextEncoder().encode(JSON.stringify(_map));");
     w.dedent();
     w.line("}");
@@ -733,13 +751,16 @@ fn emit_struct_encode_cbor(
         .map(|f| to_snake_case(&f.name))
         .collect();
     let required = fields.len() - optional.len();
+    let rest_size = s.rest.as_ref()
+        .map(|r| format!(" + val.{}.size", to_snake_case(&r.name)))
+        .unwrap_or_default();
     if optional.is_empty() {
-        w.line(&format!("enc.startMap({required});"));
+        w.line(&format!("enc.startMap({required}{rest_size});"));
     } else {
         let present: Vec<String> = optional.iter()
             .map(|p| format!("(val.{p} !== undefined ? 1 : 0)"))
             .collect();
-        w.line(&format!("enc.startMap({required} + {});", present.join(" + ")));
+        w.line(&format!("enc.startMap({required} + {}{rest_size});", present.join(" + ")));
     }
     for f in &fields {
         let prop = to_snake_case(&f.name);
@@ -755,6 +776,16 @@ fn emit_struct_encode_cbor(
             w.line(&format!("enc.text({:?});", f.name.as_str()));
             emit_ts_encode_value(w, &f.ty, &expr, &f.occurrence, opts);
         }
+    }
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        w.line(&format!("for (const [key, value] of val.{}) {{", to_snake_case(&r.name)));
+        w.indent();
+        w.line(&format!("if ([{}].includes(key)) throw new Error(`{iname}: other entry ${{key}} is a named member's key`);", named.join(", ")));
+        w.line("enc.text(key);");
+        emit_ts_encode_primitive_or_named(w, &r.val_ty, "value", opts);
+        w.dedent();
+        w.line("}");
     }
     w.line("enc.endMap();");
     w.line("return enc.finish();");
@@ -817,12 +848,23 @@ fn emit_struct_decode_json(
     }
     w.blank();
 
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let val = ts_json_decode_expr(&r.val_ty, "value", &format!("{iname} value"), opts);
+        w.line(&format!(
+            "const rest = new Map(Object.entries(m).filter(([key]) => ![{}].includes(key)).map(([key, value]) => [key, {val}] as const));",
+            named.join(", ")
+        ));
+    }
     w.line("return {");
     w.indent();
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
         w.line(&format!("{prop}: {local},"));
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("{}: rest,", to_snake_case(&r.name)));
     }
     w.dedent();
     w.line("};");
@@ -879,12 +921,23 @@ fn emit_struct_decode_cbor(
     }
     w.blank();
 
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let val = ts_convert_expr(&r.val_ty, "value", opts);
+        w.line(&format!(
+            "const rest = new Map(Object.entries(m).filter(([key]) => ![{}].includes(key)).map(([key, value]) => [key, {val}] as const));",
+            named.join(", ")
+        ));
+    }
     w.line("return {");
     w.indent();
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
         w.line(&format!("{prop}: {local},"));
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("{}: rest,", to_snake_case(&r.name)));
     }
     w.dedent();
     w.line("};");
@@ -1373,6 +1426,74 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.line("}");
 }
 
+// ── Map ───────────────────────────────────────────────────────────────────────
+
+/// A table (`{ * tstr => uint }`): a `ReadonlyMap` (dgtlrift/cddlc#82). Its keys
+/// are text: cborg decodes a map to an object, which has text keys only.
+fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    let type_name = to_pascal_case(&m.name);
+    let key_ty = ts_typeref(&m.key_ty, opts);
+    let val_ty = ts_typeref(&m.val_ty, opts);
+    let fname = encode_fn_name(&m.name);
+    let dname = decode_fn_name(&m.name);
+
+    cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Block { open: "/**" });
+    if m.deprecated {
+        w.line("/** @deprecated */");
+    }
+    w.line(&format!("export type {type_name} = ReadonlyMap<{key_ty}, {val_ty}>;"));
+    w.blank();
+
+    w.line(&format!("export function {fname}(val: {type_name}): Uint8Array {{"));
+    w.indent();
+    if opts.is_json() {
+        let conv = ts_json_encode_expr(&m.val_ty, "value", opts);
+        w.line(&format!(
+            "return new TextEncoder().encode(JSON.stringify(Object.fromEntries([...val].map(([key, value]) => [key, {conv}]))));"
+        ));
+    } else {
+        w.line("const enc = new CborEncoder();");
+        if let Some(tag) = m.tagged {
+            w.line(&format!("enc.tag({});", tag.0));
+        }
+        w.line("enc.startMap(val.size);");
+        w.line("for (const [key, value] of val) {");
+        w.indent();
+        emit_ts_encode_primitive_or_named(w, &m.key_ty, "key", opts);
+        emit_ts_encode_primitive_or_named(w, &m.val_ty, "value", opts);
+        w.dedent();
+        w.line("}");
+        w.line("return enc.finish();");
+    }
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    let is_object = "typeof obj !== 'object' || obj === null || Array.isArray(obj) || obj instanceof Uint8Array";
+    if opts.is_json() {
+        w.line(&format!("export function {dname}(data: Uint8Array): {type_name} {{"));
+        w.indent();
+        w.line("const obj: unknown = JSON.parse(new TextDecoder().decode(data));");
+        w.line(&format!("if ({is_object}) throw new Error('{type_name}: expected a JSON object');"));
+        let key = ts_json_decode_expr(&m.key_ty, "key", &format!("{type_name} key"), opts);
+        let val = ts_json_decode_expr(&m.val_ty, "value", &format!("{type_name} value"), opts);
+        w.line(&format!(
+            "return new Map(Object.entries(obj as Record<string, unknown>).map(([key, value]) => [{key}, {val}]));"
+        ));
+    } else {
+        open_cbor_decoder(w, &m.name, &type_name);
+        w.line(&format!("const obj: unknown = {};", untag_expr(m.tagged, &type_name)));
+        w.line(&format!("if ({is_object}) throw new Error('{type_name}: expected a CBOR map');"));
+        let key = ts_convert_expr(&m.key_ty, "key", opts);
+        let val = ts_convert_expr(&m.val_ty, "value", opts);
+        w.line(&format!(
+            "return new Map(Object.entries(obj as Record<string, unknown>).map(([key, value]) => [{key}, {val}]));"
+        ));
+    }
+    w.dedent();
+    w.line("}");
+}
+
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
@@ -1517,6 +1638,10 @@ fn ts_json_decode_expr(ty: &TypeRef, raw_expr: &str, at: &str, opts: &CodegenOpt
             format!("{df}(new TextEncoder().encode(JSON.stringify({raw_expr})))")
         }
         TypeRef::Tagged(_, inner) => ts_json_decode_expr(inner, raw_expr, at, opts),
+        TypeRef::Choice(cs) if cs.iter().all(|c| matches!(c, TypeRef::Primitive(_))) => {
+            let alts: Vec<String> = cs.iter().map(|c| ts_json_decode_expr(c, "_c", at, opts)).collect();
+            choice_expr(raw_expr, &alts, at)
+        }
         TypeRef::Choice(_) => format!("{raw_expr} as unknown"),
     }
 }
@@ -1639,8 +1764,24 @@ fn ts_convert_expr(ty: &TypeRef, raw_expr: &str, opts: &CodegenOptions) -> Strin
             let untagged = format!("expectTag({raw_expr}, {}, 'tagged value')", tag.0);
             ts_convert_expr(inner, &untagged, opts)
         }
+        TypeRef::Choice(cs) if cs.iter().all(|c| matches!(c, TypeRef::Primitive(_))) => {
+            let alts: Vec<String> = cs.iter().map(|c| ts_convert_expr(c, "_c", opts)).collect();
+            choice_expr(raw_expr, &alts, "choice")
+        }
         TypeRef::Choice(_) => format!("{raw_expr} as unknown"),
     }
+}
+
+/// A choice of primitives read from `raw_expr`: the first alternative whose
+/// converter (each an expression over `_c`) accepts it.
+fn choice_expr(raw_expr: &str, alts: &[String], at: &str) -> String {
+    let tries: String = alts.iter()
+        .map(|a| format!("try {{ return {a}; }} catch {{ /* next alternative */ }} "))
+        .collect();
+    format!(
+        "((_c: unknown) => {{ {tries}throw new Error({:?}); }})({raw_expr})",
+        format!("{at}: no alternative of the choice matches")
+    )
 }
 
 fn ts_convert_primitive(p: &Primitive, expr: &str) -> String {
@@ -1788,6 +1929,13 @@ fn bool_literal_value(f: &FieldDef, explicit: bool) -> Option<String> {
 
 // ── TypeScript type helpers ───────────────────────────────────────────────────
 
+/// A table with one entry.
+fn ts_map_value(m: &MapDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> String {
+    let key = ts_test_value(&m.key_ty, &Occurrence::Required, module, opts, explicit, depth + 1);
+    let val = ts_test_value(&m.val_ty, &Occurrence::Required, module, opts, explicit, depth + 1);
+    format!("new Map([[{key}, {val}]])")
+}
+
 fn ts_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     let base = ts_typeref(ty, opts);
     match occ {
@@ -1899,7 +2047,7 @@ fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts:
         TypeDef::Enum(e) => emit_enum_tests(w, e, opts),
         TypeDef::Alias(a) => emit_alias_tests(w, a, module, opts),
         TypeDef::Array(a) => emit_array_tests(w, a, opts),
-        TypeDef::Map(_) => {}
+        TypeDef::Map(m) => emit_map_tests(w, m, module, opts),
     }
 }
 
@@ -1920,6 +2068,9 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
         let val = ts_field_value(f, module, opts, false, 0);
         w.line(&format!("{prop}: {val},"));
     }
+    if let Some(v) = ts_rest_value(s, module, opts, false, 0) {
+        w.line(&format!("{v},"));
+    }
     w.dedent();
     w.line("};");
     w.line(&format!("const encoded = {fname}(original);"));
@@ -1937,6 +2088,9 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
         let prop = to_snake_case(&f.name);
         let val = ts_field_value(f, module, opts, true, 0);
         w.line(&format!("{prop}: {val},"));
+    }
+    if let Some(v) = ts_rest_value(s, module, opts, true, 0) {
+        w.line(&format!("{v},"));
     }
     w.dedent();
     w.line("};");
@@ -1957,6 +2111,9 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
             let v = ts_field_value(f, module, opts, false, 0);
             w.line(&format!("{prop}: {v},"));
         }
+        if let Some(v) = ts_rest_value(s, module, opts, false, 0) {
+            w.line(&format!("{v},"));
+        }
         w.dedent();
         w.line("};");
         w.line(&format!("const encoded = {fname}(val);"));
@@ -1974,6 +2131,23 @@ fn emit_ts_roundtrip_assert(w: &mut IndentWriter, s: &StructDef) {
         let prop = to_snake_case(&f.name);
         w.line(&format!("expect(decoded.{prop}).toEqual(original.{prop});"));
     }
+    if let Some(r) = &s.rest {
+        let prop = to_snake_case(&r.name);
+        w.line(&format!("expect(decoded.{prop}).toEqual(original.{prop});"));
+    }
+}
+
+/// The `name: value` of a struct's other entries in a test value: one entry
+/// when explicit or when the map needs one, else none.
+fn ts_rest_value(s: &StructDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> Option<String> {
+    let r = s.rest.as_ref()?;
+    let prop = to_snake_case(&r.name);
+    Some(if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
+        let v = ts_test_value(&r.val_ty, &Occurrence::Required, module, opts, explicit, depth + 1);
+        format!("{prop}: new Map([['other-key', {v}]])")
+    } else {
+        format!("{prop}: new Map()")
+    })
 }
 
 /// A test value for one enum variant.
@@ -2109,6 +2283,32 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     let _ = opts; // suppress unused warning
 }
 
+fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, module: &IrModule, opts: &CodegenOptions) {
+    let type_name = to_pascal_case(&m.name);
+    let fname = encode_fn_name(&m.name);
+    let dname = decode_fn_name(&m.name);
+
+    w.line(&format!("describe('{type_name}', () => {{"));
+    w.indent();
+    w.line("test('roundtrip empty map', () => {");
+    w.indent();
+    w.line(&format!("const original: {type_name} = new Map();"));
+    w.line(&format!("const decoded = {dname}({fname}(original));"));
+    w.line("expect(decoded).toEqual(original);");
+    w.dedent();
+    w.line("});");
+    w.blank();
+    w.line("test('roundtrip one entry', () => {");
+    w.indent();
+    w.line(&format!("const original: {type_name} = {};", ts_map_value(m, module, opts, true, 1)));
+    w.line(&format!("const decoded = {dname}({fname}(original));"));
+    w.line("expect(decoded).toEqual(original);");
+    w.dedent();
+    w.line("});");
+    w.dedent();
+    w.line("});");
+}
+
 // ── Test value helpers ────────────────────────────────────────────────────────
 
 /// Nesting depth past which a named type's test value falls back to `{} as T`,
@@ -2157,6 +2357,8 @@ fn ts_test_value(
             TypeRef::Named(name) => ts_named_value(name, module, opts, explicit, depth),
             // A tagged member (`timestamp: #6.1(uint)`) holds its inner type's value.
             TypeRef::Tagged(_, inner) => ts_test_value(inner, occ, module, opts, explicit, depth),
+            // A choice's first alternative (null isn't a value of it).
+            TypeRef::Choice(cs) if !cs.is_empty() => ts_test_value(&cs[0], occ, module, opts, explicit, depth),
             _ => "null".into(),
         },
     }
@@ -2175,6 +2377,7 @@ fn ts_named_value(name: &str, module: &IrModule, opts: &CodegenOptions, explicit
                 .fields
                 .iter()
                 .map(|f| format!("{}: {}", to_snake_case(&f.name), ts_field_value(f, module, opts, explicit, depth + 1)))
+                .chain(ts_rest_value(s, module, opts, explicit, depth + 1))
                 .collect();
             format!("{{ {} }}", fields.join(", "))
         }
@@ -2192,7 +2395,8 @@ fn ts_named_value(name: &str, module: &IrModule, opts: &CodegenOptions, explicit
             }
         }
         Some(TypeDef::Array(_)) => "[]".into(),
-        Some(TypeDef::Map(_)) | None => fallback,
+        Some(TypeDef::Map(m)) => ts_map_value(m, module, opts, explicit, depth),
+        None => fallback,
     }
 }
 
@@ -2250,24 +2454,20 @@ fn ts_invalid_constrained_value(
                 }
                 _ => {}
             },
-            Constraint::ValueRangeInt { min, .. } => {
-                if let Some(lo) = min {
-                    return if opts.is_json() {
-                        format!("{} as any", lo - 1)
-                    } else {
-                        format!("{}n as any", lo - 1)
-                    };
+            // Just below the lower bound, or else just above the upper one
+            // (`null` passes `val <= 100n`, as JavaScript compares it as 0).
+            Constraint::ValueRangeInt { min, max, inclusive } => {
+                let out = min.map(|lo| lo as i128 - 1)
+                    .or(max.map(|hi| hi as i128 + i128::from(*inclusive)));
+                if let Some(v) = out {
+                    return format!("{v}{} as any", if opts.is_json() { "" } else { "n" });
                 }
             }
-            Constraint::ValueRangeUint { min, .. } => {
-                if let Some(lo) = min {
-                    if *lo > 0 {
-                        return if opts.is_json() {
-                            format!("{} as any", lo - 1)
-                        } else {
-                            format!("{}n as any", lo - 1)
-                        };
-                    }
+            Constraint::ValueRangeUint { min, max, inclusive } => {
+                let out = min.filter(|lo| *lo > 0).map(|lo| lo as i128 - 1)
+                    .or(max.map(|hi| hi as i128 + i128::from(*inclusive)));
+                if let Some(v) = out {
+                    return format!("{v}{} as any", if opts.is_json() { "" } else { "n" });
                 }
             }
             _ => {}

@@ -44,6 +44,26 @@ public final class Cddl {
 
     // ── Raw to Java values, each type checked ──────────────────────────────────
 
+    /** A choice of primitive types: the first alternative that reads {@code raw}. */
+    @SafeVarargs
+    public static Object choice(Object raw, String at, java.util.function.Function<Object, Object>... alts) {
+        for (java.util.function.Function<Object, Object> alt : alts) {
+            try {
+                return alt.apply(raw);
+            } catch (IllegalArgumentException e) {
+                // try the next alternative
+            }
+        }
+        throw invalid(at, "no alternative of the choice matches");
+    }
+
+    /** A choice's value in the value model, keeping a float's width and a byte string's encoding. */
+    public static Object choiceToRaw(Object v) {
+        if (v instanceof Float f) return f32(f);
+        if (v instanceof byte[] b) return bytes(b);
+        return v;
+    }
+
     public static IllegalArgumentException invalid(String at, String message) {
         return new IllegalArgumentException(at + ": " + message);
     }
@@ -186,6 +206,16 @@ pub const CBOR_JACKSON: &str = r#"
 
     public static Object untag(Object v, long tag, String at) {
         if (v instanceof Tagged t && t.tag() == tag) return t.value();
+        // Jackson reads a bignum (tag 2 or 3 around its magnitude bytes) as a
+        // number, dropping the tag: give back the magnitude (RFC 8949 §3.4.3).
+        if ((tag == 2 || tag == 3) && v instanceof java.math.BigInteger b) {
+            java.math.BigInteger m = tag == 2 ? b : b.negate().subtract(java.math.BigInteger.ONE);
+            if (m.signum() >= 0) {
+                byte[] raw = m.toByteArray();
+                int skip = raw.length > 1 && raw[0] == 0 ? 1 : 0;
+                return java.util.Arrays.copyOfRange(raw, m.signum() == 0 ? raw.length : skip, raw.length);
+            }
+        }
         throw invalid(at, "expected CBOR tag " + tag);
     }
 

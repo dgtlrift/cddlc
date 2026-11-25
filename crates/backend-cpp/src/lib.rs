@@ -15,7 +15,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Capacity, Constraint, EnumDef, EnumVariant,
-    IrModule, LiteralValue, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct CppBackend;
@@ -164,6 +164,7 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line(&format!("#ifndef {guard}"));
     w.line(&format!("#define {guard}"));
     w.blank();
+    w.line("#include <algorithm>");
     w.line("#include <cstdint>");
     w.line("#include <cstddef>");
     w.line("#include <optional>");
@@ -255,7 +256,7 @@ fn emit_type_decl_hpp(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
         TypeDef::Enum(e)   => emit_enum_hpp(w, e, opts),
         TypeDef::Array(a)  => emit_array_hpp(w, a, opts),
         TypeDef::Alias(a)  => emit_alias_hpp(w, a, opts),
-        TypeDef::Map(_)    => {}
+        TypeDef::Map(m)    => emit_map_hpp(w, m, opts),
     }
 }
 
@@ -270,17 +271,37 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let fname  = to_snake_case(&f.name);
         w.line(&format!("{ty_str} {fname}{{}};"));
     }
+    // The map's other entries (dgtlrift/cddlc#82): any number with `--alloc
+    // heap`, else up to their capacity.
+    let mut eqs: Vec<String> = s.fields.iter()
+        .map(|f| format!("{} == o.{}", to_snake_case(&f.name), to_snake_case(&f.name)))
+        .collect();
+    if let Some(r) = &s.rest {
+        let rname = to_snake_case(&r.name);
+        let entry = format!("std::pair<std::string_view, {}>", cpp_typeref(&r.val_ty, opts));
+        w.line("/// The map's other entries.");
+        if is_heap(opts) {
+            w.line(&format!("std::vector<{entry}> {rname}{{}};"));
+            eqs.push(format!("{rname} == o.{rname}"));
+        } else {
+            let cap = capacity_value(
+                r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                opts.max_array,
+            );
+            w.line(&format!("std::array<{entry}, {cap}> {rname}{{}};"));
+            w.line(&format!("std::size_t {rname}_count{{0}};"));
+            eqs.push(format!(
+                "{rname}_count == o.{rname}_count && std::equal({rname}.begin(), {rname}.begin() + {rname}_count, o.{rname}.begin())"
+            ));
+        }
+    }
     w.blank();
     w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{"));
     w.indent();
-    if s.fields.is_empty() {
+    if eqs.is_empty() {
         w.line("return true;");
     } else {
-        let eq = s.fields.iter()
-            .map(|f| format!("{} == o.{}", to_snake_case(&f.name), to_snake_case(&f.name)))
-            .collect::<Vec<_>>()
-            .join(" && ");
-        w.line(&format!("return {eq};"));
+        w.line(&format!("return {};", eqs.join(" && ")));
     }
     w.dedent();
     w.line("}");
@@ -428,6 +449,44 @@ fn emit_array_hpp(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.line("};");
 }
 
+/// A table (`{ * tstr => uint }`): key/value pairs, up to its capacity, or
+/// any number with `--alloc heap` (dgtlrift/cddlc#82).
+fn emit_map_hpp(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
+    cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
+    let type_name = to_pascal_case(&m.name);
+    let entry = format!("std::pair<{}, {}>", cpp_typeref(&m.key_ty, opts), cpp_typeref(&m.val_ty, opts));
+    w.line(&format!("struct {type_name} {{"));
+    w.indent();
+    if is_heap(opts) {
+        w.line(&format!("std::vector<{entry}> entries{{}};"));
+        w.blank();
+        w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{ return entries == o.entries; }}"));
+        w.dedent();
+        w.line("};");
+        return;
+    }
+    let cap = capacity_value(
+        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
+    w.line(&format!("std::array<{entry}, {cap}> entries{{}};"));
+    w.line("std::size_t count{0};");
+    w.blank();
+    w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{"));
+    w.indent();
+    w.line("if (count != o.count) return false;");
+    w.line("for (std::size_t i = 0; i < count; i++) {");
+    w.indent();
+    w.line("if (!(entries[i] == o.entries[i])) return false;");
+    w.dedent();
+    w.line("}");
+    w.line("return true;");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("};");
+}
+
 fn emit_alias_hpp(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
     let type_name = to_pascal_case(&a.name);
@@ -529,13 +588,16 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                     .map(|f| format!(" + (val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
                 w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});"));
-            } else if opt_fields.is_empty() {
-                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u);"));
             } else {
-                let opt_parts: Vec<String> = opt_fields.iter()
-                    .map(|f| format!("(val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
+                let rest_count = match &s.rest {
+                    Some(r) if is_heap(opts) => format!(" + val.{}.size()", to_snake_case(&r.name)),
+                    Some(r) => format!(" + val.{}_count", to_snake_case(&r.name)),
+                    None => String::new(),
+                };
+                let opt_sum: String = opt_fields.iter()
+                    .map(|f| format!(" + (val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
-                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u + {});", opt_parts.join(" + ")));
+                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u{opt_sum}{rest_count});"));
             }
             for f in &fields {
                 let fname = to_snake_case(&f.name);
@@ -550,6 +612,20 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                     if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
                     emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}"), &f.occurrence, opts);
                 }
+            }
+            if let Some(r) = &s.rest {
+                let rname = to_snake_case(&r.name);
+                if is_heap(opts) {
+                    w.line(&format!("for (const auto &e : val.{rname}) {{"));
+                } else {
+                    w.line(&format!("for (std::size_t i = 0; i < val.{rname}_count; i++) {{"));
+                    w.line(&format!("    const auto &e = val.{rname}[i];"));
+                }
+                w.indent();
+                w.line("nanocbor_put_tstrn(enc, e.first.data(), e.first.size());");
+                emit_cpp_encode_field(w, &r.val_ty, "e.second", &Occurrence::Required, opts);
+                w.dedent();
+                w.line("}");
             }
             w.line("return NANOCBOR_OK;");
         }
@@ -625,7 +701,23 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             emit_cpp_encode_field(w, &a.ty, "val.value", &Occurrence::Required, opts);
             w.line("return NANOCBOR_OK;");
         }
-        TypeDef::Map(_) => {
+        TypeDef::Map(m) => {
+            if let Some(tag) = m.tagged {
+                w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
+            }
+            if is_heap(opts) {
+                w.line("nanocbor_fmt_map(enc, val.entries.size());");
+                w.line("for (const auto &e : val.entries) {");
+            } else {
+                w.line("nanocbor_fmt_map(enc, val.count);");
+                w.line("for (std::size_t i = 0; i < val.count; i++) {");
+                w.line("    const auto &e = val.entries[i];");
+            }
+            w.indent();
+            emit_cpp_encode_field(w, &m.key_ty, "e.first", &Occurrence::Required, opts);
+            emit_cpp_encode_field(w, &m.val_ty, "e.second", &Occurrence::Required, opts);
+            w.dedent();
+            w.line("}");
             w.line("return NANOCBOR_OK;");
         }
     }
@@ -653,9 +745,20 @@ fn emit_cpp_encode_field(
             w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
             emit_cpp_encode_field(w, inner, expr, &Occurrence::Required, opts);
         }
-        TypeRef::Choice(_) => {
-            w.line(&format!("encode(enc, {expr});"));
-        }
+        TypeRef::Choice(cs) => match prim_choice(cs, opts) {
+            // Whichever alternative the variant holds.
+            Some(alts) => {
+                for (i, (p, t)) in alts.iter().enumerate() {
+                    let kw = if i == 0 { "if" } else { "else if" };
+                    w.line(&format!("{kw} (const auto *_c = std::get_if<{t}>(&{expr})) {{"));
+                    w.indent();
+                    w.line(&format!("{};", cpp_encode_call(p, "(*_c)")));
+                    w.dedent();
+                    w.line("}");
+                }
+            }
+            None => w.line(&format!("encode(enc, {expr});")),
+        },
     }
 }
 
@@ -741,8 +844,28 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             }
             w.line("{");
             w.indent();
-            w.line("if (cb.on_unknown_field) cb.on_unknown_field(ctx, key);");
-            w.line("nanocbor_skip(&map);");
+            match &s.rest {
+                // Other keys are the map's other entries (dgtlrift/cddlc#82).
+                Some(r) => {
+                    let rname = to_snake_case(&r.name);
+                    w.line(&format!("std::pair<std::string_view, {}> e{{key, {{}}}};", cpp_typeref(&r.val_ty, opts)));
+                    emit_cpp_decode_field(w, &r.val_ty, "e.second", &[], &r.name, "&map", opts);
+                    if is_heap(opts) {
+                        w.line(&format!("out.{rname}.push_back(e);"));
+                    } else {
+                        let cap = capacity_value(
+                            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                            opts.max_array,
+                        );
+                        w.line(&format!("if (out.{rname}_count >= {cap}) return -1;"));
+                        w.line(&format!("out.{rname}[out.{rname}_count++] = e;"));
+                    }
+                }
+                None => {
+                    w.line("if (cb.on_unknown_field) cb.on_unknown_field(ctx, key);");
+                    w.line("nanocbor_skip(&map);");
+                }
+            }
             w.dedent();
             w.line("}");
             w.dedent();
@@ -804,7 +927,40 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             emit_cpp_decode_field(w, &a.ty, "out.value", &a.constraints, "value", "dec", opts);
             w.line("return NANOCBOR_OK;");
         }
-        TypeDef::Map(_) => {
+        TypeDef::Map(m) => {
+            if let Some(tag) = m.tagged {
+                w.line("{ uint32_t tag;");
+                w.line("  if (nanocbor_get_tag(dec, &tag) < 0) return -1;");
+                w.line(&format!("  if (tag != {}) return -1; }}", tag.0));
+            }
+            let entry = format!("std::pair<{}, {}>", cpp_typeref(&m.key_ty, opts), cpp_typeref(&m.val_ty, opts));
+            w.line("nanocbor_value_t map;");
+            w.line("if (nanocbor_enter_map(dec, &map) < 0) return -1;");
+            if is_heap(opts) {
+                w.line("out.entries.clear();");
+            } else {
+                w.line("out.count = 0;");
+            }
+            w.line("while (!nanocbor_at_end(&map)) {");
+            w.indent();
+            if !is_heap(opts) {
+                let cap = capacity_value(
+                    m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                    opts.max_array,
+                );
+                w.line(&format!("if (out.count >= {cap}) return -1;"));
+            }
+            w.line(&format!("{entry} e{{}};"));
+            emit_cpp_decode_field(w, &m.key_ty, "e.first", &[], "key", "&map", opts);
+            emit_cpp_decode_field(w, &m.val_ty, "e.second", &[], "value", "&map", opts);
+            if is_heap(opts) {
+                w.line("out.entries.push_back(e);");
+            } else {
+                w.line("out.entries[out.count++] = e;");
+            }
+            w.dedent();
+            w.line("}");
+            w.line("nanocbor_leave_container(dec, &map);");
             w.line("return NANOCBOR_OK;");
         }
     }
@@ -976,9 +1132,28 @@ fn emit_cpp_decode_field(
             emit_cpp_decode_field(w, inner, dest, constraints, field_name, dec_expr, opts);
             w.line("}");
         }
-        TypeRef::Choice(_) => {
-            w.line(&format!("nanocbor_skip({dec_expr}); // choice"));
-        }
+        TypeRef::Choice(cs) => match prim_choice(cs, opts) {
+            // The first alternative that reads the item, tried on a copy of the
+            // decoder so a failed attempt consumes nothing.
+            Some(alts) => {
+                w.line("{");
+                w.indent();
+                w.line("bool _matched = false;");
+                for (p, t) in &alts {
+                    w.line("if (!_matched) {");
+                    w.indent();
+                    w.line(&format!("nanocbor_value_t _probe = *({dec_expr});"));
+                    w.line(&format!("{t} _v{{}};"));
+                    w.line(&format!("if ({} >= 0) {{ *({dec_expr}) = _probe; {dest} = _v; _matched = true; }}", cpp_decode_call(p, "_v", "&_probe")));
+                    w.dedent();
+                    w.line("}");
+                }
+                w.line("if (!_matched) return -1;");
+                w.dedent();
+                w.line("}");
+            }
+            None => w.line(&format!("nanocbor_skip({dec_expr}); // choice")),
+        },
     }
 }
 
@@ -1240,6 +1415,16 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                 }
             }
         }
+        // A table with one entry under a text key.
+        TypeDef::Map(m) if matches!(m.key_ty, TypeRef::Primitive(Primitive::Tstr)) => {
+            w.line(&format!("{type_name} original{{}};"));
+            if is_heap(_opts) {
+                w.line("original.entries.push_back({std::string_view(\"k\"), {}});");
+            } else {
+                w.line("original.entries[0] = {std::string_view(\"k\"), {}};");
+                w.line("original.count = 1;");
+            }
+        }
         _ => {
             w.line(&format!("{type_name} original{{}};"));
         }
@@ -1287,10 +1472,31 @@ fn cpp_typeref(ty: &TypeRef, opts: &CodegenOptions) -> String {
         TypeRef::Primitive(p)     => cpp_primitive(p, opts).to_owned(),
         TypeRef::Named(n)         => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => cpp_typeref(inner, opts),
-        TypeRef::Choice(cs)       => cs.first()
-            .map(|c| cpp_typeref(c, opts))
-            .unwrap_or_else(|| "std::monostate".into()),
+        TypeRef::Choice(cs) => match prim_choice(cs, opts) {
+            Some(alts) => format!(
+                "std::variant<{}>",
+                alts.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+            None => cs.first()
+                .map(|c| cpp_typeref(c, opts))
+                .unwrap_or_else(|| "std::monostate".into()),
+        },
     }
+}
+
+/// A choice of primitives with distinct C++ types (`int / float`), which is a
+/// `std::variant` of them: each alternative and its C++ type. `None` for any
+/// other choice, which keeps its first alternative's type.
+fn prim_choice(cs: &[TypeRef], opts: &CodegenOptions) -> Option<Vec<(Primitive, String)>> {
+    let mut alts: Vec<(Primitive, String)> = Vec::new();
+    for c in cs {
+        let TypeRef::Primitive(p) = c else { return None };
+        if matches!(p, Primitive::Any) { return None; }
+        let t = cpp_primitive(p, opts).to_owned();
+        if alts.iter().any(|(_, u)| *u == t) { return None; }
+        alts.push((p.clone(), t));
+    }
+    (alts.len() > 1).then_some(alts)
 }
 
 fn cpp_primitive<'a>(p: &Primitive, _opts: &CodegenOptions) -> &'a str {
@@ -1353,6 +1559,7 @@ fn emit_header_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line(&format!("#define {guard}_JSON_HPP"));
     w.blank();
     w.line("#include <cstdint>");
+    w.line("#include <map>");
     w.line("#include <string>");
     w.line("#include <vector>");
     w.line("#include <optional>");
@@ -1421,9 +1628,15 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
                 let ty    = cpp_json_field_type_with_occ(&f.ty, &f.occurrence, opts);
                 w.line(&format!("{ty} {fname}{{}};"));
             }
+            // The map's other entries (dgtlrift/cddlc#82).
+            if let Some(r) = &s.rest {
+                w.line("/// The map's other entries.");
+                w.line(&format!("std::map<std::string, {}> {}{{}};", cpp_json_field_type(&r.val_ty, opts), to_snake_case(&r.name)));
+            }
             w.blank();
-            let eq: Vec<String> = s.fields.iter()
-                .map(|f| { let n = to_snake_case(&f.name); format!("{n} == o.{n}") })
+            let eq: Vec<String> = s.fields.iter().map(|f| f.name.as_str())
+                .chain(s.rest.iter().map(|r| r.name.as_str()))
+                .map(|n| { let n = to_snake_case(n); format!("{n} == o.{n}") })
                 .collect();
             let eq = if eq.is_empty() { "true".to_owned() } else { eq.join(" && ") };
             w.line(&format!("bool operator==(const {ctype} &o) const {{ return {eq}; }}"));
@@ -1479,7 +1692,16 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
             w.dedent();
             w.line("};");
         }
-        TypeDef::Map(_) => {}
+        // A table: a `std::map` from text key (JSON keys are text), written in
+        // key order (dgtlrift/cddlc#82).
+        TypeDef::Map(m) => {
+            let ctype = to_pascal_case(&m.name);
+            cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
+            let val_ty = cpp_json_field_type(&m.val_ty, opts);
+            w.line(&format!("using {ctype} = std::map<std::string, {val_ty}>;"));
+            w.line(&format!("std::vector<uint8_t> encode_{ctype}(const {ctype}& val);"));
+            w.line(&format!("{ctype} decode_{ctype}(const std::vector<uint8_t>& data);"));
+        }
     }
 }
 
@@ -1577,7 +1799,7 @@ enum JsonNamed { TextEnum, Array, Object }
 fn json_named_kind(n: &str, module: &IrModule) -> JsonNamed {
     match module.get(n) {
         Some(TypeDef::Enum(e)) if json_enum_is_string(e) => JsonNamed::TextEnum,
-        Some(TypeDef::Array(_)) => JsonNamed::Array,
+        Some(TypeDef::Array(_) | TypeDef::Map(_)) => JsonNamed::Array,
         _ => JsonNamed::Object,
     }
 }
@@ -1702,6 +1924,20 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                     }
                 }
             }
+            if let Some(r) = &s.rest {
+                let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+                w.line(&format!("for (const auto& [key, value] : this->{}) {{", to_snake_case(&r.name)));
+                w.indent();
+                if !named.is_empty() {
+                    w.line(&format!(
+                        "for (const char* n : {{{}}}) if (key == n) throw std::invalid_argument(\"{ctype}: other entry \" + key + \" is a named member's key\");",
+                        named.join(", ")
+                    ));
+                }
+                w.line(&format!("j[key] = {};", cpp_json_to_val(&r.val_ty, "value", module)));
+                w.dedent();
+                w.line("}");
+            }
             w.line("auto s = j.dump();");
             w.line("return std::vector<uint8_t>(s.begin(), s.end());");
             w.dedent();
@@ -1723,6 +1959,18 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                         w.line(&format!("out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j.at({key:?})"), opts, module)));
                     }
                 }
+            }
+            // Keys no member has are the map's other entries.
+            if let Some(r) = &s.rest {
+                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", f.name.as_str())).collect();
+                w.line("for (const auto& [key, value] : j.items()) {");
+                w.indent();
+                if !named.is_empty() {
+                    w.line(&format!("if ({}) continue;", named.join(" || ")));
+                }
+                w.line(&format!("out.{}.emplace(key, {});", to_snake_case(&r.name), cpp_json_from_val(&r.val_ty, "value", opts, module)));
+                w.dedent();
+                w.line("}");
             }
             w.line("return out;");
             w.dedent();
@@ -1799,7 +2047,28 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.dedent();
             w.line("}");
         }
-        TypeDef::Map(_) => {}
+        TypeDef::Map(m) => {
+            let ctype = to_pascal_case(&m.name);
+            w.line(&format!("std::vector<uint8_t> encode_{ctype}(const {ctype}& val) {{"));
+            w.indent();
+            w.line("nlohmann::json obj = nlohmann::json::object();");
+            w.line(&format!("for (const auto& [key, value] : val) obj[key] = {};", cpp_json_to_val(&m.val_ty, "value", module)));
+            w.line("auto s = obj.dump();");
+            w.line("return std::vector<uint8_t>(s.begin(), s.end());");
+            w.dedent();
+            w.line("}");
+            w.blank();
+
+            w.line(&format!("{ctype} decode_{ctype}(const std::vector<uint8_t>& data) {{"));
+            w.indent();
+            w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
+            w.line(&format!("if (!j.is_object()) throw std::runtime_error(\"{ctype}: expected a JSON object\");"));
+            w.line(&format!("{ctype} out;"));
+            w.line(&format!("for (const auto& [key, value] : j.items()) out.emplace(key, {});", cpp_json_from_val(&m.val_ty, "value", opts, module)));
+            w.line("return out;");
+            w.dedent();
+            w.line("}");
+        }
     }
 }
 
@@ -1825,6 +2094,9 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.line(&format!("void test_{ctype}() {{"));
                 w.indent();
                 w.line(&format!("{ctype} original{{}};"));
+                if let Some(r) = &s.rest {
+                    w.line(&format!("original.{}[\"other-key\"] = {{}};", to_snake_case(&r.name)));
+                }
                 w.line("auto encoded = original.encode();");
                 w.line(&format!("auto decoded = {ctype}::decode(encoded);"));
                 w.line("assert(decoded == original);");
@@ -1872,7 +2144,19 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.line("}");
                 w.blank();
             }
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => {
+                let ctype = to_pascal_case(&m.name);
+                w.line(&format!("void test_{ctype}() {{"));
+                w.indent();
+                w.line(&format!("{ctype} original{{}};"));
+                w.line("original[\"k\"] = {};");
+                w.line(&format!("auto encoded = encode_{ctype}(original);"));
+                w.line(&format!("auto decoded = decode_{ctype}(encoded);"));
+                w.line("assert(decoded == original);");
+                w.dedent();
+                w.line("}");
+                w.blank();
+            }
         }
         let _ = opts;
     }
@@ -1890,7 +2174,7 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
             }
             TypeDef::Array(a) => { let ctype = to_pascal_case(&a.name); w.line(&format!("test_{ctype}();")); }
             TypeDef::Alias(a) => { let ctype = to_pascal_case(&a.name); w.line(&format!("test_{ctype}();")); }
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => { let ctype = to_pascal_case(&m.name); w.line(&format!("test_{ctype}();")); }
         }
     }
     w.line("std::printf(\"All C++ JSON roundtrip tests passed.\\n\");");

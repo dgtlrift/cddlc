@@ -21,7 +21,7 @@ use cddlc_codegen::{
 };
 use cddlc_ir::{
     AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, FieldDef, IrModule, LiteralValue,
-    Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct LuaBackend;
@@ -214,7 +214,7 @@ fn emit_module(cx: &Cx) -> String {
             TypeDef::Enum(e) => emit_enum(&mut w, cx, e),
             TypeDef::Array(a) => emit_array(&mut w, cx, a),
             TypeDef::Alias(a) => emit_alias(&mut w, cx, a),
-            TypeDef::Map(_) => {}
+            TypeDef::Map(m) => emit_table(&mut w, cx, m),
         }
     }
     w.blank();
@@ -469,6 +469,9 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
         format!("-- @field {} {}{opt}", lua_member_name(&f.name), f.name)
     }).collect();
     for m in members { w.line(&m); }
+    if let Some(r) = &s.rest {
+        w.line(&format!("-- @field {} the map's other entries: a table from text key to value (optional)", lua_member_name(&r.name)));
+    }
     open_type(w, &t, true);
 
     w.line(&format!("--- Makes a {t} from a table of its members."));
@@ -503,6 +506,25 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
             }
         }
     }
+    // The map's other entries (dgtlrift/cddlc#82): text keys no member has.
+    if let Some(r) = &s.rest {
+        let m = format!("v.{}", lua_member_name(&r.name));
+        let at = format!("{t}.{}", r.name);
+        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&f.name))).collect();
+        w.line(&format!("if {m} ~= nil then"));
+        w.indent();
+        w.line(&format!("R.want_table({m}, {})", lua_str(&at)));
+        w.line(&format!("local named = {{ {} }}", named.join(", ")));
+        w.line(&format!("for k, x in pairs({m}) do"));
+        w.indent();
+        w.line(&format!("R.want_text(k, {})", lua_str(&format!("{at} key"))));
+        w.line(&format!("if named[k] then R.fail({}, \"other entry \" .. k .. \" is a named member's key\") end", lua_str(&at)));
+        w.line(&want(&r.val_ty, "x", &format!("{at} value")));
+        w.dedent();
+        w.line("end");
+        w.dedent();
+        w.line("end");
+    }
     w.dedent();
     w.line("end");
     w.blank();
@@ -535,6 +557,17 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
             }
             _ => w.line(&format!("m[#m + 1] = {{ {key}, {} }}", to_raw(&f.ty, &m))),
         }
+    }
+    if let Some(r) = &s.rest {
+        let m = format!("v.{}", lua_member_name(&r.name));
+        w.line(&format!("if {m} ~= nil then"));
+        w.indent();
+        w.line("local keys = {}");
+        w.line(&format!("for k in pairs({m}) do keys[#keys + 1] = k end"));
+        w.line("table.sort(keys)");
+        w.line(&format!("for _, k in ipairs(keys) do m[#m + 1] = {{ k, {} }} end", to_raw(&r.val_ty, &format!("{m}[k]"))));
+        w.dedent();
+        w.line("end");
     }
     match s.tagged {
         Some(tag) => w.line(&format!("return R.tag({}, R.map(m))", lua_int(tag.0 as i128))),
@@ -570,6 +603,22 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
             }
             _ => w.line(&format!("{m} = {}", from_raw(&f.ty, &format!("R.required(m, {key}, {})", lua_str(&t)), &at))),
         }
+    }
+    // Keys no member has are the map's other entries; none leaves the member nil.
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&f.name))).collect();
+        let field = format!("v.{}", lua_member_name(&r.name));
+        w.line(&format!("local named = {{ {} }}", named.join(", ")));
+        w.line("for k, x in pairs(m) do");
+        w.indent();
+        w.line("if not named[k] then");
+        w.indent();
+        w.line(&format!("{field} = {field} or {{}}"));
+        w.line(&format!("{field}[k] = {}", from_raw(&r.val_ty, "x", &format!("{t} value"))));
+        w.dedent();
+        w.line("end");
+        w.dedent();
+        w.line("end");
     }
     w.line(&format!("M.{t}.validate(v)"));
     w.line("return v");
@@ -875,6 +924,61 @@ fn emit_array(w: &mut IndentWriter, cx: &Cx, a: &ArrayDef) {
     emit_encode_decode(w, cx, &t);
 }
 
+// ── Table ─────────────────────────────────────────────────────────────────────
+
+/// A table (`{ * tstr => uint }`): a Lua table from key to value, written in
+/// key order (dgtlrift/cddlc#82). Its keys are text, as the runtime's map
+/// items have text keys.
+fn emit_table(w: &mut IndentWriter, cx: &Cx, m: &MapDef) {
+    let t = lua_type_name(&m.name);
+    doc(w, m.doc.as_deref(), &format!("The {} table: a Lua table from key to value.", m.name));
+    if m.deprecated { w.line("-- @deprecated"); }
+    open_type(w, &t, true);
+    w.line(&format!("--- Makes a {t} from a table of entries."));
+    w.line(&format!("function M.{t}.new(entries) return setmetatable(entries or {{}}, M.{t}) end"));
+    w.blank();
+    w.line("--- Checks every entry's types; raises an error if one doesn't fit.");
+    w.line(&format!("function M.{t}.validate(v)"));
+    w.line(&format!("  R.want_table(v, {})", lua_str(&t)));
+    w.line(&format!(
+        "  for k, x in pairs(v) do {}; {} end",
+        want(&m.key_ty, "k", &format!("{t} key")),
+        want(&m.val_ty, "x", &format!("{t} value"))
+    ));
+    w.line("end");
+    w.blank();
+    w.line(&format!("--- A {t} as a map item, its entries in key order."));
+    w.line(&format!("function M.{t}.to_raw(v)"));
+    w.indent();
+    w.line(&format!("M.{t}.validate(v)"));
+    w.line("local keys = {}");
+    w.line("for k in pairs(v) do keys[#keys + 1] = k end");
+    w.line("table.sort(keys)");
+    w.line("local entries = {}");
+    w.line(&format!("for i, k in ipairs(keys) do entries[i] = {{ k, {} }} end", to_raw(&m.val_ty, "v[k]")));
+    match m.tagged {
+        Some(tag) => w.line(&format!("return R.tag({}, R.map(entries))", lua_int(tag.0 as i128))),
+        None => w.line("return R.map(entries)"),
+    }
+    w.dedent();
+    w.line("end");
+    w.blank();
+    w.line(&format!("--- Reads a {t} from a map item, checking each entry's kinds."));
+    w.line(&format!("function M.{t}.from_raw(raw)"));
+    w.indent();
+    let raw = match m.tagged { Some(tag) => format!("R.untag(raw, {}, {})", lua_int(tag.0 as i128), lua_str(&t)), None => "raw".into() };
+    w.line(&format!("local v = setmetatable({{}}, M.{t})"));
+    w.line(&format!(
+        "for k, x in pairs(R.as_map({raw}, {})) do v[k] = {} end",
+        lua_str(&t),
+        from_raw(&m.val_ty, "x", &format!("{t} value"))
+    ));
+    w.line("return v");
+    w.dedent();
+    w.line("end");
+    emit_encode_decode(w, cx, &t);
+}
+
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
 fn emit_alias(w: &mut IndentWriter, cx: &Cx, a: &AliasDef) {
@@ -930,7 +1034,7 @@ fn emit_spec(cx: &Cx) -> String {
             TypeDef::Enum(e) => enum_specs(cx, e),
             TypeDef::Alias(a) => alias_specs(cx, a),
             TypeDef::Array(a) => array_specs(cx, a),
-            TypeDef::Map(_) => continue,
+            TypeDef::Map(m) => table_specs(cx, m),
         };
         if tests.is_empty() { continue; }
         w.line(&format!("describe({}, function()", lua_str(&lua_type_name(def.name()))));
@@ -1018,16 +1122,38 @@ fn array_specs(cx: &Cx, a: &ArrayDef) -> Vec<(String, Vec<String>)> {
     ]
 }
 
+fn table_specs(cx: &Cx, m: &MapDef) -> Vec<(String, Vec<String>)> {
+    let t = lua_type_name(&m.name);
+    vec![
+        ("roundtrips an empty table".into(), roundtrip(&t, &format!("M.{t}.new({{}})"))),
+        ("roundtrips entries".into(), roundtrip(&t, &lua_table_value(cx, m, true, 1))),
+    ]
+}
+
+/// A table with one entry.
+fn lua_table_value(cx: &Cx, m: &MapDef, explicit: bool, depth: usize) -> String {
+    let key = lua_value(cx, &m.key_ty, &Occurrence::Required, &[], explicit, depth + 1);
+    let val = lua_value(cx, &m.val_ty, &Occurrence::Required, &[], explicit, depth + 1);
+    format!("M.{}.new({{ [{key}] = {val} }})", lua_type_name(&m.name))
+}
+
 // ── Test values ───────────────────────────────────────────────────────────────
 
 /// Nesting depth past which a named type's test value is not built further.
 const MAX_FIXTURE_DEPTH: usize = 4;
 
 fn lua_struct_value(cx: &Cx, s: &StructDef, explicit: bool, depth: usize) -> String {
-    let members: Vec<String> = s.fields.iter().filter_map(|f| {
+    let mut members: Vec<String> = s.fields.iter().filter_map(|f| {
         let v = lua_value(cx, &f.ty, &f.occurrence, &f.constraints, explicit, depth + 1);
         (v != "nil").then(|| format!("{} = {v}", lua_member_name(&f.name)))
     }).collect();
+    // One other entry when explicit or when the map needs one.
+    if let Some(r) = &s.rest {
+        if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
+            let v = lua_value(cx, &r.val_ty, &Occurrence::Required, &[], explicit, depth + 1);
+            members.push(format!("{} = {{ [\"other-key\"] = {v} }}", lua_member_name(&r.name)));
+        }
+    }
     if members.is_empty() {
         format!("M.{}.new({{}})", lua_type_name(&s.name))
     } else {
@@ -1086,7 +1212,11 @@ fn lua_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint]
             Primitive::Null | Primitive::Undefined => "M.null".into(),
         },
         TypeRef::Tagged(_, inner) => lua_value(cx, inner, &Occurrence::Required, constraints, explicit, depth),
-        TypeRef::Choice(_) => "M.null".into(),
+        // A choice's first alternative (null isn't a value of it).
+        TypeRef::Choice(cs) => match cs.first() {
+            Some(first) => lua_value(cx, first, &Occurrence::Required, &[], explicit, depth),
+            None => "M.null".into(),
+        },
         TypeRef::Named(n) => {
             let t = lua_type_name(n);
             match cx.module.get(n) {
@@ -1095,7 +1225,8 @@ fn lua_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint]
                 Some(TypeDef::Alias(a)) => lua_value(cx, &a.ty, &Occurrence::Required, &a.constraints, explicit, depth + 1),
                 Some(TypeDef::Enum(e)) => e.variants.first().map(|v| lua_variant_value(cx, e, v, depth)).unwrap_or_else(|| "nil".into()),
                 Some(TypeDef::Array(_)) => format!("M.{t}.new({{}})"),
-                Some(TypeDef::Map(_)) | None => "nil".into(),
+                Some(TypeDef::Map(m)) => lua_table_value(cx, m, explicit, depth),
+                None => "nil".into(),
             }
         }
     }

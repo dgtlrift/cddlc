@@ -142,11 +142,27 @@ pub struct StructDef {
     /// A map (`{ a: uint }`), or an array of positional members, a record
     /// (`[a: uint, b: tstr]`, `[uint, tstr]`; RFC 8610 §3.4).
     pub encoding:   StructEncoding,
+    /// The entries a map has besides its named members, when it has a member
+    /// with a computed key (`{ a: uint, * tstr => any }`).
+    pub rest:       Option<MapRest>,
     pub tagged:     Option<CborTag>,
     /// Emit map keys in sorted order on encode (dCBOR / deterministic mode).
     pub dcbor:      bool,
     pub doc:        Option<String>,
     pub deprecated: bool,
+}
+
+/// The entries of a map besides its named members (`* tstr => any` in
+/// `{ a: uint, * tstr => any }`): any number, as the occurrence allows, of
+/// keys and values of the given types, none of them a named member's key.
+#[derive(Debug, Clone)]
+pub struct MapRest {
+    /// The member that holds them in generated code (`extra`, or `extra_entries`
+    /// when a named member is already called `extra`).
+    pub name:       SmolStr,
+    pub key_ty:     TypeRef,
+    pub val_ty:     TypeRef,
+    pub occurrence: Occurrence,
 }
 
 /// How a [`StructDef`] is encoded.
@@ -333,8 +349,8 @@ impl Primitive {
             "bstr"      | "bytes" => Some(Primitive::Bstr),
             "tstr"      | "text"  => Some(Primitive::Tstr),
             "any"       => Some(Primitive::Any),
-            // number = uint / int (treat as Int for IR purposes)
-            "number"    => Some(Primitive::Int),
+            // `number` and the tagged prelude types aren't primitives; see
+            // `prelude::prelude_typeref`.
             _           => None,
         }
     }
