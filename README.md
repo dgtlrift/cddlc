@@ -271,6 +271,7 @@ readings = [* sensor-reading]
 | Named structs | `foo = { field: type, ? opt: type }` | Optional fields, integer map keys |
 | Type choices (enums) | `status = "ok" / "warn" / "error"`, `shape = circle / square` | String, integer, mixed or map variants; a map value decodes to the variant whose members it has |
 | Group choices | `event = { type: "start" // type: "stop", code: int }` | A choice between one map (or array) per alternative |
+| Enumerations | `color = &colors`, `{ state: &( on: "on", off: "off" ) }` | The choice of a group's member values (`1 / 2 / 3`) |
 | Arrays | `readings = [* float32]`, `[+ T]`, `[n*m T]` | Capacity from pragma or `--max-array` |
 | Tables (open maps) | `props = { * tstr => any }`, `{ + uint => tstr }` | Any number of entries of the key and value types |
 | Maps with other entries | `device = { id: uint, * tstr => tstr }` | Named members plus an `extra` member holding the other entries; their keys are text |
