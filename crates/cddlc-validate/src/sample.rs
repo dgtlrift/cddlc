@@ -107,6 +107,7 @@ fn ref_height(ty: &TypeRef, constraints: &[Constraint], h: &HashMap<String, usiz
     }
     let embedded = constraints.iter().find_map(|c| match c {
         Constraint::CborEmbedded(t) | Constraint::CborSeq(t) => Some(plus1(ref_height(t, &[], h))),
+        Constraint::TextEncoded { ty, constraints, .. } => Some(plus1(ref_height(ty, constraints, h))),
         _ => None,
     });
     match ty {
@@ -288,6 +289,15 @@ impl Sampler<'_> {
                 }
             }
             Primitive::Tstr => {
+                // RFC 9741: text holding a value of the operand, encoded.
+                for c in constraints {
+                    if let Constraint::TextEncoded { encoding, ty, constraints: inner } = c {
+                        let v = self.typed(ty, inner, depth + 1)?;
+                        return crate::text_encoding::encode(*encoding, &v)
+                            .map(Value::Text)
+                            .ok_or_else(|| format!("{} of {}", encoding.control(), to_diag(&v)));
+                    }
+                }
                 let n = size(constraints, 4).unwrap_or(4);
                 let t: String = "text".chars().cycle().take(n).collect();
                 Value::Text(t)

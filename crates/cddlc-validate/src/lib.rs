@@ -14,6 +14,7 @@ pub mod error;
 pub mod engine;
 pub mod cbor;
 pub mod sample;
+pub mod text_encoding;
 
 pub use error::ValidationError;
 pub use value::Value;

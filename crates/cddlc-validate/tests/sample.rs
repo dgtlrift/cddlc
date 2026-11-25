@@ -95,6 +95,20 @@ fn a_type_that_cannot_end_is_an_error() {
 }
 
 #[test]
+fn text_encodings_hold_an_encoded_sample() {
+    // RFC 9741 (dgtlrift/cddlc#109): the sample is the operand's sample, encoded.
+    let src = "r = { k: tstr .b64u (bstr .size 4), h: tstr .hexuc (bstr .size 2), b: tstr .b32 (bstr .size 3), \
+               z: tstr .b45 (bstr .size 3), n: tstr .base10 (5..9), j: tstr .json claims }\nclaims = { iss: tstr }\n";
+    let m = module(src);
+    let v = sample(&m, Some("r"), SampleOptions::default()).unwrap();
+    assert_eq!(
+        to_diag(&v),
+        r#"{"k": "AAAAAA", "h": "0000", "b": "AAAAA", "z": "00000", "n": "5", "j": "{\"iss\":\"text\"}"}"#
+    );
+    assert!(validate_from(&m, Some("r"), &v, Source::Json).is_ok());
+}
+
+#[test]
 fn floats_are_written_at_their_width() {
     let m = module("r = [float16, float32, float64, float]\n");
     let bytes = to_cbor(&sample(&m, Some("r"), SampleOptions::default()).unwrap());

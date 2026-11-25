@@ -433,9 +433,85 @@ pub enum Constraint {
     /// unsigned integer, bit n is the value 2^n; in a byte string, bit n is
     /// bit n % 8 (counting from the least significant) of byte n / 8.
     Bits(Vec<u64>),
+    /// RFC 9741: text that holds another value, which must match `ty` and
+    /// `constraints`: bytes in base64, hex, base32 or base45 (`tstr .b64u
+    /// (bstr .size 32)`), an integer in decimal (`.base10`), or JSON (`.json`).
+    TextEncoded {
+        encoding:    TextEncoding,
+        ty:          Box<TypeRef>,
+        constraints: Vec<Constraint>,
+    },
 }
 
 /// A literal constant value.
+/// How [`Constraint::TextEncoded`] text holds its value (RFC 9741).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEncoding {
+    /// `.b64u`: base64url, no padding (RFC 4648 §5).
+    B64u,
+    /// `.b64u-sloppy`: base64url, no padding, unused trailing bits not checked.
+    B64uSloppy,
+    /// `.b64c`: base64 with padding (RFC 4648 §4).
+    B64c,
+    /// `.b64c-sloppy`: base64 with padding, unused trailing bits not checked.
+    B64cSloppy,
+    /// `.hex`: hexadecimal, either case.
+    Hex,
+    /// `.hexlc`: hexadecimal, lower case.
+    HexLc,
+    /// `.hexuc`: hexadecimal, upper case.
+    HexUc,
+    /// `.b32`: base32, no padding (RFC 4648 §6).
+    B32,
+    /// `.h32`: base32 with the extended hex alphabet, no padding (RFC 4648 §7).
+    H32,
+    /// `.b45`: base45 (RFC 9285).
+    B45,
+    /// `.base10`: an integer in decimal: `0|-?[1-9][0-9]*`.
+    Base10,
+    /// `.json`: a JSON text.
+    Json,
+}
+
+impl TextEncoding {
+    /// The encoding a control operator names (`b64u` for `.b64u`).
+    pub fn from_control(name: &str) -> Option<Self> {
+        Some(match name {
+            "b64u" => Self::B64u,
+            "b64u-sloppy" => Self::B64uSloppy,
+            "b64c" => Self::B64c,
+            "b64c-sloppy" => Self::B64cSloppy,
+            "hex" => Self::Hex,
+            "hexlc" => Self::HexLc,
+            "hexuc" => Self::HexUc,
+            "b32" => Self::B32,
+            "h32" => Self::H32,
+            "b45" => Self::B45,
+            "base10" => Self::Base10,
+            "json" => Self::Json,
+            _ => return None,
+        })
+    }
+
+    /// The control operator (`.b64u`).
+    pub fn control(self) -> &'static str {
+        match self {
+            Self::B64u => ".b64u",
+            Self::B64uSloppy => ".b64u-sloppy",
+            Self::B64c => ".b64c",
+            Self::B64cSloppy => ".b64c-sloppy",
+            Self::Hex => ".hex",
+            Self::HexLc => ".hexlc",
+            Self::HexUc => ".hexuc",
+            Self::B32 => ".b32",
+            Self::H32 => ".h32",
+            Self::B45 => ".b45",
+            Self::Base10 => ".base10",
+            Self::Json => ".json",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LiteralValue {
     Bool(bool),

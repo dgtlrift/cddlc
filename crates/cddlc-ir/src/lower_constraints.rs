@@ -404,7 +404,7 @@ fn require_literal<'a>(
     }
 }
 
-fn lower_type2_to_typeref(t2: &Type2, rule_name: &str) -> Result<TypeRef, IrError> {
+pub(crate) fn lower_type2_to_typeref(t2: &Type2, rule_name: &str) -> Result<TypeRef, IrError> {
     use crate::types::Primitive;
     match t2 {
         Type2::Typename { name, .. } => {
