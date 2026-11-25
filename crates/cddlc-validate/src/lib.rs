@@ -12,6 +12,7 @@
 pub mod value;
 pub mod error;
 pub mod engine;
+pub mod cbor;
 pub mod sample;
 
 pub use error::ValidationError;

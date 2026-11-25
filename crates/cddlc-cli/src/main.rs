@@ -276,8 +276,9 @@ fn run_validate(args: &ValidateArgs) -> Result<bool, Box<dyn std::error::Error>>
 
     for path in &args.cbor {
         let ok = validate_one(path, type_name, ir, cddlc_validate::Source::Cbor, |bytes| {
-            let cbor: ciborium::Value = ciborium::from_reader(bytes)?;
-            Ok(cddlc_validate::Value::from(cbor))
+            // cddlc's own decoder keeps undefined, float widths and duplicate
+            // keys, which validation needs (dgtlrift/cddlc#91).
+            Ok(cddlc_validate::cbor::decode(bytes)?)
         });
         all_ok &= ok;
     }
