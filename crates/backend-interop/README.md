@@ -57,6 +57,18 @@ cddlc my_schema.cddl --interop --interop-langs rust,python,nodejs -o generated/
 The `--interop-langs` flag controls which per-language harnesses are generated.
 Valid values: `rust`, `c`, `cpp`, `csharp`, `nodejs`, `python`.
 
+## Running the harnesses
+
+`scripts/interop.sh <lang>` runs one language's harness against every reference schema in
+`crates/backend-buildtest/schemas`: it generates the library with its harness, puts the
+harness in the library's tests (adding a CMake test for C and C++), and runs them. It needs
+the language's toolchain, as the build tests do. CI runs it for every language with a harness.
+
+```bash
+cargo build
+scripts/interop.sh go
+```
+
 ## Vector format
 
 `vectors.json` is a JSON object keyed by type name.  Each value contains the base64-encoded

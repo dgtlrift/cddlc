@@ -30,6 +30,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("records",     include_str!("../schemas/records.cddl")),
     ("maps",        include_str!("../schemas/maps.cddl")),
     ("groups",      include_str!("../schemas/groups.cddl")),
+    ("inline-enum", include_str!("../schemas/inline-enum-in-group-after-comment.cddl")),
 ];
 
 // ── Result types ──────────────────────────────────────────────────────────────
@@ -650,7 +651,26 @@ where
 }
 
 /// Assert all outcomes are OK (built or skipped), printing failures.
+///
+/// With `CDDLC_REQUIRE_TOOLS` set (as CI sets it), a skipped schema fails
+/// too, so a missing toolchain can't pass for a tested one.
 pub fn assert_all_ok(outcomes: &[BuildOutcome]) {
+    if std::env::var_os("CDDLC_REQUIRE_TOOLS").is_some_and(|v| !v.is_empty()) {
+        let skipped: Vec<String> = outcomes.iter()
+            .filter_map(|o| match o {
+                BuildOutcome::Skipped { reason } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        if !skipped.is_empty() {
+            panic!(
+                "\n{} schema(s) skipped with CDDLC_REQUIRE_TOOLS set: {}\n",
+                skipped.len(),
+                skipped[0]
+            );
+        }
+    }
+
     let failures: Vec<&BuildOutcome> = outcomes.iter()
         .filter(|o| !o.is_ok())
         .collect();
