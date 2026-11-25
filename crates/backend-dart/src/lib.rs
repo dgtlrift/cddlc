@@ -228,6 +228,11 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
         let fname     = dart_field(&f.name);
         w.line(&format!("final {dart_type} {fname};"));
     }
+    // The map's other entries (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        w.line("/// The map's other entries.");
+        w.line(&format!("final Map<String, {}> {};", typeref_to_dart(&r.val_ty, opts), dart_field(&r.name)));
+    }
     w.blank();
 
     // Constructor
@@ -240,6 +245,9 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
         } else {
             w.line(&format!("required this.{fname},"));
         }
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("this.{} = const {{}},", dart_field(&r.name)));
     }
     w.dedent();
     w.line("});");
@@ -364,6 +372,12 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
     w.line("}");
 }
 
+/// The keys of a struct's named members, as a Dart set literal.
+fn named_keys(s: &StructDef) -> String {
+    let keys: Vec<String> = s.fields.iter().map(|f| format!("'{}'", field_key_str(&f.key))).collect();
+    format!("const <String>{{{}}}", keys.join(", "))
+}
+
 fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
     w.line(&format!("factory {class_name}.fromJson(Map<String, dynamic> json) => {class_name}("));
     w.indent();
@@ -381,6 +395,13 @@ fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
             let conv = json_from_expr(&f.ty, &format!("json['{key}']"), module, opts);
             w.line(&format!("{fname}: {conv},"));
         }
+    }
+    if let Some(r) = &s.rest {
+        let conv = json_from_expr(&r.val_ty, "e.value", module, opts);
+        w.line(&format!(
+            "{}: {{for (final e in json.entries) if (!{}.contains(e.key)) e.key: {conv}}},",
+            dart_field(&r.name), named_keys(s)
+        ));
     }
     w.dedent();
     w.line(");");
@@ -414,6 +435,10 @@ fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
             w.line(&format!("'{key}': {val},"));
         }
     }
+    if let Some(r) = &s.rest {
+        let val = json_to_expr(&r.val_ty, "e.value", module, opts);
+        w.line(&format!("for (final e in {}.entries) e.key: {val},", dart_field(&r.name)));
+    }
     w.dedent();
     w.line("};");
 }
@@ -446,6 +471,13 @@ fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
             let conv = cbor_from_expr(&f.ty, &format!("m[{cbor_key}]!"), module, opts);
             w.line(&format!("{fname}: {conv},"));
         }
+    }
+    if let Some(r) = &s.rest {
+        let conv = cbor_from_expr(&r.val_ty, "e.value", module, opts);
+        w.line(&format!(
+            "{}: {{for (final e in m.entries) if (!{}.contains(e.key.toString())) (e.key as CborString).toString(): {conv}}},",
+            dart_field(&r.name), named_keys(s)
+        ));
     }
     w.dedent();
     w.line(");");
@@ -481,6 +513,10 @@ fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
             let val = cbor_to_expr(&f.ty, &fname, module, opts);
             w.line(&format!("{cbor_key}: {val},"));
         }
+    }
+    if let Some(r) = &s.rest {
+        let val = cbor_to_expr(&r.val_ty, "e.value", module, opts);
+        w.line(&format!("for (final e in {}.entries) CborString(e.key): {val},", dart_field(&r.name)));
     }
     w.dedent();
     let tags = match s.tagged {
@@ -887,6 +923,17 @@ fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts
         };
         w.line(&format!("{fname}: {default},"));
     }
+    // One other entry when its value is a primitive.
+    if let Some(r) = &s.rest {
+        if let TypeRef::Primitive(_) = &r.val_ty {
+            w.line(&format!(
+                "{}: <String, {}>{{'other-key': {}}},",
+                dart_field(&r.name),
+                typeref_to_dart(&r.val_ty, opts),
+                test_default_for(&r.val_ty, &Occurrence::Required, opts)
+            ));
+        }
+    }
     w.dedent();
     w.line(");");
 
@@ -902,6 +949,10 @@ fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts
     for f in &s.fields {
         if matches!(f.occurrence, Occurrence::Optional) { continue; }
         let fname = dart_field(&f.name);
+        w.line(&format!("expect(decoded.{fname}, equals(obj.{fname}));"));
+    }
+    if let Some(r) = &s.rest {
+        let fname = dart_field(&r.name);
         w.line(&format!("expect(decoded.{fname}, equals(obj.{fname}));"));
     }
 

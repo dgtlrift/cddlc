@@ -265,6 +265,17 @@ fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) 
             w.line(&format!("bool {fname}_present;"));
         }
     }
+    // The map's other entries, up to their capacity (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        let cap = capacity_value(
+            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+            opts.max_array,
+        );
+        let rname = to_snake_case(&r.name);
+        w.line("/* The map's other entries. */");
+        w.line(&format!("struct {{ cbor_str_t key; {} value; }} {rname}[{cap}];", typeref_to_c(&r.val_ty, opts)));
+        w.line(&format!("size_t {rname}_count;"));
+    }
     w.dedent();
     w.line(&format!("}} {type_name}_t;"));
 }
@@ -440,14 +451,15 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                     .map(|f| format!(" + (val->{}_present ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
                 w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});"));
-            } else if opt_fields.is_empty() {
-                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u);"));
             } else {
+                let rest_count = s.rest.as_ref()
+                    .map(|r| format!(" + val->{}_count", to_snake_case(&r.name)))
+                    .unwrap_or_default();
                 let opt_sum: String = opt_fields.iter().map(|f| {
                     let fname = to_snake_case(&f.name);
-                    format!("(val->{fname}_present ? 1u : 0u)")
-                }).collect::<Vec<_>>().join(" + ");
-                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u + {opt_sum});"));
+                    format!(" + (val->{fname}_present ? 1u : 0u)")
+                }).collect();
+                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u{opt_sum}{rest_count});"));
             }
             for f in &fields {
                 let fname = to_snake_case(&f.name);
@@ -462,6 +474,15 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                     if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
                     emit_c_encode_field(w, &f.ty, &format!("val->{fname}"), &f.occurrence, mod_name, opts);
                 }
+            }
+            if let Some(r) = &s.rest {
+                let rname = to_snake_case(&r.name);
+                w.line(&format!("for (size_t i = 0; i < val->{rname}_count; i++) {{"));
+                w.indent();
+                w.line(&format!("nanocbor_put_tstrn(enc, val->{rname}[i].key.ptr, val->{rname}[i].key.len);"));
+                emit_c_encode_field(w, &r.val_ty, &format!("val->{rname}[i].value"), &Occurrence::Required, mod_name, opts);
+                w.dedent();
+                w.line("}");
             }
             w.line("return NANOCBOR_OK;");
         }
@@ -708,18 +729,37 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                 w.dedent();
                 w.line("} else");
             }
-            // Unknown field handler
-            w.line("{");
-            w.indent();
-            w.line("if (cb && cb->on_unknown_field) {");
-            w.indent();
-            w.line("cbor_str_t uk = { (const char*)key_ptr, key_len };");
-            w.line("cb->on_unknown_field(ctx, uk);");
-            w.dedent();
-            w.line("}");
-            w.line("nanocbor_skip(&map);");
-            w.dedent();
-            w.line("}");
+            if let Some(r) = &s.rest {
+                // Other keys are the map's other entries (dgtlrift/cddlc#82).
+                let rname = to_snake_case(&r.name);
+                let cap = capacity_value(
+                    r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                    opts.max_array,
+                );
+                w.line("{");
+                w.indent();
+                w.line(&format!(
+                    "if (out->{rname}_count >= {cap}) {{ if (cb && cb->on_error) cb->on_error(ctx, ({pfx}_field_err_t){{{pfx_upper}_ERR_OVERFLOW, \"{rname}\", 0}}); return -1; }}"
+                ));
+                w.line(&format!("out->{rname}[out->{rname}_count].key = (cbor_str_t){{ (const char*)key_ptr, key_len }};"));
+                emit_c_decode_field(w, &r.val_ty, &format!("out->{rname}[out->{rname}_count].value"), &[], &rname, &pfx, &pfx_upper, "&map", opts);
+                w.line(&format!("out->{rname}_count++;"));
+                w.dedent();
+                w.line("}");
+            } else {
+                // Unknown field handler
+                w.line("{");
+                w.indent();
+                w.line("if (cb && cb->on_unknown_field) {");
+                w.indent();
+                w.line("cbor_str_t uk = { (const char*)key_ptr, key_len };");
+                w.line("cb->on_unknown_field(ctx, uk);");
+                w.dedent();
+                w.line("}");
+                w.line("nanocbor_skip(&map);");
+                w.dedent();
+                w.line("}");
+            }
 
             w.dedent();
             w.line("}"); // while
@@ -1469,6 +1509,17 @@ fn emit_struct_decl_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOpti
             w.line(&format!("bool {fname}_present;"));
         }
     }
+    // The map's other entries (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        let cap = capacity_value(
+            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+            opts.max_array,
+        );
+        let rname = to_snake_case(&r.name);
+        w.line("/* The map's other entries. */");
+        w.line(&format!("struct {{ json_str_t key; {} value; }} {rname}[{cap}];", typeref_to_c_json(&r.val_ty)));
+        w.line(&format!("size_t {rname}_count;"));
+    }
     w.dedent();
     w.line(&format!("}} {type_name}_t;"));
 }
@@ -1780,6 +1831,11 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
             }
         }
     }
+    if let Some(r) = &s.rest {
+        let rname = to_snake_case(&r.name);
+        let val_expr = json_value_expr(&r.val_ty, &format!("obj->{rname}[i].value"), mod_name);
+        w.line(&format!("for (size_t i = 0; i < obj->{rname}_count; i++) cJSON_AddItemToObject(j, obj->{rname}[i].key, {val_expr});"));
+    }
     w.line("return j;");
     w.dedent();
     w.line("}");
@@ -1809,6 +1865,26 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
                 json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
             }
         }
+    }
+    // Keys no member has are the map's other entries.
+    if let Some(r) = &s.rest {
+        let rname = to_snake_case(&r.name);
+        let cap = capacity_value(
+            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+            opts.max_array,
+        );
+        let named: Vec<String> = s.fields.iter().map(|f| format!("strcmp(item->string, {:?}) == 0", f.name.as_str())).collect();
+        w.line("cJSON* item; cJSON_ArrayForEach(item, j) {");
+        w.indent();
+        if !named.is_empty() {
+            w.line(&format!("if ({}) continue;", named.join(" || ")));
+        }
+        w.line(&format!("if (out->{rname}_count >= {cap}) return false;"));
+        w.line(&format!("strncpy(out->{rname}[out->{rname}_count].key, item->string, sizeof(out->{rname}[out->{rname}_count].key) - 1);"));
+        json_decode_field(w, &r.val_ty, &format!("{rname}[out->{rname}_count].value"), "item", mod_name, opts);
+        w.line(&format!("out->{rname}_count++;"));
+        w.dedent();
+        w.line("}");
     }
     w.line("return true;");
     w.dedent();

@@ -573,10 +573,13 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     w.blank();
     // Tables (`{ * tstr => uint }`) bring their own helpers.
     let tables = module.types.values().any(|d| matches!(d, TypeDef::Map(_)));
+    // Maps with other entries write them in key order.
+    let rests = module.types.values().any(|d| matches!(d, TypeDef::Struct(s) if s.rest.is_some()));
     w.line("import (");
     if opts.is_json() {
         let mut imps = vec!["\"bytes\"", "\"encoding/base64\"", "\"encoding/json\"", "\"fmt\""];
         if tables { imps.push("\"slices\""); }
+        if rests { imps.push("\"sort\""); }
         imps.push("\"strings\"");
         for imp in imps {
             w.line(&format!("\t{imp}"));
@@ -585,6 +588,7 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
         if tables { w.line("\t\"bytes\""); }
         w.line("\t\"fmt\"");
         if tables { w.line("\t\"slices\""); }
+        if rests { w.line("\t\"sort\""); }
         w.blank();
         w.line("\t\"github.com/fxamacker/cbor/v2\"");
     }
@@ -601,6 +605,11 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     let helpers = if opts.is_json() { JSON_HELPERS } else { CBOR_HELPERS };
     for line in helpers.lines().chain([""]).chain(COMMON_HELPERS.lines()) {
         if line.is_empty() { w.blank() } else { w.line(line) }
+    }
+    if rests {
+        for line in [""].into_iter().chain(SORTED_KEYS_HELPER.lines()) {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
     }
     if tables {
         let entries = if opts.is_json() { JSON_TABLE_HELPERS } else { CBOR_TABLE_HELPERS };
@@ -988,9 +997,13 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     if s.deprecated { w.line("//"); w.line("// Deprecated: marked deprecated in the schema."); }
     w.line(&format!("type {name} struct {{"));
     w.indent();
-    let fields: Vec<_> = s.fields.iter()
+    let mut fields: Vec<_> = s.fields.iter()
         .map(|f| (f.doc.as_deref(), go_field_name(&f.name), go_field_type(&f.ty, &f.occurrence)))
         .collect();
+    // The map's other entries (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        fields.push((Some("The map's other entries."), go_field_name(&r.name), format!("map[string]{}", go_type(&r.val_ty))));
+    }
     emit_fields(w, &fields);
     w.dedent();
     w.line("}");
@@ -1045,6 +1058,22 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
             o if is_repeated(o) => w.line(&format!("e.put({key})({})", enc_each(&f.ty, &field))),
             _ => w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &field))),
         }
+    }
+    // The other entries after the named members, in key order.
+    if let Some(r) = &s.rest {
+        let field = format!("v.{}", go_field_name(&r.name));
+        let named: Vec<String> = s.fields.iter().map(|f| go_str(&f.name)).collect();
+        w.line(&format!("for _, k := range sortedKeys({field}) {{"));
+        w.indent();
+        if !named.is_empty() {
+            w.line("switch k {");
+            w.line(&format!("case {}:", named.join(", ")));
+            w.line(&format!("    return nil, fmt.Errorf(\"%s: other entry %q is a named member's key\", {}, k)", go_str(&name)));
+            w.line("}");
+        }
+        w.line(&format!("e.put(k)({})", enc_expr(&r.val_ty, &format!("{field}[k]"))));
+        w.dedent();
+        w.line("}");
     }
     let tag = if opts.is_json() { None } else { s.tagged };
     return_encoded(w, tag, "e.finish()");
@@ -1112,6 +1141,26 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
                 w.line("}");
             }
         }
+    }
+    if let Some(r) = &s.rest {
+        let field = format!("out.{}", go_field_name(&r.name));
+        let named: Vec<String> = s.fields.iter().map(|f| go_str(&f.name)).collect();
+        w.line("for k, r := range m {");
+        w.indent();
+        if !named.is_empty() {
+            w.line("switch k {");
+            w.line(&format!("case {}:", named.join(", ")));
+            w.line("    continue");
+            w.line("}");
+        }
+        w.line(&format!("var x {}", go_type(&r.val_ty)));
+        emit_decode(w, &r.val_ty, "r", "x", &format!("{name} value"));
+        w.line(&format!("if {field} == nil {{"));
+        w.line(&format!("    {field} = map[string]{}{{}}", go_type(&r.val_ty)));
+        w.line("}");
+        w.line(&format!("{field}[k] = x"));
+        w.dedent();
+        w.line("}");
     }
     w.line("if err := out.Validate(); err != nil {");
     w.line("    return err");
@@ -1688,6 +1737,17 @@ func encodeEntries(keys, vals [][]byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }"#;
 
+/// A map's other entries are written in key order.
+const SORTED_KEYS_HELPER: &str = r#"// sortedKeys returns m's keys in order.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}"#;
+
 const TEST_HELPERS: &str = r#"type encodable interface {
 	Encode() ([]byte, error)
 }
@@ -1840,10 +1900,17 @@ fn go_map_value(m: &MapDef, module: &IrModule, explicit: bool, depth: usize) -> 
 }
 
 fn go_struct_value(s: &StructDef, module: &IrModule, explicit: bool, depth: usize) -> String {
-    let fields: Vec<String> = s.fields.iter().map(|f| {
+    let mut fields: Vec<String> = s.fields.iter().map(|f| {
         let v = go_value(&f.ty, &f.occurrence, &f.constraints, module, explicit, depth + 1);
         format!("{}: {v}", go_field_name(&f.name))
     }).collect();
+    // One other entry when explicit or when the map needs one; else none (nil).
+    if let Some(r) = &s.rest {
+        if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
+            let v = go_value(&r.val_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
+            fields.push(format!("{}: map[string]{}{{\"other-key\": {v}}}", go_field_name(&r.name), go_type(&r.val_ty)));
+        }
+    }
     format!("{}{{{}}}", to_pascal_case(&s.name), fields.join(", "))
 }
 

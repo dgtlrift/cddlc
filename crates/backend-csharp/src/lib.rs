@@ -191,6 +191,18 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let pname = to_pascal_case(&f.name);
         w.line(&format!("public {ty} {pname} {{ get; set; }}"));
     }
+    // The map's other entries (dgtlrift/cddlc#82). In JSON they are the
+    // serializer's extension data, so their values are JSON elements.
+    if let Some(r) = &s.rest {
+        w.line("/// <summary>The map's other entries.</summary>");
+        let pname = to_pascal_case(&r.name);
+        if opts.is_json() {
+            w.line("[JsonExtensionData]");
+            w.line(&format!("public Dictionary<string, JsonElement> {pname} {{ get; set; }} = new();"));
+        } else {
+            w.line(&format!("public Dictionary<string, {}> {pname} {{ get; set; }} = new();", cs_typeref(&r.val_ty, opts)));
+        }
+    }
     w.blank();
 
     // Encode method
@@ -233,11 +245,30 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         s.fields.iter().collect()
     };
 
-    w.line(&format!("writer.WriteStartMap({field_count});"));
+    let rest_count = s.rest.as_ref()
+        .map(|r| format!(" + this.{}.Count", to_pascal_case(&r.name)))
+        .unwrap_or_default();
+    w.line(&format!("writer.WriteStartMap({field_count}{rest_count});"));
     for f in &fields {
         let pname = to_pascal_case(&f.name);
         w.line(&format!("writer.WriteTextString({:?});", f.name.as_str()));
         emit_cs_encode_value(w, &f.ty, &format!("this.{pname}"), &f.occurrence, opts);
+    }
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        w.line(&format!("foreach (var kv in this.{})", to_pascal_case(&r.name)));
+        w.line("{");
+        w.indent();
+        if !named.is_empty() {
+            w.line(&format!(
+                "if (Array.IndexOf(new[] {{ {} }}, kv.Key) >= 0) throw new CborContentException($\"Other entry {{kv.Key}} is a named member's key\");",
+                named.join(", ")
+            ));
+        }
+        w.line("writer.WriteTextString(kv.Key);");
+        emit_cs_encode_value(w, &r.val_ty, "kv.Value", &Occurrence::Required, opts);
+        w.dedent();
+        w.line("}");
     }
     w.line("writer.WriteEndMap();");
 
@@ -273,6 +304,9 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         let def   = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
+    if let Some(r) = &s.rest {
+        w.line(&format!("var rest = new Dictionary<string, {}>();", cs_typeref(&r.val_ty, opts)));
+    }
     w.blank();
 
     w.line("var length = reader.ReadStartMap();");
@@ -296,10 +330,13 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.dedent();
     }
 
-    // Unknown fields — skip
+    // Other keys: the map's other entries, or unknown fields to skip.
     w.line("default:");
     w.indent();
-    w.line("reader.SkipValue();");
+    match &s.rest {
+        Some(r) => w.line(&format!("rest[key] = {};", cs_decode_expr(&r.val_ty, opts))),
+        None => w.line("reader.SkipValue();"),
+    }
     w.line("break;");
     w.dedent();
 
@@ -317,6 +354,9 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         let pname = to_pascal_case(&f.name);
         let local = to_snake_case(&f.name);
         w.line(&format!("{pname} = {local},"));
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("{} = rest,", to_pascal_case(&r.name)));
     }
     w.dedent();
     w.line("};");

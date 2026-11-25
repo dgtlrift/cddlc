@@ -373,7 +373,16 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
             Occurrence::Required => w.line(&format!("{fname}: {py_type}")),
         }
     }
-    if s.fields.is_empty() { w.line("pass"); }
+    // The map's other entries (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        w.line("# The map's other entries.");
+        w.line(&format!(
+            "{}: dict[str, {}] = field(default_factory=dict)",
+            to_snake_case(&r.name),
+            py_typeref(&r.val_ty, opts)
+        ));
+    }
+    if s.fields.is_empty() && s.rest.is_none() { w.line("pass"); }
     w.blank();
 
     if s.encoding == cddlc_ir::StructEncoding::Array {
@@ -412,6 +421,17 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
                 w.line(&format!("m[{key:?}] = {}", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
             }
         }
+    }
+    if let Some(r) = &s.rest {
+        let rname = to_snake_case(&r.name);
+        w.line(&format!("for key, value in self.{rname}.items():"));
+        w.indent();
+        w.line("if key in m:");
+        w.indent();
+        w.line(&format!("raise ValueError(f\"{class_name}: other entry {{key!r}} is a named member's key\")"));
+        w.dedent();
+        w.line(&format!("m[key] = {}", py_to_raw(&r.val_ty, "value", opts)));
+        w.dedent();
     }
     return_tagged(w, s.tagged, "m", opts);
     w.dedent();
@@ -459,6 +479,18 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
             }
         }
         args.push(format!("{fname}={local}"));
+    }
+    if let Some(r) = &s.rest {
+        let rname = to_snake_case(&r.name);
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let key = py_from_raw(&r.key_ty, "key", &format!("{class_name} key"), opts);
+        let val = py_from_raw(&r.val_ty, "value", &format!("{class_name} value"), opts);
+        w.line(&format!(
+            "f_{rname} = {{{key}: {val} for key, value in raw.items() if key not in ({}{})}}",
+            named.join(", "),
+            if named.len() == 1 { "," } else { "" }
+        ));
+        args.push(format!("{rname}=f_{rname}"));
     }
     w.line(&format!("return cls({})", args.join(", ")));
     w.dedent();
@@ -542,6 +574,18 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: 
             }
         }
         args.push(format!("{fname}={local}"));
+    }
+    if let Some(r) = &s.rest {
+        let rname = to_snake_case(&r.name);
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let key = py_from_raw(&r.key_ty, "key", &format!("{class_name} key"), opts);
+        let val = py_from_raw(&r.val_ty, "value", &format!("{class_name} value"), opts);
+        w.line(&format!(
+            "f_{rname} = {{{key}: {val} for key, value in raw.items() if key not in ({}{})}}",
+            named.join(", "),
+            if named.len() == 1 { "," } else { "" }
+        ));
+        args.push(format!("{rname}=f_{rname}"));
     }
     w.line(&format!("return cls({})", args.join(", ")));
     w.dedent();
@@ -1237,10 +1281,17 @@ const MAX_FIXTURE_DEPTH: usize = 4;
 
 /// A struct value: every member gets a test value (its literal when pinned).
 fn py_struct_value(s: &StructDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> String {
-    let args: Vec<String> = s.fields.iter().map(|f| {
+    let mut args: Vec<String> = s.fields.iter().map(|f| {
         let v = py_value(&f.ty, &f.occurrence, &f.constraints, module, opts, explicit, depth + 1);
         format!("{}={v}", to_snake_case(&f.name))
     }).collect();
+    // One other entry in the explicit value, or when the map needs one.
+    if let Some(r) = &s.rest {
+        if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
+            let v = py_value(&r.val_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1);
+            args.push(format!("{}={{\"other-key\": {v}}}", to_snake_case(&r.name)));
+        }
+    }
     format!("{}({})", to_pascal_case(&s.name), args.join(", "))
 }
 

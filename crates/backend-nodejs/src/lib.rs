@@ -519,6 +519,11 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let prop = to_snake_case(&f.name);
         w.line(&format!("readonly {prop}{opt}: {ty};"));
     }
+    // The map's other entries (dgtlrift/cddlc#82).
+    if let Some(r) = &s.rest {
+        w.line("/** The map's other entries. */");
+        w.line(&format!("readonly {}: ReadonlyMap<string, {}>;", to_snake_case(&r.name), ts_typeref(&r.val_ty, opts)));
+    }
     w.dedent();
     w.line("}");
     w.blank();
@@ -700,6 +705,15 @@ fn emit_struct_encode_json(
             }
         }
     }
+    if let Some(r) = &s.rest {
+        let conv = ts_json_encode_expr(&r.val_ty, "value", opts);
+        w.line(&format!("for (const [key, value] of val.{}) {{", to_snake_case(&r.name)));
+        w.indent();
+        w.line(&format!("if (Object.prototype.hasOwnProperty.call(_map, key)) throw new Error(`{iname}: other entry ${{key}} is a named member's key`);"));
+        w.line(&format!("_map[key] = {conv};"));
+        w.dedent();
+        w.line("}");
+    }
     w.line("return new TextEncoder().encode(JSON.stringify(_map));");
     w.dedent();
     w.line("}");
@@ -737,13 +751,16 @@ fn emit_struct_encode_cbor(
         .map(|f| to_snake_case(&f.name))
         .collect();
     let required = fields.len() - optional.len();
+    let rest_size = s.rest.as_ref()
+        .map(|r| format!(" + val.{}.size", to_snake_case(&r.name)))
+        .unwrap_or_default();
     if optional.is_empty() {
-        w.line(&format!("enc.startMap({required});"));
+        w.line(&format!("enc.startMap({required}{rest_size});"));
     } else {
         let present: Vec<String> = optional.iter()
             .map(|p| format!("(val.{p} !== undefined ? 1 : 0)"))
             .collect();
-        w.line(&format!("enc.startMap({required} + {});", present.join(" + ")));
+        w.line(&format!("enc.startMap({required} + {}{rest_size});", present.join(" + ")));
     }
     for f in &fields {
         let prop = to_snake_case(&f.name);
@@ -759,6 +776,16 @@ fn emit_struct_encode_cbor(
             w.line(&format!("enc.text({:?});", f.name.as_str()));
             emit_ts_encode_value(w, &f.ty, &expr, &f.occurrence, opts);
         }
+    }
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        w.line(&format!("for (const [key, value] of val.{}) {{", to_snake_case(&r.name)));
+        w.indent();
+        w.line(&format!("if ([{}].includes(key)) throw new Error(`{iname}: other entry ${{key}} is a named member's key`);", named.join(", ")));
+        w.line("enc.text(key);");
+        emit_ts_encode_primitive_or_named(w, &r.val_ty, "value", opts);
+        w.dedent();
+        w.line("}");
     }
     w.line("enc.endMap();");
     w.line("return enc.finish();");
@@ -821,12 +848,23 @@ fn emit_struct_decode_json(
     }
     w.blank();
 
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let val = ts_json_decode_expr(&r.val_ty, "value", &format!("{iname} value"), opts);
+        w.line(&format!(
+            "const rest = new Map(Object.entries(m).filter(([key]) => ![{}].includes(key)).map(([key, value]) => [key, {val}] as const));",
+            named.join(", ")
+        ));
+    }
     w.line("return {");
     w.indent();
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
         w.line(&format!("{prop}: {local},"));
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("{}: rest,", to_snake_case(&r.name)));
     }
     w.dedent();
     w.line("};");
@@ -883,12 +921,23 @@ fn emit_struct_decode_cbor(
     }
     w.blank();
 
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let val = ts_convert_expr(&r.val_ty, "value", opts);
+        w.line(&format!(
+            "const rest = new Map(Object.entries(m).filter(([key]) => ![{}].includes(key)).map(([key, value]) => [key, {val}] as const));",
+            named.join(", ")
+        ));
+    }
     w.line("return {");
     w.indent();
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
         w.line(&format!("{prop}: {local},"));
+    }
+    if let Some(r) = &s.rest {
+        w.line(&format!("{}: rest,", to_snake_case(&r.name)));
     }
     w.dedent();
     w.line("};");
@@ -2019,6 +2068,9 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
         let val = ts_field_value(f, module, opts, false, 0);
         w.line(&format!("{prop}: {val},"));
     }
+    if let Some(v) = ts_rest_value(s, module, opts, false, 0) {
+        w.line(&format!("{v},"));
+    }
     w.dedent();
     w.line("};");
     w.line(&format!("const encoded = {fname}(original);"));
@@ -2036,6 +2088,9 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
         let prop = to_snake_case(&f.name);
         let val = ts_field_value(f, module, opts, true, 0);
         w.line(&format!("{prop}: {val},"));
+    }
+    if let Some(v) = ts_rest_value(s, module, opts, true, 0) {
+        w.line(&format!("{v},"));
     }
     w.dedent();
     w.line("};");
@@ -2056,6 +2111,9 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
             let v = ts_field_value(f, module, opts, false, 0);
             w.line(&format!("{prop}: {v},"));
         }
+        if let Some(v) = ts_rest_value(s, module, opts, false, 0) {
+            w.line(&format!("{v},"));
+        }
         w.dedent();
         w.line("};");
         w.line(&format!("const encoded = {fname}(val);"));
@@ -2073,6 +2131,23 @@ fn emit_ts_roundtrip_assert(w: &mut IndentWriter, s: &StructDef) {
         let prop = to_snake_case(&f.name);
         w.line(&format!("expect(decoded.{prop}).toEqual(original.{prop});"));
     }
+    if let Some(r) = &s.rest {
+        let prop = to_snake_case(&r.name);
+        w.line(&format!("expect(decoded.{prop}).toEqual(original.{prop});"));
+    }
+}
+
+/// The `name: value` of a struct's other entries in a test value: one entry
+/// when explicit or when the map needs one, else none.
+fn ts_rest_value(s: &StructDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> Option<String> {
+    let r = s.rest.as_ref()?;
+    let prop = to_snake_case(&r.name);
+    Some(if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
+        let v = ts_test_value(&r.val_ty, &Occurrence::Required, module, opts, explicit, depth + 1);
+        format!("{prop}: new Map([['other-key', {v}]])")
+    } else {
+        format!("{prop}: new Map()")
+    })
 }
 
 /// A test value for one enum variant.
@@ -2302,6 +2377,7 @@ fn ts_named_value(name: &str, module: &IrModule, opts: &CodegenOptions, explicit
                 .fields
                 .iter()
                 .map(|f| format!("{}: {}", to_snake_case(&f.name), ts_field_value(f, module, opts, explicit, depth + 1)))
+                .chain(ts_rest_value(s, module, opts, explicit, depth + 1))
                 .collect();
             format!("{{ {} }}", fields.join(", "))
         }

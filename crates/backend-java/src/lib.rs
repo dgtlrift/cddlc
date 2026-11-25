@@ -784,17 +784,26 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     emit_javadoc(w, s.doc.as_deref(), &format!("The {} map.", s.name));
     if s.deprecated { w.line("@Deprecated"); }
     jsonb_annotations(w, cx, &class);
-    if s.fields.is_empty() {
+    // The record's components: the members, then the map's other entries
+    // (dgtlrift/cddlc#82).
+    let mut components: Vec<String> = s.fields.iter().map(|f| {
+        let ann = component_annotations(cx, &f.ty, &f.occurrence, &f.constraints);
+        format!("{ann}{} {}", member_type(f), java_member_name(&f.name))
+    }).collect();
+    if let Some(r) = &s.rest {
+        let ann = if cx.ee() { format!("@{BV}.NotNull ") } else { String::new() };
+        components.push(format!("{ann}Map<String, {}> {}", java_type(&r.val_ty, true, None), java_member_name(&r.name)));
+    }
+    if components.is_empty() {
         w.line(&format!("public record {class}() {{"));
     } else {
         w.line(&format!("public record {class}("));
         w.indent();
         w.indent();
-        let n = s.fields.len();
-        for (i, f) in s.fields.iter().enumerate() {
-            let ann = component_annotations(cx, &f.ty, &f.occurrence, &f.constraints);
+        let n = components.len();
+        for (i, c) in components.iter().enumerate() {
             let sep = if i + 1 < n { "," } else { ") {" };
-            w.line(&format!("{ann}{} {}{sep}", member_type(f), java_member_name(&f.name)));
+            w.line(&format!("{c}{sep}"));
         }
         w.dedent();
         w.dedent();
@@ -829,6 +838,24 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
             }
         }
     }
+    if let Some(r) = &s.rest {
+        let m = format!("this.{}", java_member_name(&r.name));
+        let at = java_str(&format!("{class}.{}", r.name));
+        w.line(&format!("if ({m} == null) throw Cddl.invalid({at}, \"missing\");"));
+        let named: Vec<String> = s.fields.iter().map(|f| java_str(&f.name)).collect();
+        w.line(&format!(
+            "for (Map.Entry<String, {}> e : {m}.entrySet()) {{",
+            java_type(&r.val_ty, true, None)
+        ));
+        w.line(&format!("    if (e.getKey() == null || e.getValue() == null) throw Cddl.invalid({at}, \"null entry\");"));
+        if !named.is_empty() {
+            w.line(&format!(
+                "    if (List.of({}).contains(e.getKey())) throw Cddl.invalid({at}, \"other entry \" + e.getKey() + \" is a named member's key\");",
+                named.join(", ")
+            ));
+        }
+        w.line("}");
+    }
     w.dedent();
     w.line("}");
     w.blank();
@@ -840,7 +867,9 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     }
     emit_encode_decode(w, cx, &class, false);
 
-    let byte_members: Vec<String> = s.fields.iter().map(|f| java_member_name(&f.name)).collect();
+    let byte_members: Vec<String> = s.fields.iter().map(|f| java_member_name(&f.name))
+        .chain(s.rest.iter().map(|r| java_member_name(&r.name)))
+        .collect();
     if s.fields.iter().any(|f| is_bytes(&f.ty)) {
         emit_content_equality(w, &class, &byte_members);
     }
@@ -877,6 +906,14 @@ fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
             _ => w.line(&format!("m.put({key}, {});", to_raw(&f.ty, &member))),
         }
     }
+    if let Some(r) = &s.rest {
+        w.line(&format!(
+            "for (Map.Entry<String, {}> e : this.{}.entrySet()) m.put(e.getKey(), {});",
+            java_type(&r.val_ty, true, None),
+            java_member_name(&r.name),
+            to_raw(&r.val_ty, "e.getValue()")
+        ));
+    }
     let ret = match s.tagged { Some(t) => format!("Cddl.tag({}L, m)", t.0), None => "m".into() };
     w.line(&format!("return {ret};"));
     w.dedent();
@@ -912,6 +949,20 @@ fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
             }
         }
         args.push(local);
+    }
+    if let Some(r) = &s.rest {
+        let val = java_type(&r.val_ty, true, None);
+        let named: Vec<String> = s.fields.iter().map(|f| java_str(&f.name)).collect();
+        w.line(&format!("Map<String, {val}> rest = new LinkedHashMap<>();"));
+        w.line("for (Map.Entry<String, Object> e : m.entrySet()) {");
+        w.indent();
+        if !named.is_empty() {
+            w.line(&format!("if (List.of({}).contains(e.getKey())) continue;", named.join(", ")));
+        }
+        w.line(&format!("rest.put(e.getKey(), {});", from_raw(&r.val_ty, "e.getValue()", &format!("{class} value"), None)));
+        w.dedent();
+        w.line("}");
+        args.push("rest".into());
     }
     w.line(&format!("{class} out = new {class}({});", args.join(", ")));
     w.line("out.validate();");
@@ -1541,9 +1592,18 @@ fn emit_tests(cx: &Cx) -> String {
 const MAX_FIXTURE_DEPTH: usize = 4;
 
 fn java_struct_value(cx: &Cx, s: &StructDef, explicit: bool, depth: usize) -> String {
-    let args: Vec<String> = s.fields.iter()
+    let mut args: Vec<String> = s.fields.iter()
         .map(|f| java_value(cx, &f.ty, &f.occurrence, &f.constraints, explicit, depth + 1))
         .collect();
+    // The other entries: one when explicit or when the map needs one.
+    if let Some(r) = &s.rest {
+        args.push(if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
+            let v = java_value(cx, &r.val_ty, &Occurrence::Required, &[], explicit, depth + 1);
+            format!("Map.of(\"other-key\", {v})")
+        } else {
+            "Map.of()".into()
+        });
+    }
     format!("new {}({})", java_type_name(&s.name), args.join(", "))
 }
 

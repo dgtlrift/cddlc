@@ -469,6 +469,9 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
         format!("-- @field {} {}{opt}", lua_member_name(&f.name), f.name)
     }).collect();
     for m in members { w.line(&m); }
+    if let Some(r) = &s.rest {
+        w.line(&format!("-- @field {} the map's other entries: a table from text key to value (optional)", lua_member_name(&r.name)));
+    }
     open_type(w, &t, true);
 
     w.line(&format!("--- Makes a {t} from a table of its members."));
@@ -503,6 +506,25 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
             }
         }
     }
+    // The map's other entries (dgtlrift/cddlc#82): text keys no member has.
+    if let Some(r) = &s.rest {
+        let m = format!("v.{}", lua_member_name(&r.name));
+        let at = format!("{t}.{}", r.name);
+        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&f.name))).collect();
+        w.line(&format!("if {m} ~= nil then"));
+        w.indent();
+        w.line(&format!("R.want_table({m}, {})", lua_str(&at)));
+        w.line(&format!("local named = {{ {} }}", named.join(", ")));
+        w.line(&format!("for k, x in pairs({m}) do"));
+        w.indent();
+        w.line(&format!("R.want_text(k, {})", lua_str(&format!("{at} key"))));
+        w.line(&format!("if named[k] then R.fail({}, \"other entry \" .. k .. \" is a named member's key\") end", lua_str(&at)));
+        w.line(&want(&r.val_ty, "x", &format!("{at} value")));
+        w.dedent();
+        w.line("end");
+        w.dedent();
+        w.line("end");
+    }
     w.dedent();
     w.line("end");
     w.blank();
@@ -535,6 +557,17 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
             }
             _ => w.line(&format!("m[#m + 1] = {{ {key}, {} }}", to_raw(&f.ty, &m))),
         }
+    }
+    if let Some(r) = &s.rest {
+        let m = format!("v.{}", lua_member_name(&r.name));
+        w.line(&format!("if {m} ~= nil then"));
+        w.indent();
+        w.line("local keys = {}");
+        w.line(&format!("for k in pairs({m}) do keys[#keys + 1] = k end"));
+        w.line("table.sort(keys)");
+        w.line(&format!("for _, k in ipairs(keys) do m[#m + 1] = {{ k, {} }} end", to_raw(&r.val_ty, &format!("{m}[k]"))));
+        w.dedent();
+        w.line("end");
     }
     match s.tagged {
         Some(tag) => w.line(&format!("return R.tag({}, R.map(m))", lua_int(tag.0 as i128))),
@@ -570,6 +603,22 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
             }
             _ => w.line(&format!("{m} = {}", from_raw(&f.ty, &format!("R.required(m, {key}, {})", lua_str(&t)), &at))),
         }
+    }
+    // Keys no member has are the map's other entries; none leaves the member nil.
+    if let Some(r) = &s.rest {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&f.name))).collect();
+        let field = format!("v.{}", lua_member_name(&r.name));
+        w.line(&format!("local named = {{ {} }}", named.join(", ")));
+        w.line("for k, x in pairs(m) do");
+        w.indent();
+        w.line("if not named[k] then");
+        w.indent();
+        w.line(&format!("{field} = {field} or {{}}"));
+        w.line(&format!("{field}[k] = {}", from_raw(&r.val_ty, "x", &format!("{t} value"))));
+        w.dedent();
+        w.line("end");
+        w.dedent();
+        w.line("end");
     }
     w.line(&format!("M.{t}.validate(v)"));
     w.line("return v");
@@ -1094,10 +1143,17 @@ fn lua_table_value(cx: &Cx, m: &MapDef, explicit: bool, depth: usize) -> String 
 const MAX_FIXTURE_DEPTH: usize = 4;
 
 fn lua_struct_value(cx: &Cx, s: &StructDef, explicit: bool, depth: usize) -> String {
-    let members: Vec<String> = s.fields.iter().filter_map(|f| {
+    let mut members: Vec<String> = s.fields.iter().filter_map(|f| {
         let v = lua_value(cx, &f.ty, &f.occurrence, &f.constraints, explicit, depth + 1);
         (v != "nil").then(|| format!("{} = {v}", lua_member_name(&f.name)))
     }).collect();
+    // One other entry when explicit or when the map needs one.
+    if let Some(r) = &s.rest {
+        if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
+            let v = lua_value(cx, &r.val_ty, &Occurrence::Required, &[], explicit, depth + 1);
+            members.push(format!("{} = {{ [\"other-key\"] = {v} }}", lua_member_name(&r.name)));
+        }
+    }
     if members.is_empty() {
         format!("M.{}.new({{}})", lua_type_name(&s.name))
     } else {

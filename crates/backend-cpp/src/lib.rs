@@ -164,6 +164,7 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line(&format!("#ifndef {guard}"));
     w.line(&format!("#define {guard}"));
     w.blank();
+    w.line("#include <algorithm>");
     w.line("#include <cstdint>");
     w.line("#include <cstddef>");
     w.line("#include <optional>");
@@ -270,17 +271,37 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let fname  = to_snake_case(&f.name);
         w.line(&format!("{ty_str} {fname}{{}};"));
     }
+    // The map's other entries (dgtlrift/cddlc#82): any number with `--alloc
+    // heap`, else up to their capacity.
+    let mut eqs: Vec<String> = s.fields.iter()
+        .map(|f| format!("{} == o.{}", to_snake_case(&f.name), to_snake_case(&f.name)))
+        .collect();
+    if let Some(r) = &s.rest {
+        let rname = to_snake_case(&r.name);
+        let entry = format!("std::pair<std::string_view, {}>", cpp_typeref(&r.val_ty, opts));
+        w.line("/// The map's other entries.");
+        if is_heap(opts) {
+            w.line(&format!("std::vector<{entry}> {rname}{{}};"));
+            eqs.push(format!("{rname} == o.{rname}"));
+        } else {
+            let cap = capacity_value(
+                r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                opts.max_array,
+            );
+            w.line(&format!("std::array<{entry}, {cap}> {rname}{{}};"));
+            w.line(&format!("std::size_t {rname}_count{{0}};"));
+            eqs.push(format!(
+                "{rname}_count == o.{rname}_count && std::equal({rname}.begin(), {rname}.begin() + {rname}_count, o.{rname}.begin())"
+            ));
+        }
+    }
     w.blank();
     w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{"));
     w.indent();
-    if s.fields.is_empty() {
+    if eqs.is_empty() {
         w.line("return true;");
     } else {
-        let eq = s.fields.iter()
-            .map(|f| format!("{} == o.{}", to_snake_case(&f.name), to_snake_case(&f.name)))
-            .collect::<Vec<_>>()
-            .join(" && ");
-        w.line(&format!("return {eq};"));
+        w.line(&format!("return {};", eqs.join(" && ")));
     }
     w.dedent();
     w.line("}");
@@ -567,13 +588,16 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                     .map(|f| format!(" + (val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
                 w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});"));
-            } else if opt_fields.is_empty() {
-                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u);"));
             } else {
-                let opt_parts: Vec<String> = opt_fields.iter()
-                    .map(|f| format!("(val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
+                let rest_count = match &s.rest {
+                    Some(r) if is_heap(opts) => format!(" + val.{}.size()", to_snake_case(&r.name)),
+                    Some(r) => format!(" + val.{}_count", to_snake_case(&r.name)),
+                    None => String::new(),
+                };
+                let opt_sum: String = opt_fields.iter()
+                    .map(|f| format!(" + (val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
-                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u + {});", opt_parts.join(" + ")));
+                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u{opt_sum}{rest_count});"));
             }
             for f in &fields {
                 let fname = to_snake_case(&f.name);
@@ -588,6 +612,20 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                     if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
                     emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}"), &f.occurrence, opts);
                 }
+            }
+            if let Some(r) = &s.rest {
+                let rname = to_snake_case(&r.name);
+                if is_heap(opts) {
+                    w.line(&format!("for (const auto &e : val.{rname}) {{"));
+                } else {
+                    w.line(&format!("for (std::size_t i = 0; i < val.{rname}_count; i++) {{"));
+                    w.line(&format!("    const auto &e = val.{rname}[i];"));
+                }
+                w.indent();
+                w.line("nanocbor_put_tstrn(enc, e.first.data(), e.first.size());");
+                emit_cpp_encode_field(w, &r.val_ty, "e.second", &Occurrence::Required, opts);
+                w.dedent();
+                w.line("}");
             }
             w.line("return NANOCBOR_OK;");
         }
@@ -806,8 +844,28 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             }
             w.line("{");
             w.indent();
-            w.line("if (cb.on_unknown_field) cb.on_unknown_field(ctx, key);");
-            w.line("nanocbor_skip(&map);");
+            match &s.rest {
+                // Other keys are the map's other entries (dgtlrift/cddlc#82).
+                Some(r) => {
+                    let rname = to_snake_case(&r.name);
+                    w.line(&format!("std::pair<std::string_view, {}> e{{key, {{}}}};", cpp_typeref(&r.val_ty, opts)));
+                    emit_cpp_decode_field(w, &r.val_ty, "e.second", &[], &r.name, "&map", opts);
+                    if is_heap(opts) {
+                        w.line(&format!("out.{rname}.push_back(e);"));
+                    } else {
+                        let cap = capacity_value(
+                            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                            opts.max_array,
+                        );
+                        w.line(&format!("if (out.{rname}_count >= {cap}) return -1;"));
+                        w.line(&format!("out.{rname}[out.{rname}_count++] = e;"));
+                    }
+                }
+                None => {
+                    w.line("if (cb.on_unknown_field) cb.on_unknown_field(ctx, key);");
+                    w.line("nanocbor_skip(&map);");
+                }
+            }
             w.dedent();
             w.line("}");
             w.dedent();
@@ -1570,9 +1628,15 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
                 let ty    = cpp_json_field_type_with_occ(&f.ty, &f.occurrence, opts);
                 w.line(&format!("{ty} {fname}{{}};"));
             }
+            // The map's other entries (dgtlrift/cddlc#82).
+            if let Some(r) = &s.rest {
+                w.line("/// The map's other entries.");
+                w.line(&format!("std::map<std::string, {}> {}{{}};", cpp_json_field_type(&r.val_ty, opts), to_snake_case(&r.name)));
+            }
             w.blank();
-            let eq: Vec<String> = s.fields.iter()
-                .map(|f| { let n = to_snake_case(&f.name); format!("{n} == o.{n}") })
+            let eq: Vec<String> = s.fields.iter().map(|f| f.name.as_str())
+                .chain(s.rest.iter().map(|r| r.name.as_str()))
+                .map(|n| { let n = to_snake_case(n); format!("{n} == o.{n}") })
                 .collect();
             let eq = if eq.is_empty() { "true".to_owned() } else { eq.join(" && ") };
             w.line(&format!("bool operator==(const {ctype} &o) const {{ return {eq}; }}"));
@@ -1860,6 +1924,20 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                     }
                 }
             }
+            if let Some(r) = &s.rest {
+                let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+                w.line(&format!("for (const auto& [key, value] : this->{}) {{", to_snake_case(&r.name)));
+                w.indent();
+                if !named.is_empty() {
+                    w.line(&format!(
+                        "for (const char* n : {{{}}}) if (key == n) throw std::invalid_argument(\"{ctype}: other entry \" + key + \" is a named member's key\");",
+                        named.join(", ")
+                    ));
+                }
+                w.line(&format!("j[key] = {};", cpp_json_to_val(&r.val_ty, "value", module)));
+                w.dedent();
+                w.line("}");
+            }
             w.line("auto s = j.dump();");
             w.line("return std::vector<uint8_t>(s.begin(), s.end());");
             w.dedent();
@@ -1881,6 +1959,18 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                         w.line(&format!("out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j.at({key:?})"), opts, module)));
                     }
                 }
+            }
+            // Keys no member has are the map's other entries.
+            if let Some(r) = &s.rest {
+                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", f.name.as_str())).collect();
+                w.line("for (const auto& [key, value] : j.items()) {");
+                w.indent();
+                if !named.is_empty() {
+                    w.line(&format!("if ({}) continue;", named.join(" || ")));
+                }
+                w.line(&format!("out.{}.emplace(key, {});", to_snake_case(&r.name), cpp_json_from_val(&r.val_ty, "value", opts, module)));
+                w.dedent();
+                w.line("}");
             }
             w.line("return out;");
             w.dedent();
@@ -2004,6 +2094,9 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.line(&format!("void test_{ctype}() {{"));
                 w.indent();
                 w.line(&format!("{ctype} original{{}};"));
+                if let Some(r) = &s.rest {
+                    w.line(&format!("original.{}[\"other-key\"] = {{}};", to_snake_case(&r.name)));
+                }
                 w.line("auto encoded = original.encode();");
                 w.line(&format!("auto decoded = {ctype}::decode(encoded);"));
                 w.line("assert(decoded == original);");
