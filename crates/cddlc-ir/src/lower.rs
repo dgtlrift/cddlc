@@ -139,9 +139,23 @@ impl<'m> LowerCtx<'m> {
             .filter(|n| self.group_alternatives(n).is_some())
             .cloned()
             .collect();
-        for n in unused_groups {
+        // So are the types made for one (`<group>-alt1`, `<group>-<member>`)
+        // that nothing else refers to.
+        let rule_names: HashSet<SmolStr> = self.module.rules.iter().map(|sr| sr.node.name.node.0.clone()).collect();
+        let mut removed = unused_groups;
+        let mut i = 0;
+        while i < removed.len() {
+            let n = removed[i].clone();
             self.output.shift_remove(&n);
             self.sources.types.shift_remove(&n);
+            let referenced: HashSet<SmolStr> = self.output.values().flat_map(collect_deps).collect();
+            let prefix = format!("{n}-");
+            let orphans: Vec<SmolStr> = self.output.keys()
+                .filter(|k| k.starts_with(&prefix) && !rule_names.contains(*k) && !referenced.contains(*k))
+                .cloned()
+                .collect();
+            removed.extend(orphans);
+            i += 1;
         }
 
         // Pass 4: topological sort
@@ -433,6 +447,9 @@ impl<'m> LowerCtx<'m> {
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
         let expanded = self.expand_groups(name, choices, false)?;
+        if expanded.len() > 1 {
+            return self.lower_alternatives(name, &expanded, meta, false);
+        }
         let choices = expanded.as_slice();
         // A map whose only member has a computed key (`{ * tstr => uint }`) is a
         // table: any number of entries whose keys and values have the given
@@ -510,60 +527,138 @@ impl<'m> LowerCtx<'m> {
         choices:  &[GroupChoice],
         in_array: bool,
     ) -> Result<Vec<GroupChoice>, IrError> {
-        choices.iter()
-            .map(|gc| Ok(GroupChoice { entries: self.expand_entries(rule, &gc.entries, in_array, 0)? }))
-            .collect()
+        let mut out = Vec::new();
+        for gc in choices {
+            for entries in self.expand_entries(rule, &gc.entries, in_array, 0)? {
+                out.push(GroupChoice { entries });
+            }
+        }
+        if out.len() > MAX_ALTERNATIVES {
+            return Err(IrError::Unsupported {
+                rule:   rule.into(),
+                reason: format!("more than {MAX_ALTERNATIVES} alternatives from group choices (`//`)"),
+            });
+        }
+        Ok(out)
     }
 
+    /// The alternatives `entries` stands for: one list of entries each. A group
+    /// choice (`g = ( a // b )`) used among other entries gives one alternative
+    /// per choice, each with the other entries (RFC 8610 §2.2.2;
+    /// dgtlrift/cddlc#84).
     fn expand_entries(
         &self,
         rule:     &str,
         entries:  &[Spanned<cddlc_parser::MemberEntry>],
         in_array: bool,
         depth:    usize,
-    ) -> Result<Vec<Spanned<cddlc_parser::MemberEntry>>, IrError> {
+    ) -> Result<Vec<Vec<Spanned<cddlc_parser::MemberEntry>>>, IrError> {
         let unsupported = |reason: &str| IrError::Unsupported { rule: rule.into(), reason: reason.into() };
         if depth > 16 {
             return Err(unsupported("a group that includes itself"));
         }
-        let mut out = Vec::new();
+        let mut alts: Vec<Vec<Spanned<cddlc_parser::MemberEntry>>> = vec![Vec::new()];
         for e in entries {
-            let MemberKind::Type(ty) = &e.node.kind else { out.push(e.clone()); continue };
-            let alternatives = match single_type2(&ty.node) {
+            let plain = |alts: &mut Vec<Vec<_>>| for a in alts.iter_mut() { a.push(e.clone()) };
+            let MemberKind::Type(ty) = &e.node.kind else { plain(&mut alts); continue };
+            let group = match single_type2(&ty.node) {
                 Some(Type2::Typename { name, args }) if args.is_empty() => {
                     match self.group_alternatives(name.node.as_str()) {
-                        Some(alts) => alts,
-                        None => { out.push(e.clone()); continue; }
+                        Some(g) => g,
+                        None => { plain(&mut alts); continue; }
                     }
                 }
                 Some(Type2::Unwrap(name)) => match self.unwrap_alternatives(name.node.as_str()) {
-                    Some(alts) => alts,
+                    Some(g) => g,
                     None => return Err(unsupported("`~` on a type other than a map or array")),
                 },
                 Some(Type2::Group(g)) => g.node.choices.iter().map(|c| c.entries.clone()).collect(),
-                _ => { out.push(e.clone()); continue; }
+                _ => { plain(&mut alts); continue; }
             };
             let optional = match e.node.occurrence.as_ref().map(|o| &o.node) {
                 None => false,
                 Some(AstOcc::Optional) => true,
                 // A repeated group: an array's is a later fix (dgtlrift/cddlc#90).
-                Some(_) if in_array => { out.push(e.clone()); continue; }
+                Some(_) if in_array => { plain(&mut alts); continue; }
                 Some(_) => return Err(unsupported("a repeated group in a map")),
             };
-            let entries = match alternatives.as_slice() {
-                [] => continue,
-                [only] => only,
-                _ => return Err(unsupported("a choice between groups (`//`)")),
-            };
-            for mut inner in self.expand_entries(rule, entries, in_array, depth + 1)? {
-                // `? g`: each of the group's members is optional.
-                if optional && inner.node.occurrence.is_none() {
-                    inner.node.occurrence = Some(Spanned::new(AstOcc::Optional, inner.span));
-                }
-                out.push(inner);
+            // The group's own alternatives, each expanded.
+            let mut inner: Vec<Vec<Spanned<cddlc_parser::MemberEntry>>> = Vec::new();
+            for g in &group {
+                inner.extend(self.expand_entries(rule, g, in_array, depth + 1)?);
             }
+            if inner.is_empty() {
+                continue; // an empty group socket
+            }
+            if optional {
+                if inner.len() == 1 {
+                    // `? g`: each of the group's members is optional.
+                    for m in &mut inner[0] {
+                        if m.node.occurrence.is_none() {
+                            m.node.occurrence = Some(Spanned::new(AstOcc::Optional, m.span));
+                        }
+                    }
+                } else {
+                    // `? (a // b)`: none of them, or one.
+                    inner.insert(0, Vec::new());
+                }
+            }
+            let mut next = Vec::with_capacity(alts.len() * inner.len());
+            for a in &alts {
+                for g in &inner {
+                    let mut combined = a.clone();
+                    combined.extend(g.iter().cloned());
+                    next.push(combined);
+                }
+            }
+            if next.len() > MAX_ALTERNATIVES {
+                return Err(unsupported("too many alternatives from group choices (`//`)"));
+            }
+            alts = next;
         }
-        Ok(out)
+        Ok(alts)
+    }
+
+    /// A map or array with a choice between groups (`{ a: uint // b: tstr }`):
+    /// a choice between one map or array per alternative, named
+    /// `<rule>-alt<n>` (RFC 8610 §2.2.2; dgtlrift/cddlc#84).
+    fn lower_alternatives(
+        &mut self,
+        name:     &str,
+        choices:  &[GroupChoice],
+        meta:     &PragmaMeta,
+        in_array: bool,
+    ) -> Result<TypeDef, IrError> {
+        let mut variants = Vec::new();
+        for (i, gc) in choices.iter().enumerate() {
+            let mut alt: SmolStr = format!("{name}-alt{}", i + 1).into();
+            while self.output.contains_key(&alt) || self.known_rules.contains(&alt) {
+                alt = format!("{alt}-type").into();
+            }
+            self.known_rules.insert(alt.clone());
+            let one = std::slice::from_ref(gc);
+            let def = if in_array {
+                self.lower_array_type(&alt, one, &PragmaMeta::default())?
+            } else {
+                self.lower_map_as_struct(&alt, one, &PragmaMeta::default())?
+            };
+            self.output.insert(alt.clone(), def);
+            if let Some(src) = self.sources.types.get(name).cloned() {
+                self.sources.types.insert(alt.clone(), src);
+            }
+            variants.push(EnumVariant {
+                name:        format!("alt{}", i + 1).into(),
+                ty:          TypeRef::Named(alt),
+                constraints: vec![],
+            });
+        }
+        Ok(TypeDef::Enum(EnumDef {
+            name:       name.into(),
+            variants,
+            tagged:     meta.tag,
+            doc:        meta.doc.clone(),
+            deprecated: meta.deprecated,
+        }))
     }
 
     /// The alternatives of the group named `name` (each a list of entries), when
@@ -698,6 +793,9 @@ impl<'m> LowerCtx<'m> {
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
         let expanded = self.expand_groups(name, choices, false)?;
+        if expanded.len() > 1 {
+            return self.lower_alternatives(name, &expanded, meta, false);
+        }
         let choices = expanded.as_slice();
         let fields = choices.iter()
             .flat_map(|gc| gc.entries.iter())
@@ -824,6 +922,9 @@ impl<'m> LowerCtx<'m> {
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
         let expanded = self.expand_groups(name, choices, true)?;
+        if expanded.len() > 1 {
+            return self.lower_alternatives(name, &expanded, meta, true);
+        }
         let choices = expanded.as_slice();
         // Detect homogeneous array: single entry with occurrence
         let entries: Vec<_> = choices.iter()
@@ -1228,6 +1329,12 @@ impl<'m> LowerCtx<'m> {
 
     fn lower_group_extend(&mut self, name: &str, choices: &[GroupChoice]) -> Result<(), IrError> {
         let expanded = self.expand_groups(name, choices, false)?;
+        if expanded.len() > 1 {
+            return Err(IrError::Unsupported {
+                rule:   name.into(),
+                reason: "a `//=` extension with a choice between groups".into(),
+            });
+        }
         let choices = expanded.as_slice();
         // `//=` extension: add new fields to an existing struct
         let new_fields: Vec<FieldDef> = choices.iter()
@@ -1498,6 +1605,9 @@ impl<'m> LowerCtx<'m> {
         }
     }
 }
+
+/// The most alternatives a map or array may expand to from group choices.
+const MAX_ALTERNATIVES: usize = 32;
 
 /// The one Type2 of a type with no choices or operators.
 fn single_type2(ty: &Type) -> Option<&Type2> {

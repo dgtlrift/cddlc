@@ -1117,7 +1117,7 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
             TypeDef::Struct(s) => emit_c_struct_test(&mut w, s, &pfx, module, opts),
             TypeDef::Alias(a)  => emit_c_alias_test(&mut w, a, &pfx, opts),
             TypeDef::Array(a)  => emit_c_array_test(&mut w, a, &pfx, opts),
-            TypeDef::Enum(e)   => emit_c_enum_test(&mut w, e, &pfx, opts),
+            TypeDef::Enum(e)   => emit_c_enum_test(&mut w, e, &pfx, module, opts),
             TypeDef::Map(m)    => emit_c_map_test(&mut w, m, &pfx, opts),
         }
         w.blank();
@@ -1322,13 +1322,27 @@ fn emit_c_map_test(w: &mut IndentWriter, m: &MapDef, pfx: &str, opts: &CodegenOp
     w.line("}");
 }
 
-fn emit_c_enum_test(w: &mut IndentWriter, e: &EnumDef, pfx: &str, _opts: &CodegenOptions) {
+fn emit_c_enum_test(w: &mut IndentWriter, e: &EnumDef, pfx: &str, module: &IrModule, _opts: &CodegenOptions) {
     let type_name = to_snake_case(&e.name);
     w.line(&format!("static void test_{pfx}_{type_name}_roundtrip(void) {{"));
     w.indent();
     if let Some(v) = e.variants.first() {
         let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
         w.line(&format!("{type_name}_t original = {{ .tag = {vconst} }};"));
+        // A map variant's members pinned to a literal (`type: "start"`) hold it.
+        if let TypeRef::Named(n) = &v.ty {
+            if let Some(TypeDef::Struct(st)) = module.get(n) {
+                let vname = to_snake_case(&v.name);
+                for f in st.fields.iter().filter(|f| f.occurrence.is_required()) {
+                    let fname = to_snake_case(&f.name);
+                    if let Some(t) = text_literal_of(f) {
+                        w.line(&format!("original.value.{vname}.{fname} = (cbor_str_t){{ {t:?}, {} }};", t.len()));
+                    } else if let Some(x) = scalar_literal_of(f) {
+                        w.line(&format!("original.value.{vname}.{fname} = {x};"));
+                    }
+                }
+            }
+        }
     } else {
         w.line(&format!("{type_name}_t original = {{0}};"));
     }

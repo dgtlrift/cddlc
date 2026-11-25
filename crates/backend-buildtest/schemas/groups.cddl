@@ -22,3 +22,14 @@ $$message-ext //= ( version: uint )
 point = [coords, label: tstr]
 
 coords = ( x: int, y: int )
+
+; Choices between groups (RFC 8610 §2.2.2): one alternative's members or the other's
+reading = { sensor: tstr, measure }
+
+measure = ( temperature: float64 // humidity: uint )
+
+; A choice in a map, each alternative tagged by a literal
+event = { type: "start", at: uint // type: "stop", at: uint, code: int }
+
+; A choice in a record array
+range = [ uint, uint // tstr ]

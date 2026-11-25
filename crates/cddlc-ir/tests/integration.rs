@@ -843,11 +843,55 @@ fn group_inlining_limits() {
     for (src, want) in [
         ("r = { * g }\ng = ( a: uint )\n", "repeated group in a map"),
         ("r = { g }\ng = ( a: uint, g )\n", "includes itself"),
-        ("r = { g }\ng = ( a: uint // b: tstr )\n", "choice between groups"),
         ("r = { ~t }\nt = uint\n", "other than a map or array"),
     ] {
         let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
         let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect(src).to_string();
         assert!(err.contains(want), "{src}: {err}");
     }
+}
+
+// ── Group choices (dgtlrift/cddlc#84) ────────────────────────────────────────
+
+/// The member names of each alternative of the choice `name`.
+fn alternatives(m: &IrModule, name: &str) -> Vec<Vec<String>> {
+    let Some(TypeDef::Enum(e)) = m.get(name) else { panic!("{name}: {:?}", m.get(name)) };
+    e.variants.iter().map(|v| {
+        let TypeRef::Named(n) = &v.ty else { panic!("{v:?}") };
+        match m.get(n) {
+            Some(TypeDef::Struct(st)) => st.fields.iter().map(|f| f.name.to_string()).collect(),
+            Some(TypeDef::Array(_)) => vec!["[array]".to_string()],
+            other => panic!("{n}: {other:?}"),
+        }
+    }).collect()
+}
+
+#[test]
+fn group_choices_are_choices_of_maps() {
+    let m = compile("r = { a: uint // b: tstr }\n");
+    assert_eq!(alternatives(&m, "r"), vec![vec!["a"], vec!["b"]]);
+
+    // A choice inside an inlined group takes the other members along.
+    let m = compile("r = { kind, id: uint }\nkind = ( k: \"x\" // k: \"y\", v: int )\n");
+    assert_eq!(alternatives(&m, "r"), vec![vec!["k", "id"], vec!["k", "v", "id"]]);
+    // The group, used only inlined, leaves no types behind.
+    assert!(m.types.keys().all(|n| !n.starts_with("kind")), "{:?}", m.types.keys().collect::<Vec<_>>());
+
+    // `? (a // b)`: neither, or either.
+    let m = compile("r = { ? (p: int // q: tstr), z: bool }\n");
+    assert_eq!(alternatives(&m, "r"), vec![vec!["z"], vec!["p", "z"], vec!["q", "z"]]);
+
+    // In an array: a choice of records.
+    let m = compile("s = [ uint, tstr // tstr ]\n");
+    assert_eq!(alternatives(&m, "s").len(), 2);
+}
+
+#[test]
+fn group_choices_have_a_limit() {
+    // Six two-way choices multiply out to 64 alternatives.
+    let g: String = (0..6).map(|i| format!("g{i} = ( a{i}: uint // b{i}: uint )\n")).collect();
+    let src = format!("r = {{ g0, g1, g2, g3, g4, g5 }}\n{g}");
+    let parsed = parse_cddl(&src, PathBuf::from("test.cddl")).unwrap();
+    let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect("too many").to_string();
+    assert!(err.contains("alternatives"), "{err}");
 }

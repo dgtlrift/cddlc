@@ -270,6 +270,7 @@ readings = [* sensor-reading]
 | Primitives | `bool`, `uint`, `int`, `float32`, `float64`, `tstr`, `bstr`, `any` | `float16` maps to `float32`/`double` |
 | Named structs | `foo = { field: type, ? opt: type }` | Optional fields, integer map keys |
 | Type choices (enums) | `status = "ok" / "warn" / "error"`, `shape = circle / square` | String, integer, mixed or map variants; a map value decodes to the variant whose members it has |
+| Group choices | `event = { type: "start" // type: "stop", code: int }` | A choice between one map (or array) per alternative |
 | Arrays | `readings = [* float32]`, `[+ T]`, `[n*m T]` | Capacity from pragma or `--max-array` |
 | Tables (open maps) | `props = { * tstr => any }`, `{ + uint => tstr }` | Any number of entries of the key and value types |
 | Maps with other entries | `device = { id: uint, * tstr => tstr }` | Named members plus an `extra` member holding the other entries; their keys are text |
@@ -391,10 +392,12 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 ### Schema language gaps
 
 - **Generics with multiple parameters** (`pair<T, U>`) are not yet monomorphised correctly in all cases.
-- **Group-level choices** (`//=` extensions) have limited support — only the first group choice is lowered.
 - **Groups** are inlined where they are used: group references, `? group`, unwrapped maps
-  and arrays (`~base`) and group sockets (`$$ext //= (...)`). A repeated group in a map
-  (`{ * g }`) and a choice between groups (`g = (a // b)`) are rejected as unsupported.
+  and arrays (`~base`) and group sockets (`$$ext //= (...)`). A choice between groups
+  (`{ a: uint // b: tstr }`, or a group `g = (a // b)` used in one) is a choice between maps
+  or arrays, one per alternative (`<rule>-alt1`, ...), up to 32 of them. A repeated group in a
+  map (`{ * g }`), and a socket extended by more than one `//=` with choices, are rejected as
+  unsupported; several `//=` extensions of one socket add members rather than alternatives.
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
 - **Type sockets** (`$socket /= T`) are not supported; group sockets (`$$socket //= (...)`) are.
 - **Maps with named members and other entries** need text keys for the other entries
