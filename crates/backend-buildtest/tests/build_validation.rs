@@ -691,8 +691,12 @@ fn test_build_all() {
 fn print_summary(lang: &str, outcomes: &[BuildOutcome]) {
     let ok   = outcomes.iter().filter(|o| matches!(o, BuildOutcome::Built { .. })).count();
     let skip = outcomes.iter().filter(|o| o.is_skipped()).count();
+    let gone = outcomes.iter().filter(|o| o.is_unavailable()).count();
     let fail = outcomes.iter().filter(|o| !o.is_ok()).count();
-    eprintln!("  {lang}: {ok} built, {skip} skipped, {fail} failed / {} schemas", outcomes.len());
+    eprintln!(
+        "  {lang}: {ok} built, {skip} skipped, {gone} registry-unavailable, {fail} failed / {} schemas",
+        outcomes.len()
+    );
     if let Some(BuildOutcome::Skipped { reason }) = outcomes.first() {
         eprintln!("  (skip reason: {reason})");
     }

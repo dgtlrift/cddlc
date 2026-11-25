@@ -62,6 +62,25 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
+    # The languages' package downloads (Maven, npm, Go modules, NuGet, pub,
+    # pip, LuaRocks), kept between runs so CI rarely hits the registries: a
+    # registry rate limit (Maven Central's 429) otherwise fails every schema.
+    # The build tests and interop.sh also retry a registry failure, then report
+    # it as a warning rather than a failure.
+    - uses: actions/cache@v6
+      with:
+        path: |
+          ~/.m2/repository
+          ~/.npm
+          ~/go/pkg/mod
+          ~/.nuget/packages
+          ~/.pub-cache
+          ~/.cache/pip
+          ~/.luarocks
+        key: deps-${{ runner.os }}-${{ matrix.lang }}-${{ hashFiles('crates/backend-*/src/**/*.rs') }}
+        restore-keys: |
+          deps-${{ runner.os }}-${{ matrix.lang }}-
+
     - if: matrix.lang == 'csharp'
       uses: actions/setup-dotnet@v6
       with:
@@ -80,6 +99,9 @@ jobs:
       uses: actions/setup-go@v7
       with:
         go-version: 'stable'
+        # The generated modules aren't in the repository (no go.sum to key
+        # on); the cache step above keeps ~/go/pkg/mod.
+        cache: false
     - if: matrix.lang == 'java'
       uses: actions/setup-java@v6
       with:

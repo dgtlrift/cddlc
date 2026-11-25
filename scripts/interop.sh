@@ -8,6 +8,10 @@
 #   lang: rust c cpp csharp nodejs python go java lua
 # Requires the language's toolchain, as its build tests do
 # (crates/backend-buildtest); Python needs cbor2>=6.0 and pytest, Lua busted.
+# A missing toolchain is reported, with the command that installs it, and the
+# language is skipped (it fails instead with CDDLC_REQUIRE_TOOLS set, as in
+# CI). A schema whose build can't reach a package registry (rate limit,
+# timeout) is retried, then reported as unavailable, not failed.
 set -euo pipefail
 
 lang="${1:?usage: scripts/interop.sh <lang> [cddlc binary]}"
@@ -15,6 +19,18 @@ cd "$(dirname "$0")/.."
 cddlc="$(realpath "${2:-target/debug/cddlc}")"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+
+# Built with cddlc (cargo build), beside it: checks toolchains and reads logs.
+toolchains="$(dirname "$cddlc")/cddlc-toolchains"
+if [[ -x "$toolchains" ]] && ! "$toolchains" --check "$lang"; then
+    if [[ -n "${CDDLC_REQUIRE_TOOLS:-}" ]]; then
+        echo "$lang interop: toolchain missing (CDDLC_REQUIRE_TOOLS is set)"
+        exit 1
+    fi
+    echo "$lang interop: skipped, toolchain missing (install commands above)"
+    exit 0
+fi
+retries="${CDDLC_NETWORK_RETRIES:-2}"
 
 # Add the harness to a generated CMake project as a second test.
 add_cmake_test() {
@@ -79,22 +95,53 @@ run_one() {
 }
 
 failed=()
+unavailable=()
 for schema in crates/backend-buildtest/schemas/*.cddl; do
     name="$(basename "$schema" .cddl)"
     out="$work/$name"
     "$cddlc" generate "$schema" -l "$lang" --interop --interop-langs "$lang" -o "$out" >/dev/null 2>"$work/generate.log" \
         || { cat "$work/generate.log" >&2; failed+=("$name"); continue; }
-    if run_one "$name" "$out" >"$work/run.log" 2>&1; then
-        echo "== $lang $name: ok"
-    else
+    attempt=0
+    while true; do
+        if run_one "$name" "$out" >"$work/run.log" 2>&1; then
+            echo "== $lang $name: ok"
+            break
+        fi
+        # A package registry that was unavailable isn't a failure of the code:
+        # retry, then report it (as a GitHub Actions warning in CI).
+        if [[ -x "$toolchains" ]] && reason="$("$toolchains" --registry-log "$work/run.log")"; then
+            if (( attempt < retries )) && (( ${#unavailable[@]} == 0 )); then
+                attempt=$((attempt + 1))
+                echo "== $lang $name: registry unavailable ($reason); retrying in $((20 * attempt))s"
+                sleep $((20 * attempt))
+                rm -rf "$out"
+                "$cddlc" generate "$schema" -l "$lang" --interop --interop-langs "$lang" -o "$out" >/dev/null 2>&1
+                continue
+            fi
+            echo "== $lang $name: UNAVAILABLE ($reason)"
+            unavailable+=("$name")
+            break
+        fi
         echo "== $lang $name: FAILED"
         cat "$work/run.log"
         failed+=("$name")
-    fi
+        break
+    done
 done
 
+if (( ${#unavailable[@]} )); then
+    msg="$lang interop: ${#unavailable[@]} schema(s) not run because a package registry was unavailable: ${unavailable[*]}"
+    echo "WARNING: $msg"
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        echo "::warning title=Package registry unavailable::$msg"
+    fi
+fi
 if (( ${#failed[@]} )); then
     echo "$lang interop failed: ${failed[*]}"
     exit 1
 fi
-echo "$lang interop: all schemas pass"
+if (( ${#unavailable[@]} )); then
+    echo "$lang interop: the schemas that ran pass"
+else
+    echo "$lang interop: all schemas pass"
+fi
