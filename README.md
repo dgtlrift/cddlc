@@ -8,7 +8,7 @@ Rust, C, C++, C#, Node.js/TypeScript, Python, Dart, Go, Java (SE or Jakarta EE),
 ## Why cddlc?
 
 CDDL (Concise Data Definition Language) is the schema language for CBOR-based protocols
-(CoAP, COSE, CWT, and others).  Writing serialization boilerplate by hand across seven languages
+(CoAP, COSE, CWT, and others).  Writing serialization boilerplate by hand across ten languages
 is error-prone and hard to keep in sync.  `cddlc` turns the authoritative schema into the
 implementation: change the schema, regenerate, done.
 
@@ -276,15 +276,17 @@ readings = [* sensor-reading]
 | Tables (open maps) | `props = { * tstr => any }`, `{ + uint => tstr }` | Any number of entries of the key and value types |
 | Maps with other entries | `device = { id: uint, * tstr => tstr }` | Named members plus an `extra` member holding the other entries; their keys are text |
 
-A map has only the members its schema gives it (RFC 8610 §3.5): generated decoders reject a key
-the schema doesn't define, as `cddlc validate` does. To accept other keys, say so in the schema
-with `* tstr => any`.
 | Type aliases | `device-id = tstr .size 16` | With optional constraints |
 | CBOR tags | `#6.1(uint)` | Tag verification on decode, emission on encode |
 | Generics | `pair<T> = [T, T]` | Monomorphised at use sites |
 | Imports | `; @import "common.cddl"` | Transitive, cycle-detected |
 | Constraints | `.size`, `.range`, `.ge`, `.le`, `.gt`, `.lt`, `.eq`, `.ne`, `.regexp`, `.cbor`, `.cborseq` | |
+| Type operators | `.within`, `.and`, `.bits`, `.plus`, `.cat` | `.within` / `.and` add the other type's constraints; `.plus` / `.cat` of literals compute one; `.bits` is checked by `cddlc validate` only. `.abnf` and other operators cddlc can't check warn |
 | Embedded CBOR | `.cbor T`, `.cborseq T` | Inner `bstr` decoded as `T` |
+
+A map has only the members its schema gives it (RFC 8610 §3.5): generated decoders reject a key
+the schema doesn't define, as `cddlc validate` does. To accept other keys, say so in the schema
+with `* tstr => any`.
 
 ---
 
@@ -329,7 +331,7 @@ implementation) plus decode/roundtrip harnesses for each target language.  This 
 that a Rust encoder and a Python decoder agree on the wire format.
 
 ```bash
-cddlc my_schema.cddl --interop --interop-langs rust,python -o generated/
+cddlc generate my_schema.cddl --interop --interop-langs rust,python -o generated/
 ```
 
 Output layout:
@@ -358,7 +360,9 @@ See [`docs/interop-testing.md`](docs/interop-testing.md) for detailed instructio
 ## Running the Build Validation Tests
 
 The `backend-buildtest` crate invokes the real language toolchains to verify that generated code
-actually compiles.  These tests are marked `#[ignore]` so they do not run in normal CI.
+actually compiles and its tests pass.  They are marked `#[ignore]`, so a plain `cargo test` skips
+them; CI's `build-tests` job runs them for every language, with `CDDLC_REQUIRE_TOOLS=1` so that a
+missing toolchain fails the job rather than skipping its schemas.
 
 ```bash
 # All languages (requires all toolchains installed):
@@ -367,6 +371,9 @@ cargo test -p backend-buildtest --test build_validation -- --ignored --nocapture
 # Single language:
 cargo test -p backend-buildtest --test build_validation test_build_rust -- --ignored --nocapture
 ```
+
+`scripts/interop.sh <lang>` runs the interop vectors for every reference schema through that
+language's harness, as CI does after the build tests.
 
 ---
 
@@ -387,12 +394,10 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 - **Go**: `.regexp` constraints are not checked; `float16` is written at float32 width.
 - **Java**: `float16` is written at float32 width; Jakarta EE `@Size` on text counts UTF-16 chars, not UTF-8 bytes.
 - **Lua**: `float16` is written at float32 width; `.regexp` constraints are not checked; Lua 5.3+ only (no LuaJIT).
-- **C / C++**: no JSON mode; JSON output is only available for higher-level language backends.
 - **Rust**: `ciborium` and `cbor4ii` runtime options are listed in the CLI but the backend only fully implements `minicbor`.
 
 ### Schema language gaps
 
-- **Generics with multiple parameters** (`pair<T, U>`) are not yet monomorphised correctly in all cases.
 - **Groups** are inlined where they are used: group references, `? group`, unwrapped maps
   and arrays (`~base`) and group sockets (`$$ext //= (...)`). A choice between groups
   (`{ a: uint // b: tstr }`, or a group `g = (a // b)` used in one) is a choice between maps
@@ -400,7 +405,8 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
   map (`{ * g }`), and a socket extended by more than one `//=` with choices, are rejected as
   unsupported; several `//=` extensions of one socket add members rather than alternatives.
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
-- **Type sockets** (`$socket /= T`) are not supported; group sockets (`$$socket //= (...)`) are.
+- **Type sockets** (`$socket /= T`) are lowered and validated, but the generated code names the
+  type `$socket`, which doesn't compile (#123). Group sockets (`$$socket //= (...)`) work.
 - **Maps with named members and other entries** need text keys for the other entries
   (`{ a: uint, * tstr => any }`); other key types there (`{ 1 => int, * int => any }`), and
   more than one member with a computed key, are rejected with an "unsupported" error.
@@ -422,7 +428,7 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 - No **JSON Schema** or **Protobuf** import — `cddlc` is CDDL-only.
 - The `--dry-run` flag reports type counts but does not emit a machine-readable IR dump.
 - The interop test harness does not include Dart.
-- No published crate on crates.io; must build from source.
+- Not published on crates.io (#111); releases attach a static x86-64 Linux binary, or build from source.
 
 ---
 

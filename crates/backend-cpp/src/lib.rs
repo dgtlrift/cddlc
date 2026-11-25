@@ -1329,7 +1329,22 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                     _ => { w.line(&format!("{type_name} original{{}};")) }
                 }
             } else {
-                w.line(&format!("{type_name} original{{}};"));
+                // A value pinned to a literal, or with a lower bound (`40 .plus 2`,
+                // `uint .within (1..5)`; dgtlrift/cddlc#86).
+                let value = a.constraints.iter().find_map(|c| match c {
+                    cddlc_ir::Constraint::Eq(LiteralValue::Text(t)) => Some(format!("std::string_view({t:?})")),
+                    cddlc_ir::Constraint::Eq(LiteralValue::Uint(n)) => Some(format!("{n}u")),
+                    cddlc_ir::Constraint::Eq(LiteralValue::Int(n)) => Some(format!("{n}")),
+                    cddlc_ir::Constraint::ValueRangeUint { min: Some(lo), inclusive, .. } if *lo > 0 =>
+                        Some(format!("{}u", if *inclusive { *lo } else { lo + 1 })),
+                    cddlc_ir::Constraint::ValueRangeInt { min: Some(lo), inclusive, .. } if *lo > 0 =>
+                        Some(format!("{}", if *inclusive { *lo } else { lo + 1 })),
+                    _ => None,
+                });
+                match value {
+                    Some(v) => w.line(&format!("{type_name} original{{ {v} }};")),
+                    None => w.line(&format!("{type_name} original{{}};")),
+                }
             }
         }
         TypeDef::Enum(e) => {

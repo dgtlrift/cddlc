@@ -2265,7 +2265,8 @@ fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, module: &IrModule, opts:
     w.dedent();
     w.line("});");
 
-    if !a.constraints.is_empty() {
+    // Only when the validator checks something (`.bits` isn't checked yet).
+    if a.constraints.iter().any(|c| ts_constraint_check(c, "v", opts.is_json()).is_some()) {
         w.blank();
         let bad_val = ts_invalid_constrained_value(&a.constraints, &a.ty, opts);
         w.line("test('rejects invalid value', () => {");
@@ -2438,6 +2439,8 @@ fn ts_valid_constrained_value(
 ) -> String {
     for c in constraints {
         match c {
+            // A value pinned to a literal (`40 .plus 2`; dgtlrift/cddlc#86).
+            Constraint::Eq(lit) => return ts_literal(lit, opts.is_json()),
             Constraint::SizeExact(n) => match ty {
                 TypeRef::Primitive(Primitive::Tstr) => return format!("'a'.repeat({})", n),
                 TypeRef::Primitive(Primitive::Bstr) => return format!("new Uint8Array({})", n),
