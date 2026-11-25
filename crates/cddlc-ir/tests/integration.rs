@@ -1059,6 +1059,8 @@ fn test_inline_array_and_map_in_type_choice_are_types() {
     let TypeDef::Enum(e) = m.get("e").unwrap() else { panic!("not an enum") };
     assert!(matches!(&e.variants[0].ty, TypeRef::Named(n) if n == "e-alt0"));
     assert!(matches!(m.get("e-alt0"), Some(TypeDef::Map(_))));
+}
+
 // ── Found by the published-schema corpus (dgtlrift/cddlc#113) ─────────────────
 
 #[test]
