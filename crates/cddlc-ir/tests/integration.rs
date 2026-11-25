@@ -1001,3 +1001,50 @@ fn prelude_value_names_are_literals() {
     let m = compile("r = { ? p: bool .default false, ? n: tstr / null .default null }\n");
     assert!(m.types.contains_key("r"));
 }
+
+// ── RFC 9741 text encodings, .det and .feature (dgtlrift/cddlc#109) ──────────
+
+fn module_alias_constraints(m: &IrModule, name: &str) -> Vec<cddlc_ir::Constraint> {
+    match m.types.get(name) {
+        Some(cddlc_ir::TypeDef::Alias(a)) => a.constraints.clone(),
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+#[test]
+fn text_encodings_lower_with_their_operand() {
+    use cddlc_ir::{Constraint, TextEncoding, TypeRef, Primitive};
+    let r = compile_warns("r = tstr .b64u (bstr .size 32)\nn = tstr .base10 (0..9)\n");
+    match module_alias_constraints(&r.module, "r").as_slice() {
+        [Constraint::TextEncoded { encoding: TextEncoding::B64u, ty, constraints }] => {
+            assert_eq!(**ty, TypeRef::Primitive(Primitive::Bstr));
+            assert_eq!(constraints, &[Constraint::SizeExact(32)]);
+        }
+        other => panic!("{other:?}"),
+    }
+    match module_alias_constraints(&r.module, "n").as_slice() {
+        [Constraint::TextEncoded { encoding: TextEncoding::Base10, ty, constraints }] => {
+            assert_eq!(**ty, TypeRef::Primitive(Primitive::Uint));
+            assert!(matches!(constraints.as_slice(), [Constraint::ValueRangeUint { min: Some(0), max: Some(9), .. }]), "{constraints:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // Generated code doesn't check them: each says so.
+    let msgs: Vec<&str> = r.warnings.iter().map(|w| w.message.as_str()).collect();
+    assert!(msgs.iter().any(|m| m.contains("'.b64u' is checked by cddlc validate, not by generated code")), "{msgs:?}");
+}
+
+#[test]
+fn det_folds_and_feature_is_its_type() {
+    use cddlc_ir::{Constraint, LiteralValue};
+    let r = compile_warns("r = \"  a\\n\" .det \"b\"\nf = uint .feature \"x\"\n");
+    assert_eq!(module_alias_constraints(&r.module, "r"), [Constraint::Eq(LiteralValue::Text("a\nb".into()))]);
+    assert!(module_alias_constraints(&r.module, "f").is_empty());
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+}
+
+#[test]
+fn printf_and_join_warn() {
+    let r = compile_warns("r = tstr .printf [\"%d\", 1]\n");
+    assert!(r.warnings.iter().any(|w| w.message.contains("'.printf' isn't checked")), "{:?}", r.warnings);
+}

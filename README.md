@@ -283,7 +283,8 @@ readings = [* sensor-reading]
 | Names | `session.status`, `$value`, `@owner` | `.` and `-` separate words, `$` and `@` are dropped: `SessionStatus`, `Value`, `Owner` |
 | Imports | `; @import "common.cddl"` | Transitive, cycle-detected |
 | Constraints | `.size`, `.range`, `.ge`, `.le`, `.gt`, `.lt`, `.eq`, `.ne`, `.regexp`, `.cbor`, `.cborseq` | |
-| Type operators | `.within`, `.and`, `.bits`, `.plus`, `.cat` | `.within` / `.and` add the other type's constraints; `.plus` / `.cat` of literals compute one; `.bits` is checked by `cddlc validate` only. `.abnf` and other operators cddlc can't check warn |
+| Type operators | `.within`, `.and`, `.bits`, `.plus`, `.cat`, `.det`, `.feature` | `.within` / `.and` add the other type's constraints; `.plus` / `.cat` / `.det` of literals compute one; `.feature` is the type it marks; `.bits` is checked by `cddlc validate` only. `.abnf`, `.abnfb`, `.printf`, `.join` and other operators cddlc can't check warn |
+| Text encodings (RFC 9741) | `tstr .b64u (bstr .size 32)`, `.b64c`, `.b64u-sloppy`, `.b64c-sloppy`, `.hex`, `.hexlc`, `.hexuc`, `.b32`, `.h32`, `.b45`, `.base10`, `.json` | Text holding bytes, an integer or JSON that must match the operand: checked by `cddlc validate`, not by generated code (each warns) |
 | Embedded CBOR | `.cbor T`, `.cborseq T` | Inner `bstr` decoded as `T` |
 
 A map has only the members its schema gives it (RFC 8610 §3.5): generated decoders reject a key

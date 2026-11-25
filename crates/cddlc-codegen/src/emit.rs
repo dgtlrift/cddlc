@@ -173,7 +173,8 @@ pub fn constraint_to_rust_check(c: &Constraint, val_expr: &str) -> Option<String
         | Constraint::Regexp { hook: None, .. }
         | Constraint::CborEmbedded(_)
         | Constraint::CborSeq(_)
-        | Constraint::Bits(_) => None,
+        | Constraint::Bits(_)
+        | Constraint::TextEncoded { .. } => None,
     }
 }
 

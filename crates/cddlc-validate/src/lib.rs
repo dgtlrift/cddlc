@@ -12,6 +12,7 @@
 pub mod value;
 pub mod error;
 pub mod engine;
+pub mod text_encoding;
 
 pub use error::ValidationError;
 pub use value::Value;

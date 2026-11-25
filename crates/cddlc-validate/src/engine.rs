@@ -5,7 +5,7 @@ use base64::Engine as _;
 
 use cddlc_ir::{
     CborTag, Constraint, FieldDef, FieldKey, IrModule, LiteralValue, Occurrence,
-    Primitive, StructEncoding, TypeDef, TypeRef,
+    Primitive, StructEncoding, TextEncoding, TypeDef, TypeRef,
 };
 
 use crate::error::{PathSeg, ValidationError};
@@ -377,8 +377,35 @@ impl<'m> Ctx<'m> {
                 // Informational only — does not relax presence/type checks.
                 Constraint::Default(_) => {}
                 Constraint::Bits(bits) => self.check_bits(value, bits, path),
+                Constraint::TextEncoded { encoding, ty, constraints } =>
+                    self.check_text_encoded(value, *encoding, ty, constraints, path),
             }
         }
+    }
+
+    /// RFC 9741: text holding bytes, an integer or JSON, which must match `ty`.
+    fn check_text_encoded(
+        &mut self,
+        value:       &Value,
+        encoding:    TextEncoding,
+        ty:          &TypeRef,
+        constraints: &[Constraint],
+        path:        &mut Vec<PathSeg>,
+    ) {
+        let op = encoding.control();
+        let Value::Text(t) = value else {
+            self.err(path, format!("{op} applies to text, found {}", kind_name(value)));
+            return;
+        };
+        let inner = match crate::text_encoding::decode(encoding, t) {
+            Ok(v) => v,
+            Err(why) => {
+                self.err(path, format!("{op}: {why}"));
+                return;
+            }
+        };
+        self.check_typeref(ty, &inner, path);
+        self.check_constraints(constraints, ty, &inner, path);
     }
 
     /// `.bits`: only the listed bit numbers are set (RFC 8610 §3.8.2).

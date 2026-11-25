@@ -30,7 +30,7 @@ use crate::prelude::is_prelude;
 use crate::types::{
     AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
     FieldDef, FieldKey, IrModule, LiteralValue, MapDef, MapRest, Occurrence,
-    Primitive, Sources, StructDef, StructEncoding, TypeDef, TypeRef,
+    Primitive, Sources, StructDef, StructEncoding, TextEncoding, TypeDef, TypeRef,
 };
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -651,10 +651,98 @@ impl<'m> LowerCtx<'m> {
                     _ => unchecked(self, format!("'.{name}' on a value other than a literal")),
                 }
             }
-            CtlOp::Other(name) if name == "abnf" || name == "abnfb" || name == "det" || name == "feature" => {
+            // `"a" .det "b"` (RFC 9165 §3): `.cat` of the operands, each dedented.
+            CtlOp::Other(name) if name == "det" => match (base, operand) {
+                (Type2::Value(Value::Text(a)), Type2::Value(Value::Text(b))) =>
+                    Ok(vec![Constraint::Eq(LiteralValue::Text(dedent(a) + &dedent(b)))]),
+                (Type2::Value(Value::Bytes(a)), Type2::Value(Value::Bytes(b))) => {
+                    let (a, b) = (String::from_utf8_lossy(a), String::from_utf8_lossy(b));
+                    Ok(vec![Constraint::Eq(LiteralValue::Bytes((dedent(&a) + &dedent(&b)).into_bytes()))])
+                }
+                _ => unchecked(self, "'.det' on a value other than a literal".into()),
+            },
+            // `T .feature "name"` (RFC 9165 §4) is `T`: the feature only names what
+            // the schema uses.
+            CtlOp::Other(name) if name == "feature" => Ok(vec![]),
+            // RFC 9741: text holding bytes, an integer or JSON that matches the
+            // operand (`tstr .b64u (bstr .size 32)`).
+            CtlOp::Other(name) if TextEncoding::from_control(name).is_some() => {
+                let encoding = TextEncoding::from_control(name).expect("checked");
+                match self.controller(operand, rule, hook, depth) {
+                    Some(Ok((ty, constraints))) => {
+                        self.warnings.push(IrWarning {
+                            rule:    Some(rule.to_owned()),
+                            message: format!("'{}' is checked by cddlc validate, not by generated code", encoding.control()),
+                            kind:    crate::error::IrWarningKind::UncheckedControlOp,
+                        });
+                        Ok(vec![Constraint::TextEncoded { encoding, ty: Box::new(ty), constraints }])
+                    }
+                    Some(Err(e)) => Err(e),
+                    None => unchecked(self, format!("'.{name}' with this operand")),
+                }
+            }
+            CtlOp::Other(name) if name == "abnf" || name == "abnfb" || name == "printf" || name == "join" => {
                 unchecked(self, format!("'.{name}'"))
             }
             _ => lower_type_op(op, base, rule, hook, &mut self.warnings),
+        }
+    }
+
+    /// The type and constraints of a control operator's operand that is itself a
+    /// type (`bstr`, `digest`, `(bstr .size 32)`, `1..10`). `None` when cddlc
+    /// can't reduce it to one.
+    fn controller(
+        &mut self,
+        t2:    &Type2,
+        rule:  &str,
+        hook:  Option<&str>,
+        depth: usize,
+    ) -> Option<Result<(TypeRef, Vec<Constraint>), IrError>> {
+        if depth > 8 {
+            return None;
+        }
+        match t2 {
+            Type2::Typename { args, .. } if args.is_empty() =>
+                Some(crate::lower_constraints::lower_type2_to_typeref(t2, rule).map(|t| (t, vec![]))),
+            Type2::Value(v) => {
+                let lit = lower_value(v);
+                let p = match &lit {
+                    LiteralValue::Uint(_) => Primitive::Uint,
+                    LiteralValue::Int(_) => Primitive::Int,
+                    LiteralValue::Float(_) => Primitive::Float,
+                    LiteralValue::Text(_) => Primitive::Tstr,
+                    LiteralValue::Bytes(_) => Primitive::Bstr,
+                    LiteralValue::Bool(_) => Primitive::Bool,
+                    LiteralValue::Null => Primitive::Null,
+                };
+                Some(Ok((TypeRef::Primitive(p), vec![Constraint::Eq(lit)])))
+            }
+            Type2::Group(g) => {
+                let [gc] = strip_parens(&g.node).choices.as_slice() else { return None };
+                let [e] = gc.entries.as_slice() else { return None };
+                let MemberKind::Type(t) = &e.node.kind else { return None };
+                if e.node.occurrence.is_some() {
+                    return None;
+                }
+                let [t1] = t.node.choices.as_slice() else { return None };
+                let t1 = &t1.node;
+                let (ty, mut cs) = match self.controller(&t1.base.node, rule, hook, depth + 1)? {
+                    Ok(x) => x,
+                    Err(e) => return Some(Err(e)),
+                };
+                // In a range (`0..10`) the literal is a bound, not the value.
+                if t1.ops.iter().any(|o| matches!(o, cddlc_parser::TypeOp::Range { .. })) {
+                    cs.retain(|c| !matches!(c, Constraint::Eq(_)));
+                }
+                for op in &t1.ops {
+                    match self.lower_op(op, &t1.base.node, rule, hook, depth + 1) {
+                        Ok(more) => cs.extend(more),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok((ty, cs)))
+            }
+            _ => None,
         }
     }
 
@@ -1773,6 +1861,19 @@ impl<'m> LowerCtx<'m> {
 }
 
 /// `a .plus b` (numbers) or `a .cat b` (text or bytes) as one literal.
+/// `text` without the leading whitespace its non-blank lines share (RFC 9165
+/// `.det`).
+fn dedent(text: &str) -> String {
+    let indent = text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start_matches([' ', '\t']).len())
+        .min()
+        .unwrap_or(0);
+    text.split_inclusive('\n')
+        .map(|l| if l.trim().is_empty() { l.trim_start_matches([' ', '\t']) } else { &l[indent.min(l.len())..] })
+        .collect()
+}
+
 fn fold_literal(op: &str, a: &Value, b: &Value) -> Option<LiteralValue> {
     let (a, b) = (lower_value(a), lower_value(b));
     Some(match (op, a, b) {
@@ -1789,7 +1890,6 @@ fn fold_literal(op: &str, a: &Value, b: &Value) -> Option<LiteralValue> {
     })
 }
 
-/// The most alternatives a map or array may expand to from group choices.
 /// The most alternatives group choices can make one map or array (the product
 /// of the choices of the groups it includes), a guard against an exponential
 /// number of types. WebDriver BiDi's `Command` has 33 (dgtlrift/cddlc#120).

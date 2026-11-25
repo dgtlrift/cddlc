@@ -455,3 +455,77 @@ fn control_operators_are_checked() {
     assert_ok(&m, "r", &Value::from(ciborium::Value::Bytes(vec![0, 2])));
     assert_fails(&m, "r", &Value::from(ciborium::Value::Bytes(vec![1])));
 }
+
+// ── RFC 9741 text encodings, .det and .feature (dgtlrift/cddlc#109) ──────────
+
+fn text(s: &str) -> Value { Value::Text(s.into()) }
+
+/// `t` validates against `r = tstr <control> <operand>`, or fails with a message
+/// containing `why`.
+fn check(control: &str, ok: &[&str], bad: &[(&str, &str)]) {
+    let m = lower(&format!("r = tstr {control}\n"));
+    for t in ok {
+        if let Err(e) = validate(&m, Some("r"), &text(t)) {
+            panic!("{control}: {t:?} should validate: {e:?}");
+        }
+    }
+    for (t, why) in bad {
+        let errs = assert_fails(&m, "r", &text(t));
+        let msg = format!("{errs:?}");
+        assert!(msg.contains(why), "{control}: {t:?}: {msg}");
+    }
+}
+
+#[test]
+fn base64_controls() {
+    // "foob" = 66 6f 6f 62.
+    check(".b64u bstr", &["Zm9vYg", "-_8"], &[("Zm9vYg==", "base64url"), ("Zm9vYh", "base64url"), ("+/8", "base64url")]);
+    // Sloppy: unused bits needn't be zero, still no padding.
+    check(".b64u-sloppy bstr", &["Zm9vYg", "Zm9vYh"], &[("Zm9vYg==", "base64url")]);
+    check(".b64c bstr", &["Zm9vYg==", "+/8="], &[("Zm9vYg", "base64 with padding"), ("-_8=", "base64")]);
+    check(".b64c-sloppy bstr", &["Zm9vYh=="], &[("Zm9vYh", "base64 with padding")]);
+    // The operand's constraints apply to the bytes.
+    check(".b64u (bstr .size 4)", &["Zm9vYg"], &[("Zm9v", "size")]);
+}
+
+#[test]
+fn hex_base32_and_base45_controls() {
+    check(".hex bstr", &["00ff", "00FF", ""], &[("0", "odd"), ("0g", "hex digit")]);
+    check(".hexlc bstr", &["00ff"], &[("00FF", "hex digit")]);
+    check(".hexuc bstr", &["00FF"], &[("00ff", "hex digit")]);
+    // RFC 4648 §10: "foobar".
+    check(".b32 bstr", &["MZXW6YTBOI", "MY", ""], &[("MZXW6YTBOI======", "base32"), ("mzxw6ytboi", "base32"), ("MZ", "unused bits")]);
+    check(".h32 bstr", &["CPNMUOJ1E8"], &[("MZXW6YTBOI", "base32"), ("CPNMUOJ1E", "base32 length")]);
+    // RFC 9285 §4.3: "AB", "Hello!!", "base-45".
+    check(".b45 bstr", &["BB8", "%69 VD92EX0", "UJCLQE7W581"], &[("GGW", "more than two bytes"), ("a", "base45"), ("BB8A", "base45 length")]);
+    check(".b45 (bstr .size 2)", &["BB8"], &[("UJCLQE7W581", "size")]);
+}
+
+#[test]
+fn base10_and_json_controls() {
+    check(".base10 int", &["0", "42", "-7"], &[("042", "decimal"), ("+1", "decimal"), ("-0", "decimal"), ("1.0", "decimal"), ("", "decimal")]);
+    // RFC 9741 §2.2's example.
+    check(".base10 (0..9223372036854775807)", &["9223372036854775807"], &[("-1", "")]);
+    check(".json uint", &["1"], &[("\"1\"", ""), ("{", "not JSON")]);
+    let m = lower("r = tstr .json claims\nclaims = { iss: tstr, exp: uint }\n");
+    assert_ok(&m, "r", &text(r#"{"iss": "me", "exp": 1}"#));
+    assert_fails(&m, "r", &text(r#"{"iss": "me"}"#));
+    // Not text at all.
+    let errs = assert_fails(&m, "r", &json("1"));
+    assert!(format!("{errs:?}").contains("text"), "{errs:?}");
+}
+
+#[test]
+fn det_dedents_and_concatenates() {
+    // RFC 9165 §3.
+    let m = lower("r = \"  a\\n  b\\n\" .det \"    c\\n\"\n");
+    assert_ok(&m, "r", &text("a\nb\nc\n"));
+    assert_fails(&m, "r", &text("  a\n  b\n    c\n"));
+}
+
+#[test]
+fn feature_is_the_type_it_marks() {
+    let m = lower("r = { ? x: uint .feature \"extension\" }\n");
+    assert_ok(&m, "r", &json(r#"{"x": 1}"#));
+    assert_fails(&m, "r", &json(r#"{"x": "a"}"#));
+}
