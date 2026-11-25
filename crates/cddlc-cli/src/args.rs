@@ -19,6 +19,50 @@ pub enum Command {
     Generate(GenerateArgs),
     /// Validate JSON/CBOR documents against a CDDL schema
     Validate(ValidateArgs),
+    /// Print an example value of a schema type, as JSON, CBOR or diagnostic notation
+    Sample(SampleArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SampleArgs {
+    /// CDDL schema entry point
+    #[arg(long, value_name = "FILE")]
+    pub cddl: PathBuf,
+
+    /// Type to give an example of (defaults to the schema's root rule)
+    #[arg(long = "type", value_name = "NAME")]
+    pub type_name: Option<String>,
+
+    /// Output format: json, cbor (binary), or diag (CBOR diagnostic notation)
+    #[arg(long, value_enum, default_value_t = SampleFormat::Json)]
+    pub format: SampleFormat,
+
+    /// Write to FILE instead of standard output
+    #[arg(short, long, value_name = "FILE")]
+    pub output: Option<PathBuf>,
+
+    /// Leave out optional members, and give repeated ones their minimum count
+    #[arg(long)]
+    pub minimal: bool,
+
+    /// Additional search paths for imported .cddl files (repeatable)
+    #[arg(long, value_name = "DIR")]
+    pub include_dir: Vec<PathBuf>,
+
+    /// Print rich parse diagnostics on failure (also enabled by CDDLC_TRACE=1)
+    #[arg(long)]
+    pub debug_parse: bool,
+
+    /// Verbose output
+    #[arg(short, long)]
+    pub verbose: bool,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleFormat {
+    Json,
+    Cbor,
+    Diag,
 }
 
 #[derive(Args, Debug)]

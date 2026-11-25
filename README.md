@@ -124,12 +124,36 @@ against; it defaults to the schema's root type (the first rule declared in
 the file, per RFC 8610). See [Known Gaps](#known-gaps-and-future-enhancements)
 for current validator limitations.
 
+### Print an example value
+
+```bash
+cddlc sample --cddl my_schema.cddl --type sensor-reading                 # JSON
+cddlc sample --cddl my_schema.cddl --type sensor-reading --format diag   # CBOR diagnostic notation
+cddlc sample --cddl my_schema.cddl --format cbor -o reading.cbor         # binary CBOR
+```
+
+```json
+{
+  "id": 1,
+  "kind": "temp",
+  "note": "text",
+  "key": "AAA"
+}
+```
+
+The example uses the schema's literals and `.default`s, and the smallest size or count and the
+value nearest zero that its constraints allow. It includes optional members (`--minimal` leaves
+them out), and a recursive type ends at a few levels. The example is checked with `validate` before
+it is written: one that doesn't validate (a `.regexp` cddlc can't satisfy) is still written, with a
+warning listing why, and a non-zero exit.
+
 ---
 
 ## CLI Reference
 
-`cddlc` has two subcommands: `generate` (compile a schema to target-language
-code) and `validate` (check JSON/CBOR data against a schema).
+`cddlc` has three subcommands: `generate` (compile a schema to target-language
+code), `validate` (check JSON/CBOR data against a schema) and `sample` (print an
+example value of a schema type).
 
 ```
 cddlc <COMMAND>
@@ -137,6 +161,7 @@ cddlc <COMMAND>
 Commands:
   generate    Generate serialization/deserialization code for a target language
   validate    Validate JSON/CBOR documents against a CDDL schema
+  sample      Print an example value of a schema type, as JSON, CBOR or diagnostic notation
 ```
 
 ### `cddlc generate`
@@ -188,6 +213,22 @@ Options:
       --include-dir <DIR>    Additional search path for @import (repeatable)
       --debug-parse          Print rich parse diagnostics (also: CDDLC_TRACE=1)
   -v, --verbose               Verbose output
+```
+
+### `cddlc sample`
+
+```
+cddlc sample [OPTIONS] --cddl <FILE>
+
+Options:
+      --cddl <FILE>          CDDL schema entry point
+      --type <NAME>          Type to give an example of [default: schema's root rule]
+      --format <FORMAT>      json, cbor (binary) or diag (CBOR diagnostic notation) [default: json]
+  -o, --output <FILE>        Write to FILE instead of standard output
+      --minimal              Leave out optional members; repeated ones get their minimum count
+      --include-dir <DIR>    Additional search path for @import (repeatable)
+      --debug-parse          Print rich parse diagnostics (also: CDDLC_TRACE=1)
+  -v, --verbose              Verbose output
 ```
 
 ---

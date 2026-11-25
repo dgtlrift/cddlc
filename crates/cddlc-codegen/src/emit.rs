@@ -169,11 +169,15 @@ pub fn constraint_to_rust_check(c: &Constraint, val_expr: &str) -> Option<String
         Constraint::Regexp { hook: Some(h), .. } => {
             Some(format!("{h}({val_expr})"))
         }
+        // The generated crate's `BitsCheck`, for a `u64` or bytes.
+        Constraint::Bits(bits) => Some(format!(
+            "({val_expr}).bits_ok(&[{}])",
+            bits_mask_bytes(bits).iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ")
+        )),
         Constraint::Default(_)
         | Constraint::Regexp { hook: None, .. }
         | Constraint::CborEmbedded(_)
         | Constraint::CborSeq(_)
-        | Constraint::Bits(_)
         | Constraint::TextEncoded { .. } => None,
     }
 }
@@ -391,3 +395,37 @@ pub fn with_source_docs(module: &cddlc_ir::IrModule, base: Option<&std::path::Pa
     m
 }
 
+
+// ── `.bits` (dgtlrift/cddlc#107) ─────────────────────────────────────────────
+
+/// The bytes of a `.bits` mask: bit `n` may be set if bit `n % 8` of byte
+/// `n / 8` is (RFC 8610 §3.8.2; bit 0 is the least significant bit of the
+/// first byte, as `cddlc validate` numbers them).
+pub fn bits_mask_bytes(bits: &[u64]) -> Vec<u8> {
+    let len = bits.iter().map(|b| b / 8 + 1).max().unwrap_or(0) as usize;
+    let mut m = vec![0u8; len.min(4096)];
+    for &b in bits {
+        if let Some(byte) = m.get_mut((b / 8) as usize) {
+            *byte |= 1 << (b % 8);
+        }
+    }
+    m
+}
+
+/// The mask of the bits below 64 an unsigned integer may have set.
+pub fn bits_mask_u64(bits: &[u64]) -> u64 {
+    bits.iter().filter(|&&b| b < 64).fold(0, |m, b| m | 1 << b)
+}
+
+/// Whether any type of the module has a `.bits` constraint, so that the
+/// backend emits its helper.
+pub fn module_uses_bits(m: &cddlc_ir::IrModule) -> bool {
+    use cddlc_ir::TypeDef;
+    let has = |cs: &[Constraint]| cs.iter().any(|c| matches!(c, Constraint::Bits(_)));
+    m.types.values().any(|t| match t {
+        TypeDef::Struct(s) => s.fields.iter().any(|f| has(&f.constraints)),
+        TypeDef::Enum(e) => e.variants.iter().any(|v| has(&v.constraints)),
+        TypeDef::Alias(a) => has(&a.constraints),
+        TypeDef::Array(_) | TypeDef::Map(_) => false,
+    })
+}

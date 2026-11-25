@@ -32,6 +32,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("groups",      include_str!("../schemas/groups.cddl")),
     ("inline-enum", include_str!("../schemas/inline-enum-in-group-after-comment.cddl")),
     ("names",       include_str!("../schemas/names.cddl")),
+    ("bits",        include_str!("../schemas/bits.cddl")),
 ];
 
 // ── Result types ──────────────────────────────────────────────────────────────

@@ -1653,6 +1653,18 @@ fn cs_constraint_check(c: &Constraint, expr: &str, ty: &TypeRef) -> Option<Strin
             Some(format!("{expr} {op} {l}"))
         }
         Constraint::Regexp { hook: Some(h), .. } => Some(format!("{h}({expr})")),
+        // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
+        Constraint::Bits(bits) if is_uint => Some(format!(
+            "({expr} & ~{:#x}UL) == 0", cddlc_codegen::bits_mask_u64(bits)
+        )),
+        Constraint::Bits(bits) if matches!(p, Some(Primitive::Bstr)) => {
+            let m = cddlc_codegen::bits_mask_bytes(bits);
+            let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+            Some(format!(
+                "System.Linq.Enumerable.All(System.Linq.Enumerable.Select({expr}, (b, i) => (b & ~(i < {n} ? new byte[] {{ {bytes} }}[i] : 0)) == 0), ok => ok)",
+                n = m.len(),
+            ))
+        }
         _ => None,
     }
 }
@@ -1665,6 +1677,7 @@ fn constraint_description(c: &Constraint) -> String {
         Constraint::ValueRangeUint { min, max, .. } => format!("value out of range ({min:?}..{max:?})"),
         Constraint::Eq(v)  => format!("must equal {}", cs_literal(v)),
         Constraint::Ne(v)  => format!("must not equal {}", cs_literal(v)),
+        Constraint::Bits(b) => format!("only bits {b:?} may be set"),
         _                  => "constraint violated".into(),
     }
 }
