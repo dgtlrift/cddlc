@@ -888,9 +888,9 @@ fn group_choices_are_choices_of_maps() {
 
 #[test]
 fn group_choices_have_a_limit() {
-    // Six two-way choices multiply out to 64 alternatives.
-    let g: String = (0..6).map(|i| format!("g{i} = ( a{i}: uint // b{i}: uint )\n")).collect();
-    let src = format!("r = {{ g0, g1, g2, g3, g4, g5 }}\n{g}");
+    // Nine two-way choices multiply out to 512 alternatives, past the 256 allowed.
+    let g: String = (0..9).map(|i| format!("g{i} = ( a{i}: uint // b{i}: uint )\n")).collect();
+    let src = format!("r = {{ g0, g1, g2, g3, g4, g5, g6, g7, g8 }}\n{g}");
     let parsed = parse_cddl(&src, PathBuf::from("test.cddl")).unwrap();
     let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect("too many").to_string();
     assert!(err.contains("alternatives"), "{err}");
@@ -944,4 +944,60 @@ fn plus_and_cat_compute_literals() {
     assert_eq!(a.constraints, vec![Constraint::Eq(cddlc_ir::LiteralValue::Uint(3))]);
     let Some(TypeDef::Alias(a)) = m.get("s") else { panic!() };
     assert_eq!(a.constraints, vec![Constraint::Eq(cddlc_ir::LiteralValue::Text("ab".into()))]);
+}
+
+// ── Many alternatives, named by their literal (dgtlrift/cddlc#120) ──────────
+
+#[test]
+fn a_choice_of_many_maps_is_allowed() {
+    // 40 alternatives, like WebDriver BiDi's 33 commands.
+    let cmds: Vec<String> = (0..40).map(|i| format!("( method: \"m.c{i}\", params: uint )")).collect();
+    let src = format!("command = {{ id: uint, cmd }}\ncmd = ( {} )\n", cmds.join(" // "));
+    let m = compile(&src);
+    assert_eq!(alternatives(&m, "command").len(), 40);
+}
+
+/// The variant names of the enum `name`.
+fn variant_names(m: &cddlc_ir::IrModule, name: &str) -> Vec<String> {
+    match m.types.get(name) {
+        Some(cddlc_ir::TypeDef::Enum(e)) => e.variants.iter().map(|v| v.name.to_string()).collect(),
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+#[test]
+fn alternatives_are_named_by_the_literal_that_tells_them_apart() {
+    let m = compile("event = { type: \"start\" // type: \"stop\", code: int }\n");
+    assert_eq!(variant_names(&m, "event"), ["start", "stop"]);
+    assert!(m.types.contains_key("event-start") && m.types.contains_key("event-stop"));
+
+    // The key needn't come first, and dots are kept (`session.end`).
+    let m = compile("c = { id: uint, method: \"session.new\" // id: uint, method: \"session.end\" }\n");
+    assert_eq!(variant_names(&m, "c"), ["session.new", "session.end"]);
+
+    // Without such a key (or with a repeated literal), they are numbered.
+    let m = compile("r = { a: uint // b: tstr }\n");
+    assert_eq!(variant_names(&m, "r"), ["alt1", "alt2"]);
+    let m = compile("r = { t: \"x\", a: uint // t: \"x\", b: tstr }\n");
+    assert_eq!(variant_names(&m, "r"), ["alt1", "alt2"]);
+    // A literal that isn't a name.
+    let m = compile("r = { t: \"1\", a: uint // t: \"2\", b: tstr }\n");
+    assert_eq!(variant_names(&m, "r"), ["alt1", "alt2"]);
+}
+
+#[test]
+fn a_group_rule_can_hold_a_computed_key() {
+    // WebDriver BiDi: `Extensible = (* text => any)`, included in its maps.
+    let m = compile("r = { id: uint, Extensible }\nExtensible = (* text => any)\n");
+    match m.types.get("r") {
+        Some(cddlc_ir::TypeDef::Struct(s)) => assert!(s.rest.is_some(), "{s:?}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn prelude_value_names_are_literals() {
+    // `bool .default false`, as in WebDriver BiDi.
+    let m = compile("r = { ? p: bool .default false, ? n: tstr / null .default null }\n");
+    assert!(m.types.contains_key("r"));
 }
