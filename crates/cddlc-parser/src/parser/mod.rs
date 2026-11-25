@@ -1123,49 +1123,25 @@ fn parse_bytes_value(input: &mut &str) -> ModalResult<Value> {
 // ── Identifier parsing ────────────────────────────────────────────────────────
 
 /// Parse a CDDL identifier.
-/// RFC 8610 §3.1: `id = ALPHA *(*(ALPHA / DIGIT / "-" / ".") (ALPHA / DIGIT))`
-///
-/// Also handles socket/plug prefixes `$` and `$$`.
+/// RFC 8610 Appendix B: `id = EALPHA *(*("-" / ".") (EALPHA / DIGIT))`, with
+/// `EALPHA = ALPHA / "@" / "_" / "$"`: a socket's `$` or `$$` prefix is part of
+/// the name, `@` can appear anywhere (dgtlrift/cddlc#123), and a name doesn't
+/// end with `-` or `.`.
 pub(crate) fn parse_ident<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
-    let start = *input;
-
-    // Optional socket prefix
-    let prefix_len = if input.starts_with("$$") {
-        2
-    } else if input.starts_with('$') {
-        1
-    } else {
-        0
-    };
-    *input = &input[prefix_len..];
-
-    // Must start with ALPHA (or _ as common extension)
-    match input.chars().next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-        _ => {
-            *input = start;
-            return Err(ErrMode::Backtrack(ContextError::new()));
-        }
+    let ealpha = |c: char| c.is_ascii_alphabetic() || matches!(c, '@' | '_' | '$');
+    let mut chars = input.chars();
+    if !chars.next().is_some_and(ealpha) {
+        return Err(ErrMode::Backtrack(ContextError::new()));
     }
-
     let len = input
         .char_indices()
-        .take_while(|(i, c)| {
-            *i == 0 && (c.is_ascii_alphabetic() || *c == '_')
-                || *i > 0 && (c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
-        })
+        .take_while(|&(_, c)| ealpha(c) || c.is_ascii_digit() || c == '-' || c == '.')
         .last()
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(0);
-
-    if len == 0 {
-        *input = start;
-        return Err(ErrMode::Backtrack(ContextError::new()));
-    }
-
-    *input = &input[len..];
-    // Adjust for prefix already consumed
-    Ok(&start[..prefix_len + len])
+    let name = input[..len].trim_end_matches(['-', '.']);
+    *input = &input[name.len()..];
+    Ok(name)
 }
 
 fn parse_uint_literal(input: &mut &str) -> ModalResult<u64> {
