@@ -1353,10 +1353,10 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                     cddlc_ir::Constraint::Eq(LiteralValue::Text(t)) => Some(format!("std::string_view({t:?})")),
                     cddlc_ir::Constraint::Eq(LiteralValue::Uint(n)) => Some(format!("{n}u")),
                     cddlc_ir::Constraint::Eq(LiteralValue::Int(n)) => Some(format!("{n}")),
-                    cddlc_ir::Constraint::ValueRangeUint { min: Some(lo), inclusive, .. } if *lo > 0 =>
-                        Some(format!("{}u", if *inclusive { *lo } else { lo + 1 })),
-                    cddlc_ir::Constraint::ValueRangeInt { min: Some(lo), inclusive, .. } if *lo > 0 =>
-                        Some(format!("{}", if *inclusive { *lo } else { lo + 1 })),
+                    cddlc_ir::Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 =>
+                        Some(format!("{}u", *lo)),
+                    cddlc_ir::Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 =>
+                        Some(format!("{}", *lo)),
                     _ => None,
                 });
                 match value {

@@ -135,7 +135,7 @@ pub fn constraint_to_rust_check(c: &Constraint, val_expr: &str) -> Option<String
             }
         }
         Constraint::ValueRangeInt { min, max, inclusive } => {
-            let ge = if *inclusive { ">=" } else { ">" };
+            let ge = ">=";  // CDDL ranges always include the lower bound
             let le = if *inclusive { "<=" } else { "<" };
             match (min, max) {
                 (Some(lo), Some(hi)) => Some(format!("{val_expr} {ge} {lo} && {val_expr} {le} {hi}")),
@@ -145,7 +145,7 @@ pub fn constraint_to_rust_check(c: &Constraint, val_expr: &str) -> Option<String
             }
         }
         Constraint::ValueRangeUint { min, max, inclusive } => {
-            let ge = if *inclusive { ">=" } else { ">" };
+            let ge = ">=";  // CDDL ranges always include the lower bound
             let le = if *inclusive { "<=" } else { "<" };
             match (min, max) {
                 (Some(lo), Some(hi)) => Some(format!("{val_expr} {ge} {lo} && {val_expr} {le} {hi}")),
@@ -155,7 +155,7 @@ pub fn constraint_to_rust_check(c: &Constraint, val_expr: &str) -> Option<String
             }
         }
         Constraint::ValueRangeF64 { min, max, inclusive } => {
-            let ge = if *inclusive { ">=" } else { ">" };
+            let ge = ">=";  // CDDL ranges always include the lower bound
             let le = if *inclusive { "<=" } else { "<" };
             match (min, max) {
                 (Some(lo), Some(hi)) => Some(format!("{val_expr} {ge} {lo:.?} && {val_expr} {le} {hi:.?}")),
@@ -192,18 +192,26 @@ pub fn constraint_to_c_check(c: &Constraint, val_expr: &str) -> Option<String> {
             (None, Some(hi))     => Some(format!("{val_expr}.len <= {hi}")),
             (None, None)         => None,
         },
-        Constraint::ValueRangeInt { min, max, .. } => match (min, max) {
-            (Some(lo), Some(hi)) => Some(format!("{val_expr} >= {lo} && {val_expr} <= {hi}")),
-            (Some(lo), None)     => Some(format!("{val_expr} >= {lo}")),
-            (None, Some(hi))     => Some(format!("{val_expr} <= {hi}")),
-            (None, None)         => None,
-        },
-        Constraint::ValueRangeUint { min, max, .. } => match (min, max) {
-            (Some(lo), Some(hi)) => Some(format!("{val_expr} >= {lo}U && {val_expr} <= {hi}U")),
-            (Some(lo), None)     => Some(format!("{val_expr} >= {lo}U")),
-            (None, Some(hi))     => Some(format!("{val_expr} <= {hi}U")),
-            (None, None)         => None,
-        },
+        // The lower bound is always inclusive; `inclusive` is the upper bound's
+        // (`a..b` vs `a...b`).
+        Constraint::ValueRangeInt { min, max, inclusive } => {
+            let le = if *inclusive { "<=" } else { "<" };
+            match (min, max) {
+                (Some(lo), Some(hi)) => Some(format!("{val_expr} >= {lo} && {val_expr} {le} {hi}")),
+                (Some(lo), None)     => Some(format!("{val_expr} >= {lo}")),
+                (None, Some(hi))     => Some(format!("{val_expr} {le} {hi}")),
+                (None, None)         => None,
+            }
+        }
+        Constraint::ValueRangeUint { min, max, inclusive } => {
+            let le = if *inclusive { "<=" } else { "<" };
+            match (min, max) {
+                (Some(lo), Some(hi)) => Some(format!("{val_expr} >= {lo}U && {val_expr} {le} {hi}U")),
+                (Some(lo), None)     => Some(format!("{val_expr} >= {lo}U")),
+                (None, Some(hi))     => Some(format!("{val_expr} {le} {hi}U")),
+                (None, None)         => None,
+            }
+        }
         Constraint::Eq(v) => Some(format!("{val_expr} == {}", literal_to_c(v))),
         Constraint::Ne(v) => Some(format!("{val_expr} != {}", literal_to_c(v))),
         Constraint::Regexp { hook: Some(h), .. } => Some(format!("{h}({val_expr})")),

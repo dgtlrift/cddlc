@@ -17,6 +17,11 @@ level = uint .within (1..5)
 
 digit = uint .and (0..9)
 
+; An exclusive range (`...`) still includes its lower bound
+percent = uint .within (1...101)
+
+offset = int .within (-8...8)
+
 answer = 40 .plus 2
 
 greeting = "hello, " .cat "world"

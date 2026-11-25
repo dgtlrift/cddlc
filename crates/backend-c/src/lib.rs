@@ -1313,8 +1313,8 @@ fn emit_c_alias_test(w: &mut IndentWriter, a: &AliasDef, pfx: &str, _opts: &Code
             Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => format!("(cbor_str_t){{ {t:?}, {} }}", t.len()),
             Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => format!("{n}U"),
             Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => format!("{n}"),
-            Constraint::ValueRangeUint { min: Some(lo), inclusive, .. } if *lo > 0 => format!("{}U", if *inclusive { *lo } else { lo + 1 }),
-            Constraint::ValueRangeInt { min: Some(lo), inclusive, .. } if *lo > 0 => format!("{}", if *inclusive { *lo } else { lo + 1 }),
+            Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 => format!("{}U", *lo),
+            Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 => format!("{}", *lo),
             _ => continue,
         };
         w.line(&format!("original.value = {set};"));
