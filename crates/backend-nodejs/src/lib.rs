@@ -2446,6 +2446,15 @@ fn ts_valid_constrained_value(
                 TypeRef::Primitive(Primitive::Bstr) => return format!("new Uint8Array({})", n),
                 _ => {}
             },
+            // The shortest size allowed (`tstr .size (1..16)`: "a").
+            Constraint::SizeRange { min, .. } => {
+                let n = min.unwrap_or(0);
+                match ty {
+                    TypeRef::Primitive(Primitive::Tstr) => return format!("'a'.repeat({n})"),
+                    TypeRef::Primitive(Primitive::Bstr) => return format!("new Uint8Array({n})"),
+                    _ => {}
+                }
+            }
             Constraint::ValueRangeInt { min, .. } => {
                 if let Some(lo) = min {
                     return if opts.is_json() {
@@ -2486,6 +2495,17 @@ fn ts_invalid_constrained_value(
                 }
                 _ => {}
             },
+            // One shorter than allowed, or else one longer.
+            Constraint::SizeRange { min, max } => {
+                let out = min.filter(|lo| *lo > 0).map(|lo| lo - 1).or(max.map(|hi| hi + 1));
+                if let Some(n) = out {
+                    match ty {
+                        TypeRef::Primitive(Primitive::Tstr) => return format!("'a'.repeat({n}) as any"),
+                        TypeRef::Primitive(Primitive::Bstr) => return format!("new Uint8Array({n}) as any"),
+                        _ => {}
+                    }
+                }
+            }
             // Just below the lower bound, or else just above the upper one
             // (`null` passes `val <= 100n`, as JavaScript compares it as 0).
             Constraint::ValueRangeInt { min, max, inclusive } => {
