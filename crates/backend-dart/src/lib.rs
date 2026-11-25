@@ -202,6 +202,18 @@ fn typeref_uses_bstr(tr: &TypeRef) -> bool {
     }
 }
 
+/// For an array of a repeated group, the number of members in the group,
+/// which sit inline in the array (dgtlrift/cddlc#90).
+fn flat_width(a: &ArrayDef, module: &IrModule) -> Option<usize> {
+    match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match module.get(n) {
+            Some(TypeDef::Struct(s)) => Some(s.fields.len()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn emit_type(w: &mut IndentWriter, module: &IrModule, def: &TypeDef, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, module, s, opts),
@@ -1126,6 +1138,12 @@ fn json_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                     // Transparent alias — decode as the underlying type
                     json_from_expr(&a.ty, expr, module, opts)
                 }
+                // A repeated group: one record per run of its members (dgtlrift/cddlc#90).
+                Some(TypeDef::Array(a)) if flat_width(a, module).is_some() => {
+                    let n = flat_width(a, module).unwrap_or(1);
+                    let item = json_from_expr(&a.element, &format!("({expr} as List).sublist(i, i + {n})"), module, opts);
+                    format!("[for (var i = 0; i < ({expr} as List).length; i += {n}) {item}]")
+                }
                 Some(TypeDef::Array(a)) => {
                     // typedef List<T> — inline list decoding
                     let item = json_from_expr(&a.element, "e", module, opts);
@@ -1170,6 +1188,10 @@ fn json_to_expr(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOpti
         TypeRef::Named(n) => {
             match module.get(n.as_str()) {
                 Some(TypeDef::Alias(a)) => json_to_expr(&a.ty, field, module, opts),
+                Some(TypeDef::Array(a)) if flat_width(a, module).is_some() => {
+                    let item = json_to_expr(&a.element, "e", module, opts);
+                    format!("[for (final e in {field}) ...({item} as List)]")
+                }
                 Some(TypeDef::Array(a)) => {
                     let item = json_to_expr(&a.element, "e", module, opts);
                     if item == "e" { field.to_owned() }
@@ -1210,6 +1232,12 @@ fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                     Some(tag) => cbor_from_expr(&a.ty, &format!("_untag({}, {expr}, '{}')", tag.0, to_pascal_case(n)), module, opts),
                     None      => cbor_from_expr(&a.ty, expr, module, opts),
                 },
+                Some(TypeDef::Array(a)) if flat_width(a, module).is_some() => {
+                    let n = flat_width(a, module).unwrap_or(1);
+                    let list = format!("({expr} as CborList)");
+                    let item = cbor_from_expr(&a.element, &format!("CborList({list}.sublist(i, i + {n}))"), module, opts);
+                    format!("[for (var i = 0; i < {list}.length; i += {n}) {item}]")
+                }
                 Some(TypeDef::Array(a)) => {
                     let item = cbor_from_expr(&a.element, "e", module, opts);
                     format!("({expr} as CborList).map((e) => {item}).toList()")
@@ -1288,6 +1316,9 @@ fn cbor_to_expr_tagged(ty: &TypeRef, field: &str, module: &IrModule, opts: &Code
                     let tags = match a.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
                     let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
                     let item = cbor_to_expr(&a.element, "e", module, opts);
+                    if flat_width(a, module).is_some() {
+                        return format!("CborList([for (final e in {field}) ...({item} as CborList)]{t})");
+                    }
                     format!("CborList({field}.map((e) => {item}).toList(){t})")
                 }
                 Some(TypeDef::Map(m)) => {

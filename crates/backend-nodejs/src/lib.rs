@@ -495,18 +495,18 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
 
     // Emit each type
     for (_, def) in &module.types {
-        emit_type(&mut w, def, opts);
+        emit_type(&mut w, def, module, opts);
         w.blank();
     }
 
     w.finish()
 }
 
-fn emit_type(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, s, opts),
         TypeDef::Enum(e) => emit_enum(w, e, opts),
-        TypeDef::Array(a) => emit_array(w, a, opts),
+        TypeDef::Array(a) => emit_array(w, a, flat_width(a, module), opts),
         TypeDef::Alias(a) => emit_alias(w, a, opts),
         TypeDef::Map(m) => emit_map(w, m, opts),
     }
@@ -1385,7 +1385,29 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
 // ── Array ─────────────────────────────────────────────────────────────────────
 
-fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
+/// For an array of a repeated group, the number of members in the group,
+/// which sit inline in the array (dgtlrift/cddlc#90).
+fn flat_width(a: &ArrayDef, module: &IrModule) -> Option<usize> {
+    match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match module.get(n) {
+            Some(TypeDef::Struct(s)) => Some(s.fields.len()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The length of the CBOR head of an array of `n` items.
+fn array_head_len(n: usize) -> usize {
+    match n {
+        0..=23 => 1,
+        24..=0xff => 2,
+        0x100..=0xffff => 3,
+        _ => 5,
+    }
+}
+
+fn emit_array(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&a.name);
     let elem_ty = ts_typeref(&a.element, opts);
     let fname = encode_fn_name(&a.name);
@@ -1406,7 +1428,28 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
         "export function {fname}(val: {type_name}): Uint8Array {{"
     ));
     w.indent();
-    if opts.is_json() {
+    if let (true, Some(_)) = (opts.is_json(), flat) {
+        // A repeated group: each record's members, inline.
+        let conv = ts_json_encode_expr(&a.element, "item", opts);
+        w.line(&format!(
+            "return new TextEncoder().encode(JSON.stringify(val.flatMap(item => {conv} as unknown[])));"
+        ));
+    } else if let Some(n) = flat {
+        // A repeated group: each record's members, inline, without the
+        // record's own array head.
+        w.line("const enc = new CborEncoder();");
+        if let Some(tag) = a.tagged {
+            w.line(&format!("enc.tag({});", tag.0));
+        }
+        w.line(&format!("enc.startArray(val.length * {n});"));
+        w.line("for (const item of val) {");
+        w.indent();
+        w.line(&format!("enc.writeBytes({}(item).subarray({}));", encode_fn_name(&match &a.element { TypeRef::Named(e) => e.clone(), _ => a.name.clone() }), array_head_len(n)));
+        w.dedent();
+        w.line("}");
+        w.line("enc.endArray();");
+        w.line("return enc.finish();");
+    } else if opts.is_json() {
         let conv = ts_json_encode_expr(&a.element, "item", opts);
         if conv == "item" {
             w.line("return new TextEncoder().encode(JSON.stringify(val));");
@@ -1443,21 +1486,36 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
         w.indent();
         w.line("const arr: unknown = JSON.parse(new TextDecoder().decode(data));");
         w.line("if (!Array.isArray(arr)) throw new Error('Expected JSON array');");
+        emit_flat_chunks(w, flat, &type_name);
         let conv = ts_json_decode_expr(&a.element, "item", &format!("{type_name} item"), opts);
         w.line(&format!(
-            "return (arr as unknown[]).map(item => {conv}) as {type_name};"
+            "return (items as unknown[]).map(item => {conv}) as {type_name};"
         ));
     } else {
         open_cbor_decoder(w, &a.name, &type_name);
         w.line(&format!("const arr: unknown = {};", untag_expr(a.tagged, &type_name)));
         w.line("if (!Array.isArray(arr)) throw new Error('Expected CBOR array');");
+        emit_flat_chunks(w, flat, &type_name);
         let conv = ts_convert_expr(&a.element, "item", opts);
         w.line(&format!(
-            "return (arr as unknown[]).map(item => {conv}) as {type_name};"
+            "return (items as unknown[]).map(item => {conv}) as {type_name};"
         ));
     }
     w.dedent();
     w.line("}");
+}
+
+/// `items`: the decoded `arr`'s elements; for a repeated group, its members
+/// cut into one array per record (dgtlrift/cddlc#90).
+fn emit_flat_chunks(w: &mut IndentWriter, flat: Option<usize>, type_name: &str) {
+    match flat {
+        Some(n) => {
+            w.line(&format!("if (arr.length % {n} !== 0) throw new Error('{type_name}: a partial group');"));
+            w.line("const items: unknown[] = [];");
+            w.line(&format!("for (let i = 0; i < arr.length; i += {n}) items.push(arr.slice(i, i + {n}));"));
+        }
+        None => w.line("const items = arr;"),
+    }
 }
 
 // ── Map ───────────────────────────────────────────────────────────────────────

@@ -1198,6 +1198,18 @@ impl<'m> LowerCtx<'m> {
                 ),
             );
 
+            if occ.is_repeated() {
+                if let Some(mut members) = self.repeated_group(name, entry)? {
+                    if members.len() > 1 {
+                        return self.lower_flat_array(name, members, occ, meta);
+                    }
+                    // `[* (a: uint)]` is `[* uint]`.
+                    let mut only = members.remove(0);
+                    only.node.occurrence = entry.occurrence.clone();
+                    return self.lower_array_type(name, &[GroupChoice { entries: vec![only] }], meta);
+                }
+            }
+
             let ty = match &entry.kind {
                 MemberKind::Type(t) => {
                     let (tr, _) = self.lower_type_to_ref(&t.node, name)?;
@@ -1213,6 +1225,7 @@ impl<'m> LowerCtx<'m> {
                 name:       name.into(),
                 element:    ty,
                 occurrence: occ,
+                flat:       false,
                 tagged:     meta.tag,
                 doc:        meta.doc.clone(),
                 deprecated: meta.deprecated,
@@ -1253,6 +1266,77 @@ impl<'m> LowerCtx<'m> {
             }
         }
         Ok(def)
+    }
+
+    /// The members of a group repeated in an array (`[* (a: uint, b: tstr)]`,
+    /// `[+ pair]` for a group rule `pair`); `None` for anything else.
+    fn repeated_group(
+        &self,
+        rule:  &str,
+        entry: &cddlc_parser::MemberEntry,
+    ) -> Result<Option<Vec<Spanned<cddlc_parser::MemberEntry>>>, IrError> {
+        let MemberKind::Type(ty) = &entry.kind else { return Ok(None) };
+        let alts = match single_type2(&ty.node) {
+            Some(Type2::Group(g)) => strip_parens(&g.node).choices.iter().map(|c| c.entries.clone()).collect(),
+            Some(Type2::Typename { name, args }) if args.is_empty() => {
+                match self.group_alternatives(name.node.as_str()) {
+                    Some(g) => g,
+                    None => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+        let alts = self.expand_groups(rule, &alts.into_iter().map(|entries| GroupChoice { entries }).collect::<Vec<_>>(), true)?;
+        let [only] = alts.as_slice() else {
+            return Err(IrError::Unsupported {
+                rule:   rule.into(),
+                reason: "a repeated group with choices (`[* (a: uint // b: tstr)]`)".into(),
+            });
+        };
+        if only.entries.is_empty() {
+            return Ok(None);
+        }
+        if only.entries.iter().any(|e| e.node.occurrence.is_some()) {
+            return Err(IrError::Unsupported {
+                rule:   rule.into(),
+                reason: "a repeated group whose members are optional or repeated \
+                         (`[* (a: uint, ? b: tstr)]`); each repetition must have the same members".into(),
+            });
+        }
+        Ok(Some(only.entries.clone()))
+    }
+
+    /// An array of a repeated group: an array of `<rule>-entry` records whose
+    /// members sit inline (dgtlrift/cddlc#90).
+    fn lower_flat_array(
+        &mut self,
+        name:    &str,
+        members: Vec<Spanned<cddlc_parser::MemberEntry>>,
+        occ:     Occurrence,
+        meta:    &PragmaMeta,
+    ) -> Result<TypeDef, IrError> {
+        let mut entry: SmolStr = format!("{name}-entry").into();
+        while self.output.contains_key(&entry) || self.known_rules.contains(&entry) {
+            entry = format!("{entry}-type").into();
+        }
+        self.known_rules.insert(entry.clone());
+        let def = self.lower_array_type(&entry, &[GroupChoice { entries: members }], &PragmaMeta::default())?;
+        if !matches!(&def, TypeDef::Struct(s) if s.encoding == StructEncoding::Array) {
+            return Err(IrError::Unsupported {
+                rule:   name.into(),
+                reason: "a repeated group that is not a list of members".into(),
+            });
+        }
+        self.output.insert(entry.clone(), def);
+        Ok(TypeDef::Array(ArrayDef {
+            name:       name.into(),
+            element:    TypeRef::Named(entry),
+            occurrence: occ,
+            flat:       true,
+            tagged:     meta.tag,
+            doc:        meta.doc.clone(),
+            deprecated: meta.deprecated,
+        }))
     }
 
     // ── Tagged type ───────────────────────────────────────────────────────────

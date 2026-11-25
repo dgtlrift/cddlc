@@ -924,7 +924,22 @@ fn emit_array(w: &mut IndentWriter, cx: &Cx, a: &ArrayDef) {
     w.indent();
     w.line(&format!("M.{t}.validate(v)"));
     w.line("local items = {}");
-    w.line(&format!("for i, x in ipairs(v) do items[i] = {} end", to_raw(&a.element, "x")));
+    // A repeated group: each record's members, inline (dgtlrift/cddlc#90).
+    let flat = match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match cx.module.get(n) {
+            Some(TypeDef::Struct(r)) => Some(r.fields.len()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if flat.is_some() {
+        w.line(&format!(
+            "for _, x in ipairs(v) do for _, m in ipairs(R.as_array({}, {})) do items[#items + 1] = m end end",
+            to_raw(&a.element, "x"), lua_str(&t)
+        ));
+    } else {
+        w.line(&format!("for i, x in ipairs(v) do items[i] = {} end", to_raw(&a.element, "x")));
+    }
     match a.tagged {
         Some(tag) => w.line(&format!("return R.tag({}, R.array(items))", lua_int(tag.0 as i128))),
         None => w.line("return R.array(items)"),
@@ -937,7 +952,17 @@ fn emit_array(w: &mut IndentWriter, cx: &Cx, a: &ArrayDef) {
     w.indent();
     let raw = match a.tagged { Some(tag) => format!("R.untag(raw, {}, {})", lua_int(tag.0 as i128), lua_str(&t)), None => "raw".into() };
     w.line(&format!("local v = setmetatable({{}}, M.{t})"));
-    w.line(&format!("for i, x in ipairs(R.as_array({raw}, {})) do v[i] = {} end", lua_str(&t), from_raw(&a.element, "x", &format!("{t} item"))));
+    if let Some(n) = flat {
+        w.line(&format!("local all = R.as_array({raw}, {})", lua_str(&t)));
+        w.line(&format!("if #all % {n} ~= 0 then R.fail({}, \"a partial group\") end", lua_str(&t)));
+        w.line(&format!("for i = 1, #all, {n} do"));
+        w.line("  local g = {}");
+        w.line(&format!("  for j = 1, {n} do g[j] = all[i + j - 1] end"));
+        w.line(&format!("  v[#v + 1] = {}", from_raw(&a.element, "R.array(g)", &format!("{t} item"))));
+        w.line("end");
+    } else {
+        w.line(&format!("for i, x in ipairs(R.as_array({raw}, {})) do v[i] = {} end", lua_str(&t), from_raw(&a.element, "x", &format!("{t} item"))));
+    }
     w.line("return v");
     w.dedent();
     w.line("end");

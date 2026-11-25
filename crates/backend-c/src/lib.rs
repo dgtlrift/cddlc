@@ -417,7 +417,7 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
 
     for (_, def) in &module.types {
         w.blank();
-        emit_encode_fn(&mut w, def, name, opts);
+        emit_encode_fn(&mut w, def, module, name, opts);
         w.blank();
         emit_decode_fn(&mut w, def, module, name, opts);
     }
@@ -425,7 +425,19 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &CodegenOptions) {
+/// The record an array of a repeated group holds, whose members sit inline
+/// in the array (dgtlrift/cddlc#90).
+fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m StructDef> {
+    match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match module.get(n) {
+            Some(TypeDef::Struct(s)) => Some(s),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     let type_name = to_snake_case(def.name());
     let pfx       = to_snake_case(mod_name);
 
@@ -540,6 +552,22 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
         TypeDef::Array(a) => {
             if let Some(tag) = a.tagged {
                 w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
+            }
+            // A repeated group's members sit inline (dgtlrift/cddlc#90).
+            if let Some(rec) = flat_record(a, module) {
+                w.line(&format!("nanocbor_fmt_array(enc, val->count * {});", rec.fields.len()));
+                w.line("for (size_t i = 0; i < val->count; i++) {");
+                w.indent();
+                for f in &rec.fields {
+                    let item = format!("val->items[i].{}", to_snake_case(&f.name));
+                    emit_c_encode_field(w, &f.ty, &item, &Occurrence::Required, mod_name, opts);
+                }
+                w.dedent();
+                w.line("}");
+                w.line("return NANOCBOR_OK;");
+                w.dedent();
+                w.line("}");
+                return;
             }
             w.line("nanocbor_fmt_array(enc, val->count);");
             w.line("for (size_t i = 0; i < val->count; i++) {");
@@ -889,7 +917,14 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.line("out->count = 0;");
             w.line(&format!("while (!nanocbor_at_end(&arr) && out->count < {cap}) {{"));
             w.indent();
-            emit_c_decode_field(w, &a.element, "out->items[out->count]", &[], "item", &pfx, &pfx_upper, "&arr", opts);
+            if let Some(rec) = flat_record(a, module) {
+                for f in &rec.fields {
+                    let item = format!("out->items[out->count].{}", to_snake_case(&f.name));
+                    emit_c_decode_field(w, &f.ty, &item, &f.constraints, &f.name, &pfx, &pfx_upper, "&arr", opts);
+                }
+            } else {
+                emit_c_decode_field(w, &a.element, "out->items[out->count]", &[], "item", &pfx, &pfx_upper, "&arr", opts);
+            }
             w.line("out->count++;");
             w.dedent();
             w.line("}");
@@ -1862,18 +1897,18 @@ fn emit_source_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
 
     for (_, def) in &module.types {
-        emit_json_type_impl(&mut w, def, &mod_name, opts);
+        emit_json_type_impl(&mut w, def, module, &mod_name, opts);
         w.blank();
     }
 
     w.finish()
 }
 
-fn emit_json_type_impl(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_type_impl(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_json_struct_impl(w, s, mod_name, opts),
         TypeDef::Enum(e)   => emit_json_enum_impl(w, e, mod_name, opts),
-        TypeDef::Array(a)  => emit_json_array_impl(w, a, mod_name, opts),
+        TypeDef::Array(a)  => emit_json_array_impl(w, a, flat_record(a, module).map(|r| r.fields.len()), mod_name, opts),
         TypeDef::Alias(a)  => emit_json_alias_impl(w, a, mod_name, opts),
         TypeDef::Map(m)    => emit_json_map_impl(w, m, mod_name, opts),
     }
@@ -2189,7 +2224,7 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
     let _ = opts;
 }
 
-fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, mod_name: &str, opts: &CodegenOptions) {
     let snake = to_snake_case(&a.name);
     let ctype = format!("{}_t", to_snake_case(&a.name));
     let pfx   = format!("{mod_name}_{snake}");
@@ -2201,7 +2236,16 @@ fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, mod_name: &str, opts
     w.line("for (size_t i = 0; i < obj->count; i++) {");
     w.indent();
     let val_expr = json_value_expr(&a.element, "obj->items[i]", mod_name);
-    w.line(&format!("cJSON_AddItemToArray(arr, {val_expr});"));
+    if flat.is_some() {
+        // A repeated group: each record's members, inline (dgtlrift/cddlc#90).
+        w.line(&format!("cJSON* g = {val_expr};"));
+        w.line("if (!g) { cJSON_Delete(arr); return NULL; }");
+        w.line("cJSON* m;");
+        w.line("while ((m = cJSON_DetachItemFromArray(g, 0)) != NULL) cJSON_AddItemToArray(arr, m);");
+        w.line("cJSON_Delete(g);");
+    } else {
+        w.line(&format!("cJSON_AddItemToArray(arr, {val_expr});"));
+    }
     w.dedent();
     w.line("}");
     w.line("return arr;");
@@ -2213,6 +2257,29 @@ fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, mod_name: &str, opts
     w.indent();
     w.line("if (!cJSON_IsArray(j)) return false;");
     w.line("out->count = 0;");
+    if let (Some(n), TypeRef::Named(entry)) = (flat, &a.element) {
+        // A repeated group: one record per run of its members.
+        let entry_fn = format!("{mod_name}_{}_from_json", to_snake_case(entry));
+        w.line("int n = cJSON_GetArraySize(j);");
+        w.line(&format!("if (n % {n} != 0) return false;"));
+        w.line(&format!("for (int i = 0; i < n && out->count < {}; i += {n}) {{", opts.max_array));
+        w.indent();
+        w.line("cJSON* g = cJSON_CreateArray();");
+        w.line("if (!g) return false;");
+        w.line(&format!("for (int k = 0; k < {n}; k++) cJSON_AddItemReferenceToArray(g, cJSON_GetArrayItem(j, i + k));"));
+        w.line(&format!("bool ok = {entry_fn}(g, &out->items[out->count]);"));
+        w.line("cJSON_Delete(g);");
+        w.line("if (!ok) return false;");
+        w.line("out->count++;");
+        w.dedent();
+        w.line("}");
+        w.line("return true;");
+        w.dedent();
+        w.line("}");
+        w.blank();
+        emit_json_encode_decode(w, &pfx, &ctype);
+        return;
+    }
     w.line("cJSON* item; cJSON_ArrayForEach(item, j) {");
     w.indent();
     w.line(&format!("if (out->count >= {}) break;", opts.max_array));
