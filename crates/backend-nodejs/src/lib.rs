@@ -2337,6 +2337,15 @@ const MAX_FIXTURE_DEPTH: usize = 4;
 
 /// A roundtrip-test value for a struct field.
 fn ts_field_value(f: &FieldDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> String {
+    // A required member pinned to a text or integer literal (`type: "start"`) holds it.
+    if f.occurrence.is_required() {
+        if let Some(lit) = f.constraints.iter().find_map(|c| match c {
+            Constraint::Eq(v @ (LiteralValue::Text(_) | LiteralValue::Uint(_) | LiteralValue::Int(_))) => Some(v),
+            _ => None,
+        }) {
+            return ts_literal(lit, opts.is_json());
+        }
+    }
     bool_literal_value(f, explicit)
         .unwrap_or_else(|| ts_test_value(&f.ty, &f.occurrence, module, opts, explicit, depth))
 }

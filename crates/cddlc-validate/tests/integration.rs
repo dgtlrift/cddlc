@@ -407,3 +407,18 @@ fn groups_validate_inlined() {
     assert_ok(&m, "r", &json(r#"{"a": 1, "c": true, "b": "x"}"#));
     assert_fails(&m, "r", &json(r#"{"c": true, "b": "x"}"#));
 }
+
+// ── Group choices (dgtlrift/cddlc#84) ────────────────────────────────────────
+
+#[test]
+fn group_choices_validate_either() {
+    let m = lower("r = { a: uint // b: tstr }\n");
+    assert_ok(&m, "r", &json(r#"{"a": 1}"#));
+    assert_ok(&m, "r", &json(r#"{"b": "x"}"#));
+    assert_fails(&m, "r", &json(r#"{"a": 1, "b": "x"}"#));
+    assert_fails(&m, "r", &json(r#"{}"#));
+
+    let m = lower("s = [ uint, tstr // tstr ]\n");
+    assert_ok(&m, "s", &json(r#"[1, "x"]"#));
+    assert_ok(&m, "s", &json(r#"["x"]"#));
+}
