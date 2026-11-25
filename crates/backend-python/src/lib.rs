@@ -174,7 +174,16 @@ def _bytes(v: Any, at: str) -> bytes:
     return base64.urlsafe_b64decode(v + "=" * (-len(v) % 4))"#;
 
 /// Type checks shared by both formats.
-const CHECK_HELPERS: &str = r#"def _int(v: Any, at: str) -> int:
+const CHECK_HELPERS: &str = r#"def _bits_ok(v: Any, m: bytes) -> bool:
+    """`.bits`: only the bits `m` has set may be set (bit n is bit n % 8 of byte n / 8)."""
+    if isinstance(v, (bytes, bytearray)):
+        return all(b & ~(m[i] if i < len(m) else 0) == 0 for i, b in enumerate(v))
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        return False
+    return v & ~int.from_bytes(m, "little") == 0
+
+
+def _int(v: Any, at: str) -> int:
     if isinstance(v, bool) or not isinstance(v, int):
         raise ValueError(f"{at}: expected an integer, got {type(v).__name__}")
     return v
@@ -946,6 +955,11 @@ fn py_constraint_check(c: &Constraint, expr: &str) -> Option<String> {
         Constraint::Eq(v) => Some(format!("{expr} == {}", py_literal(v))),
         Constraint::Ne(v) => Some(format!("{expr} != {}", py_literal(v))),
         Constraint::Regexp { hook: Some(h), .. } => Some(format!("{h}({expr})")),
+        // `.bits` (dgtlrift/cddlc#107).
+        Constraint::Bits(bits) => Some(format!(
+            "_bits_ok({expr}, b\"{}\")",
+            cddlc_codegen::bits_mask_bytes(bits).iter().map(|b| format!("\\x{b:02x}")).collect::<String>()
+        )),
         _ => None,
     }
 }
@@ -1342,6 +1356,10 @@ fn py_value(
             (Constraint::SizeRange { min: Some(n), .. }, TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) => return format!("b\"\\x00\" * {n}"),
             (Constraint::ValueRangeInt { min: Some(lo), .. }, _) => return lo.to_string(),
             (Constraint::ValueRangeUint { min: Some(lo), .. }, _) => return lo.to_string(),
+            // `.bits`: every allowed bit set (dgtlrift/cddlc#107).
+            (Constraint::Bits(b), TypeRef::Primitive(Primitive::Uint)) =>
+                return format!("{:#x}", cddlc_codegen::bits_mask_u64(b)),
+            (Constraint::Bits(b), TypeRef::Primitive(Primitive::Bstr)) => return py_bytes(&cddlc_codegen::bits_mask_bytes(b)),
             _ => {}
         }
     }
@@ -1398,10 +1416,25 @@ fn py_invalid_constrained_value(constraints: &[Constraint], ty: &TypeRef) -> Opt
             (Constraint::ValueRangeInt { min: Some(lo), .. }, _) => return Some(format!("{}", *lo as i128 - 1)),
             (Constraint::ValueRangeUint { min: Some(lo), .. }, _) if *lo > 0 => return Some(format!("{}", lo - 1)),
             (Constraint::ValueRangeUint { max: Some(hi), .. }, _) => return Some(format!("{}", *hi as u128 + 1)),
+            // `.bits`: the lowest bit it doesn't allow.
+            (Constraint::Bits(b), TypeRef::Primitive(Primitive::Uint | Primitive::Bstr)) => {
+                let Some(bad) = (0u64..64).find(|n| !b.contains(n)) else { continue };
+                if matches!(ty, TypeRef::Primitive(Primitive::Uint)) {
+                    return Some(format!("{:#x}", 1u64 << bad));
+                }
+                let mut bytes = vec![0u8; bad as usize / 8 + 1];
+                bytes[bad as usize / 8] = 1 << (bad % 8);
+                return Some(py_bytes(&bytes));
+            }
             _ => {}
         }
     }
     None
+}
+
+/// A Python bytes literal: `b"\x01\x02"`.
+fn py_bytes(b: &[u8]) -> String {
+    format!("b\"{}\"", b.iter().map(|x| format!("\\x{x:02x}")).collect::<String>())
 }
 
 /// A generated class whose name starts with `Test` (from a CDDL type such as

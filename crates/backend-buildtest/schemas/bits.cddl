@@ -1,0 +1,19 @@
+; .bits on unsigned integers and byte strings (dgtlrift/cddlc#107).
+
+settings = {
+  flags: uint .bits flag-bits,
+  mask: bstr .bits wide-bits,
+  ? level: level,
+}
+
+flag-bits = &(
+  read: 0,
+  write: 1,
+  exec: 3,
+)
+
+; Bits past the first byte.
+wide-bits = &( lo: 0, hi: 9 )
+
+level = uint .bits level-bits
+level-bits = &( a: 0, b: 2 )
