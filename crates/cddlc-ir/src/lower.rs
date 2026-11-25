@@ -354,31 +354,11 @@ impl<'m> LowerCtx<'m> {
                 self.lower_map_as_struct(name, &group.node.choices, meta)
             }
 
-            // &typename — RFC 8610 §3.9: alias to the named group/enum
-            Type2::EnumTypename { name: ref_name, args } if args.is_empty() => {
-                Ok(TypeDef::Alias(AliasDef {
-                    name:        name.into(),
-                    ty:          TypeRef::Named(ref_name.node.0.clone()),
-                    constraints: vec![],
-                    tagged:      meta.tag,
-                    doc:         meta.doc.clone(),
-                    deprecated:  meta.deprecated,
-                }))
-            }
-            Type2::EnumTypename { .. } => {
-                Ok(TypeDef::Alias(AliasDef {
-                    name:        name.into(),
-                    ty:          TypeRef::Primitive(Primitive::Any),
-                    constraints: vec![],
-                    tagged:      meta.tag,
-                    doc:         meta.doc.clone(),
-                    deprecated:  meta.deprecated,
-                }))
-            }
-
-            // &(group) — RFC 8610 §3.9: inline group enumeration
-            Type2::EnumGroup(group) => {
-                self.lower_map_as_struct(name, &group.node.choices, meta)
+            // `&colors`, `&( red: 1, green: 2 )` — RFC 8610 §3.9: the choice of
+            // the group's member values (dgtlrift/cddlc#85).
+            Type2::EnumTypename { .. } | Type2::EnumGroup(_) => {
+                let values = self.enumeration_values(name, &t1.base.node)?;
+                self.lower_type_rule(name, &values, meta)
             }
         }
     }
@@ -617,6 +597,49 @@ impl<'m> LowerCtx<'m> {
             alts = next;
         }
         Ok(alts)
+    }
+
+    /// A named type (`base`, made unique) for an enumeration used in place.
+    fn enumeration_type(&mut self, base: &str, t2: &Type2) -> Result<TypeRef, IrError> {
+        let mut name: SmolStr = base.into();
+        while self.output.contains_key(&name) || self.known_rules.contains(&name) {
+            name = format!("{name}-type").into();
+        }
+        self.known_rules.insert(name.clone());
+        let values = self.enumeration_values(&name, t2)?;
+        let def = self.lower_type_rule(&name, &values, &PragmaMeta::default())?;
+        self.output.insert(name.clone(), def);
+        Ok(TypeRef::Named(name))
+    }
+
+    /// The type an enumeration (`&colors`, `&( red: 1, green: 2 )`) stands
+    /// for: the choice of the values of the group's members (RFC 8610 §3.9).
+    fn enumeration_values(&self, rule: &str, t2: &Type2) -> Result<Type, IrError> {
+        let unsupported = |reason: String| IrError::Unsupported { rule: rule.into(), reason };
+        let choices: Vec<GroupChoice> = match t2 {
+            Type2::EnumGroup(g) => g.node.choices.clone(),
+            Type2::EnumTypename { name, args } if args.is_empty() => {
+                match self.group_alternatives(name.node.as_str()) {
+                    Some(alts) => alts.into_iter().map(|entries| GroupChoice { entries }).collect(),
+                    None => return Err(unsupported(format!("`&{}`: an enumeration of a type, not a group", name.node.as_str()))),
+                }
+            }
+            _ => return Err(unsupported("an enumeration of a generic group".into())),
+        };
+        let mut values: Vec<Spanned<Type1>> = Vec::new();
+        for gc in self.expand_groups(rule, &choices, false)? {
+            for e in &gc.entries {
+                let ty = match &e.node.kind {
+                    MemberKind::KeyValue { value, .. } => &value.node,
+                    MemberKind::Type(t) => &t.node,
+                };
+                values.extend(ty.choices.iter().cloned());
+            }
+        }
+        if values.is_empty() {
+            return Err(unsupported("an enumeration of an empty group".into()));
+        }
+        Ok(Type { choices: values })
     }
 
     /// A map or array with a choice between groups (`{ a: uint // b: tstr }`):
@@ -1416,6 +1439,15 @@ impl<'m> LowerCtx<'m> {
             },
             _ => None,
         };
+        // A member's enumeration (`c: &colors`) is named for the member.
+        if let [only] = ty.choices.as_slice() {
+            if only.node.ops.is_empty()
+                && matches!(only.node.base.node, Type2::EnumTypename { .. } | Type2::EnumGroup(_))
+            {
+                let tr = self.enumeration_type(&format!("{rule_name}-{field_name}"), &only.node.base.node)?;
+                return Ok((tr, vec![]));
+            }
+        }
         if let Some((is_array, group)) = inline {
             let mut name: SmolStr = format!("{rule_name}-{field_name}").into();
             while self.output.contains_key(&name) || self.known_rules.contains(&name) {
@@ -1546,12 +1578,11 @@ impl<'m> LowerCtx<'m> {
                 // Inline complex type — generate a synthetic named type
                 Ok(TypeRef::Primitive(Primitive::Any))
             }
-            // &typename — resolve as named reference (RFC 8610 §3.9)
-            Type2::EnumTypename { name, .. } => {
-                self.resolve_typeref(name.node.as_str(), rule_name)
+            // An enumeration (`&colors`): a type of its own, the choice of the
+            // group's member values (dgtlrift/cddlc#85).
+            Type2::EnumTypename { .. } | Type2::EnumGroup(_) => {
+                self.enumeration_type(&format!("{rule_name}-enum"), t2)
             }
-            // &(group) — inline enumeration, not representable as a simple TypeRef
-            Type2::EnumGroup(_) => Ok(TypeRef::Primitive(Primitive::Any)),
         }
     }
 

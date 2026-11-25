@@ -422,3 +422,13 @@ fn group_choices_validate_either() {
     assert_ok(&m, "s", &json(r#"[1, "x"]"#));
     assert_ok(&m, "s", &json(r#"["x"]"#));
 }
+
+// ── Enumerations (dgtlrift/cddlc#85) ─────────────────────────────────────────
+
+#[test]
+fn enumerations_validate_values() {
+    let m = lower("r = &colors\ncolors = ( red: 1, green: 2 )\n");
+    assert_ok(&m, "r", &json("2"));
+    assert_fails(&m, "r", &json("3"));
+    assert_fails(&m, "r", &json(r#"{"red": 1}"#));
+}

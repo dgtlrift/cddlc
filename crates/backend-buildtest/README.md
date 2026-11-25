@@ -32,7 +32,7 @@ The `schemas/` directory contains CDDL files that collectively exercise the full
 |---|---|
 | `primitives.cddl` | All primitive types: bool, uint, int, float32, float64, tstr, bstr |
 | `structs.cddl` | Named map structs with required and optional fields |
-| `enums.cddl` | String enums, integer enums, and mixed-type choices |
+| `enums.cddl` | String enums, integer enums, and mixed-type choices; enumerations (`&group`) |
 | `arrays.cddl` | Fixed-length and unbounded arrays; `@capacity` pragma |
 | `aliases.cddl` | Type aliases with `.size` and `.range` constraints |
 | `tagged.cddl` | CBOR tag `#6.N(T)` — tag emission and verification |
