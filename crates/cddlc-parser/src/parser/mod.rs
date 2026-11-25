@@ -780,7 +780,7 @@ fn parse_group_choice(
         let start = here(input);
         let mut entry = parse_member_entry(input)?;
         let end = here(input);
-        entry.doc = above.leading();
+        entry.doc = above.leading(entries.is_empty());
 
         let mut after = wsc_collect(input);  // after value, before comma
         let comma = input.starts_with(',');
@@ -1257,12 +1257,15 @@ impl Stretch {
     }
 
     /// The block of comment lines directly above the next entry: consecutive lines,
-    /// the last on the line before it.
-    fn leading(&self) -> Option<String> {
+    /// the last on the line before it. `first`: no entry comes before it (the
+    /// stretch starts after the group's opening delimiter and its line break), so
+    /// a comment on the stretch's first line is above the entry, not trailing
+    /// another (dgtlrift/cddlc#121).
+    fn leading(&self, first: bool) -> Option<String> {
         let mut block: Vec<String> = Vec::new();
         let mut next = self.breaks;  // the line the entry is on
         for (b, t) in self.comments.iter().rev() {
-            if *b == 0 || *b + 1 != next {
+            if (*b == 0 && !first) || *b + 1 != next {
                 break;
             }
             block.push(t.clone());

@@ -647,3 +647,32 @@ fn member_keys_label_value_or_type() {
         assert!(matches!(&keys[0], MemberKey::Type(_)), "{src}: {keys:?}");
     }
 }
+
+// ── The first member's comments (dgtlrift/cddlc#121) ─────────────────────────
+
+/// The documentation of each member of each alternative of the map or array `r`.
+fn member_docs(src: &str) -> Vec<Vec<Option<String>>> {
+    let m = parse(src);
+    let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!("{src}") };
+    let (Type2::Map(g) | Type2::Array(g)) = &ty.node.choices[0].node.base.node else { panic!("{src}") };
+    g.node.choices.iter()
+        .map(|c| c.entries.iter().map(|e| e.node.doc.clone()).collect())
+        .collect()
+}
+
+#[test]
+fn a_comment_above_the_first_member_documents_it() {
+    let d = |s: &str| Some(s.to_owned());
+    assert_eq!(
+        member_docs("r = {\n  ; The id.\n  id: uint,\n  ; The name.\n  name: tstr,\n}\n"),
+        [vec![d("The id."), d("The name.")]],
+    );
+    assert_eq!(member_docs("r = [\n  ; The count.\n  uint,\n]\n"), [vec![d("The count.")]]);
+    // The first member of each alternative.
+    assert_eq!(
+        member_docs("r = {\n  ; A.\n  a: 1 //\n  ; B.\n  b: 2\n}\n"),
+        [vec![d("A.")], vec![d("B.")]],
+    );
+    // A blank line still cuts it off.
+    assert_eq!(member_docs("r = {\n  ; Header.\n\n  id: uint,\n}\n"), [vec![None]]);
+}
