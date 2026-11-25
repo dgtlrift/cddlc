@@ -618,7 +618,7 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             w.line("}");
             w.line(&format!("let {local} = {{ let val = {decode_expr};"));
             w.indent();
-            emit_field_validation(w, &f.constraints, "val", &f.name);
+            emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
             w.line("val };");
             w.dedent();
             w.line("i += 1;");
@@ -626,7 +626,7 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             w.line(&format!("let {local} = if more(d, len, i)? {{"));
             w.indent();
             w.line(&format!("let val = {decode_expr};"));
-            emit_field_validation(w, &f.constraints, "val", &f.name);
+            emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
             w.line("i += 1;");
             w.line("Some(val)");
             w.dedent();
@@ -730,7 +730,7 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.line(&format!("let val = {};", decode_expr));
 
         // Inline validation
-        emit_field_validation(w, &f.constraints, "val", &f.name);
+        emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
 
         if is_boxed(&s.name, &f.ty, module) {
             w.line(&format!("{local} = Some(Box::new(val));"));
@@ -1395,7 +1395,7 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
         let local = field_local(&f.name);
         w.line(&format!("let {local} = {{ let val = {};", decode_expr_for_in_module(&f.ty, opts, Some(module))));
         w.indent();
-        emit_field_validation(w, &f.constraints, "val", &f.name);
+        emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
         w.line("val };");
         w.dedent();
         names.push(format!("{}: {local}", field_ident(&f.name)));
@@ -1811,6 +1811,26 @@ fn decode_fn_for_primitive(p: &Primitive) -> &'static str {
         Primitive::Tstr               => "str",
         Primitive::Any                => "bytes",
     }
+}
+
+/// The value a member's constraints are checked on: `val`, or its inner value
+/// through each newtype alias (a tagged or constrained one, such as WebDriver
+/// BiDi's `js-uint = 0..9007199254740991`, held as `JsUint(pub u64)`), so
+/// `? max: (js-uint .ge 1)` compares the `u64` (dgtlrift/cddlc#150).
+fn checked_value(ty: &TypeRef, val: &str, module: Option<&IrModule>) -> String {
+    let mut expr = val.to_owned();
+    let mut ty = ty;
+    let mut hops = 0;
+    while let (TypeRef::Named(n), Some(m)) = (ty, module) {
+        let Some(TypeDef::Alias(a)) = m.get(n) else { break };
+        if a.tagged.is_some() || !a.constraints.is_empty() {
+            expr.push_str(".0");
+        }
+        ty = &a.ty;
+        hops += 1;
+        if hops > 16 { break; }
+    }
+    expr
 }
 
 fn emit_field_validation(
