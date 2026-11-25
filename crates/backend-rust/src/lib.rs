@@ -1650,7 +1650,7 @@ fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions) -> String {
 
 fn emit_roundtrip_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     let mut w = IndentWriter::new(4);
-    let crate_name = format!("{}_cbor", module.name.replace('-', "_"));
+    let crate_name = format!("{}_cbor", to_snake_case(&module.name));
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
         w.line(&l);
@@ -1830,7 +1830,7 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opt
 /// variant whose name differs only in case or `-`/`_`. A taken name becomes
 /// `{test_name}_variant_{variant}`, then gets a numeric suffix if needed.
 fn variant_test_name(test_name: &str, variant: &str, used: &mut HashSet<String>) -> String {
-    let variant = variant.to_lowercase().replace('-', "_");
+    let variant = to_snake_case(&variant.to_lowercase());
     let mut name = format!("{test_name}_{variant}");
     if used.contains(&name) {
         let base = format!("{test_name}_variant_{variant}");
@@ -2827,7 +2827,7 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
 
 fn emit_roundtrip_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
     let mut w = IndentWriter::new(4);
-    let crate_name = format!("{}_json", module.name.replace('-', "_"));
+    let crate_name = format!("{}_json", to_snake_case(&module.name));
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
         w.line(&l);

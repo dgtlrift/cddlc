@@ -9,7 +9,7 @@
 
 use cddlc_codegen::{
     capacity_value, constraint_to_cpp_check,
-    to_pascal_case, to_snake_case,
+    to_pascal_case, to_screaming_snake, to_snake_case,
     Backend, CodegenError, CodegenOptions, CodegenOutput, GeneratedFile,
     IndentWriter,
 };
@@ -154,7 +154,7 @@ add_test(NAME roundtrip COMMAND test_roundtrip)
 
 fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     let name    = module.name.as_str();
-    let guard   = format!("{}_HPP", name.to_uppercase().replace('-', "_"));
+    let guard   = format!("{}_HPP", to_screaming_snake(&name));
     let ns      = to_snake_case(name);
     let mut w   = IndentWriter::new(4);
 
@@ -1582,8 +1582,8 @@ add_test(NAME roundtrip COMMAND test_roundtrip)
 
 fn emit_header_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     let name  = module.name.as_str();
-    let guard = name.to_uppercase().replace('-', "_");
-    let ns    = name.replace('-', "_");
+    let guard = to_screaming_snake(&name);
+    let ns    = to_snake_case(&name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
@@ -1742,7 +1742,7 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
 
 fn emit_source_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     let name = module.name.as_str();
-    let ns   = name.replace('-', "_");
+    let ns   = to_snake_case(&name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
@@ -2117,7 +2117,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
 
 fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     let name = module.name.as_str();
-    let ns   = name.replace('-', "_");
+    let ns   = to_snake_case(&name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
