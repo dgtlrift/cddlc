@@ -582,3 +582,19 @@ fn cbor_duplicate_keys_and_trailing_bytes_are_errors() {
     let dup = [0x47, 0xa2, 0x61, 0x61, 0x01, 0x61, 0x61, 0x02];
     assert!(cbor_check(&m, "r", &dup).unwrap_err().contains("duplicate map key"));
 }
+
+// ── Repeated groups in arrays (dgtlrift/cddlc#90) ─────────────────────────────
+
+#[test]
+fn array_of_repeated_group() {
+    let m = lower("r = [ * ( a: uint, b: tstr ) ]\ns = [ 1*2 pair ]\npair = ( k: tstr, v: int )");
+    assert_ok(&m, "r", &json("[]"));
+    assert_ok(&m, "r", &json(r#"[1, "x", 2, "y"]"#));
+    let errs = assert_fails(&m, "r", &json(r#"[1, "x", 2]"#));
+    assert!(errs[0].message.contains("group of 2 items"), "{errs:?}");
+    let errs = assert_fails(&m, "r", &json("[1, 2]"));
+    assert!(errs[0].message.contains("expected tstr"), "{errs:?}");
+    assert_ok(&m, "s", &json(r#"["a", -1, "b", 2]"#));
+    assert_fails(&m, "s", &json("[]"));
+    assert_fails(&m, "s", &json(r#"["a", 1, "b", 2, "c", 3]"#));
+}
