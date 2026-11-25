@@ -417,7 +417,7 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
 
     for (_, def) in &module.types {
         w.blank();
-        emit_encode_fn(&mut w, def, name, opts);
+        emit_encode_fn(&mut w, def, module, name, opts);
         w.blank();
         emit_decode_fn(&mut w, def, module, name, opts);
     }
@@ -425,7 +425,19 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &CodegenOptions) {
+/// The record an array of a repeated group holds, whose members sit inline
+/// in the array (dgtlrift/cddlc#90).
+fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m StructDef> {
+    match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match module.get(n) {
+            Some(TypeDef::Struct(s)) => Some(s),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     let type_name = to_snake_case(def.name());
     let pfx       = to_snake_case(mod_name);
 
@@ -540,6 +552,22 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
         TypeDef::Array(a) => {
             if let Some(tag) = a.tagged {
                 w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
+            }
+            // A repeated group's members sit inline (dgtlrift/cddlc#90).
+            if let Some(rec) = flat_record(a, module) {
+                w.line(&format!("nanocbor_fmt_array(enc, val->count * {});", rec.fields.len()));
+                w.line("for (size_t i = 0; i < val->count; i++) {");
+                w.indent();
+                for f in &rec.fields {
+                    let item = format!("val->items[i].{}", to_snake_case(&f.name));
+                    emit_c_encode_field(w, &f.ty, &item, &Occurrence::Required, mod_name, opts);
+                }
+                w.dedent();
+                w.line("}");
+                w.line("return NANOCBOR_OK;");
+                w.dedent();
+                w.line("}");
+                return;
             }
             w.line("nanocbor_fmt_array(enc, val->count);");
             w.line("for (size_t i = 0; i < val->count; i++) {");
@@ -889,7 +917,14 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.line("out->count = 0;");
             w.line(&format!("while (!nanocbor_at_end(&arr) && out->count < {cap}) {{"));
             w.indent();
-            emit_c_decode_field(w, &a.element, "out->items[out->count]", &[], "item", &pfx, &pfx_upper, "&arr", opts);
+            if let Some(rec) = flat_record(a, module) {
+                for f in &rec.fields {
+                    let item = format!("out->items[out->count].{}", to_snake_case(&f.name));
+                    emit_c_decode_field(w, &f.ty, &item, &f.constraints, &f.name, &pfx, &pfx_upper, "&arr", opts);
+                }
+            } else {
+                emit_c_decode_field(w, &a.element, "out->items[out->count]", &[], "item", &pfx, &pfx_upper, "&arr", opts);
+            }
             w.line("out->count++;");
             w.dedent();
             w.line("}");
