@@ -895,3 +895,31 @@ fn group_choices_have_a_limit() {
     let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect("too many").to_string();
     assert!(err.contains("alternatives"), "{err}");
 }
+
+// ── Enumerations (dgtlrift/cddlc#85) ─────────────────────────────────────────
+
+/// The literal values of the choice `name`'s variants.
+fn enum_literals(m: &IrModule, name: &str) -> Vec<String> {
+    let Some(TypeDef::Enum(e)) = m.get(name) else { panic!("{name}: {:?}", m.get(name)) };
+    e.variants.iter().map(|v| format!("{:?}", v.constraints)).collect()
+}
+
+#[test]
+fn enumerations_are_choices_of_values() {
+    let m = compile("r = &colors\ncolors = ( red: 1, green: 2 )\n");
+    assert_eq!(enum_literals(&m, "r"), vec!["[Eq(Uint(1))]", "[Eq(Uint(2))]"]);
+    // The group, used only in the enumeration, isn't a type.
+    assert!(m.get("colors").is_none());
+
+    // Inline, as a member's type, and inside an array.
+    let m = compile("m = { c: &( on: \"on\", off: \"off\" ), e: [* &colors] }\ncolors = ( red: 1 // green: 2 )\n");
+    assert_eq!(enum_literals(&m, "m-c"), vec!["[Eq(Text(\"on\"))]", "[Eq(Text(\"off\"))]"]);
+    let Some(TypeDef::Array(a)) = m.get("m-e") else { panic!() };
+    let TypeRef::Named(n) = &a.element else { panic!() };
+    assert_eq!(enum_literals(&m, n).len(), 2);
+
+    // An enumeration of a type isn't one.
+    let parsed = parse_cddl("r = &t\nt = uint\n", PathBuf::from("test.cddl")).unwrap();
+    let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect("type").to_string();
+    assert!(err.contains("not a group"), "{err}");
+}
