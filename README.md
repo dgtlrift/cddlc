@@ -403,7 +403,9 @@ language's harness, as CI does after the build tests.
 - **Groups** are inlined where they are used: group references, `? group`, unwrapped maps
   and arrays (`~base`) and group sockets (`$$ext //= (...)`). A choice between groups
   (`{ a: uint // b: tstr }`, or a group `g = (a // b)` used in one) is a choice between maps
-  or arrays, one per alternative (`<rule>-alt1`, ...), up to 32 of them. A repeated group in a
+  or arrays, one per alternative, up to 256 of them. Alternatives that differ by a text literal
+  under one key (`method: "browser.close"` / `method: "session.end"`) are named after it
+  (`<rule>-browser.close`); others are numbered (`<rule>-alt1`, ...). A repeated group in a
   map (`{ * g }`), and a socket extended by more than one `//=` with choices, are rejected as
   unsupported; several `//=` extensions of one socket add members rather than alternatives.
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.

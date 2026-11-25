@@ -191,12 +191,10 @@ fn lower_control_op(
         CtlOp::Ge => numeric_bound(operand, rule_name, BoundSide::Ge),
 
         CtlOp::Eq => {
-            let v = require_literal(operand, rule_name, ".eq")?;
-            Ok(vec![Constraint::Eq(lower_value(v))])
+            Ok(vec![Constraint::Eq(require_literal_value(operand, rule_name, ".eq")?)])
         }
         CtlOp::Ne => {
-            let v = require_literal(operand, rule_name, ".ne")?;
-            Ok(vec![Constraint::Ne(lower_value(v))])
+            Ok(vec![Constraint::Ne(require_literal_value(operand, rule_name, ".ne")?)])
         }
 
         CtlOp::Regexp => {
@@ -238,8 +236,7 @@ fn lower_control_op(
         }
 
         CtlOp::Default => {
-            let v = require_literal(operand, rule_name, ".default")?;
-            Ok(vec![Constraint::Default(lower_value(v))])
+            Ok(vec![Constraint::Default(require_literal_value(operand, rule_name, ".default")?)])
         }
 
         CtlOp::Within | CtlOp::And | CtlOp::Bits => {
@@ -374,6 +371,22 @@ pub fn lower_value(v: &Value) -> LiteralValue {
         Value::Text(s)   => LiteralValue::Text(s.clone()),
         Value::Bytes(b)  => LiteralValue::Bytes(b.clone()),
     }
+}
+
+/// A literal operand: a number, text or bytes, or one of the prelude's value
+/// names (`bool .default false`, `.eq null`).
+fn require_literal_value(t2: &Type2, rule_name: &str, op_name: &str) -> Result<LiteralValue, IrError> {
+    if let Type2::Typename { name, args } = t2 {
+        if args.is_empty() {
+            match name.node.as_str() {
+                "true"  => return Ok(LiteralValue::Bool(true)),
+                "false" => return Ok(LiteralValue::Bool(false)),
+                "null" | "nil" => return Ok(LiteralValue::Null),
+                _ => {}
+            }
+        }
+    }
+    require_literal(t2, rule_name, op_name).map(lower_value)
 }
 
 fn require_literal<'a>(
