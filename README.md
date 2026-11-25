@@ -292,8 +292,8 @@ readings = [* sensor-reading]
 | Enums (string/int/mixed) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Arrays / typed lists | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Record arrays (`[a: uint, b: tstr]`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Tables (`{ * tstr => V }`) | ✓ | ✓ | ✓ | ✓¹ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Maps with other entries (`{ id: uint, * tstr => V }`) | ✓ | ✓ | ✓ | ✓¹ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Tables (`{ * tstr => V }`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Maps with other entries (`{ id: uint, * tstr => V }`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Type aliases | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | CBOR tags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Optional fields | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -302,8 +302,6 @@ readings = [* sensor-reading]
 | dCBOR deterministic encoding | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | `#![no_std]` support | ✓ | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | Interop test harness | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-
-¹ Generated, but not yet built and tested against .NET.
 
 In CBOR, Rust, Python, Go, C, C++ and C# tables take integer or text keys. JSON objects
 have text keys, and the TypeScript, Java and Lua value models read a map's keys as text, so
