@@ -657,7 +657,9 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     for v in &e.variants {
         let kind_str = variant_kind_str(v);
         let case_val = match &v.ty {
-            TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
+            // `null` is JSON null, not text (dgtlrift/cddlc#147).
+            TypeRef::Primitive(Primitive::Null) => "return null;".to_owned(),
+            TypeRef::Primitive(Primitive::Tstr) => {
                 format!("return {kind_str:?};")
             }
             TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
@@ -686,16 +688,19 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     w.line(&format!("static {class_name} fromJson(dynamic raw) {{"));
     w.indent();
 
+    if let Some(v) = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null))) {
+        w.line(&format!("if (raw == null) return {class_name}.{};", to_pascal_case(&v.name)));
+    }
     // String variants
     let has_str = e.variants.iter().any(|v|
-        matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)));
+        matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
     if has_str {
         w.line("if (raw is String) {");
         w.indent();
         w.line("switch (raw) {");
         w.indent();
         for v in &e.variants {
-            if matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)) {
+            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
                 let kind_str = variant_kind_str(v);
                 let vname    = to_pascal_case(&v.name);
                 w.line(&format!("case {kind_str:?}: return {class_name}.{vname};"));
@@ -781,7 +786,9 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     for v in &e.variants {
         let kind_str = variant_kind_str(v);
         let cbor_val = match &v.ty {
-            TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
+            // `null` is CBOR null, not text (dgtlrift/cddlc#147).
+            TypeRef::Primitive(Primitive::Null) => format!("CborNull(tags: {tags})"),
+            TypeRef::Primitive(Primitive::Tstr) => {
                 format!("CborString({kind_str:?}, tags: {tags})")
             }
             TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
@@ -820,16 +827,19 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         w.line(&format!("_untag({}, v, '{class_name}');", tag.0));
     }
 
+    if let Some(v) = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null))) {
+        w.line(&format!("if (v is CborNull) return {class_name}.{};", to_pascal_case(&v.name)));
+    }
     // String variants
     let has_str = e.variants.iter().any(|v|
-        matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)));
+        matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
     if has_str {
         w.line("if (v is CborString) {");
         w.indent();
         w.line("switch (v.toString()) {");
         w.indent();
         for v2 in &e.variants {
-            if matches!(&v2.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)) {
+            if matches!(&v2.ty, TypeRef::Primitive(Primitive::Tstr)) {
                 let kind_str = variant_kind_str(v2);
                 let vname    = to_pascal_case(&v2.name);
                 w.line(&format!("case {kind_str:?}: return {class_name}.{vname};"));

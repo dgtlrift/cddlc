@@ -746,6 +746,11 @@ pub fn lua_variant_kind(v: &str) -> String {
     to_pascal_case(v)
 }
 
+/// Whether a variant is `null` / `nil` (or `undefined`).
+fn is_nil(v: &EnumVariant) -> bool {
+    matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined))
+}
+
 fn emit_enum(w: &mut IndentWriter, cx: &Cx, e: &EnumDef) {
     let t = lua_type_name(&e.name);
     let at = lua_str(&t);
@@ -796,8 +801,11 @@ fn emit_enum(w: &mut IndentWriter, cx: &Cx, e: &EnumDef) {
             if n < 0 { format!("R.int({})", lua_int(n)) } else { format!("R.uint({})", lua_int(n)) }
         } else if has_payload(v) {
             to_raw(&v.ty, "v.value")
+        } else if is_nil(v) {
+            // `null` is CBOR / JSON null, not text (dgtlrift/cddlc#147).
+            "R.null()".to_owned()
         } else {
-            // Text and nil variants are written as their CDDL text, as in the other backends.
+            // A text literal is written as its text.
             format!("R.text({})", lua_str(&cddlc_codegen::enum_variant_text(v)))
         };
         w.line(&format!("{} v.kind == {} then raw = {raw}", if i == 0 { "if" } else { "elseif" }, lua_str(&k)));
@@ -823,7 +831,10 @@ fn emit_enum(w: &mut IndentWriter, cx: &Cx, e: &EnumDef) {
         e.variants.iter().find(|v| has_payload(v) && matches!(&v.ty, TypeRef::Primitive(p) if f(p)))
     };
     let ctor = |v: &EnumVariant, arg: Option<&str>| format!("M.{t}.{}({})", lua_variant_kind(&v.name), arg.unwrap_or(""));
-    let text_lits: Vec<&EnumVariant> = e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none()).collect();
+    let text_lits: Vec<&EnumVariant> = e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none() && !is_nil(v)).collect();
+    if let Some(v) = e.variants.iter().find(|v| is_nil(v)) {
+        w.line(&format!("if item.k == \"null\" then return {} end", ctor(v, None)));
+    }
     let tstr = payload(&|p| matches!(p, Primitive::Tstr));
     let uint = payload(&|p| matches!(p, Primitive::Uint));
     let int = payload(&|p| matches!(p, Primitive::Int));

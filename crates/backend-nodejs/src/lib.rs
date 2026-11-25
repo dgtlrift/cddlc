@@ -1145,7 +1145,11 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                     let n = int_literal(v).unwrap_or_default();
                     w.line(&format!("return new TextEncoder().encode({n:?});"));
                 }
-                TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
+                // `null` is JSON null, not text (dgtlrift/cddlc#147).
+                TypeRef::Primitive(Primitive::Null) => {
+                    w.line("return new TextEncoder().encode('null');");
+                }
+                TypeRef::Primitive(Primitive::Tstr) => {
                     w.line(&format!(
                         "return new TextEncoder().encode(JSON.stringify({cddl_str:?}));"
                     ));
@@ -1181,7 +1185,8 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                     let n = int_literal(v).unwrap_or_default();
                     w.line(&format!("enc.int({n}n); break;"));
                 }
-                TypeRef::Primitive(Primitive::Tstr | Primitive::Null) => {
+                TypeRef::Primitive(Primitive::Null) => w.line("enc.null(); break;"),
+                TypeRef::Primitive(Primitive::Tstr) => {
                     let s = variant_str(v);
                     w.line(&format!("enc.text({s:?}); break;"));
                 }
@@ -1226,10 +1231,13 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.line(&format!("const inner: unknown = {};", untag_expr(e.tagged, &type_name)));
     }
 
+    if let Some(v) = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null))) {
+        w.line(&format!("if (inner === null) return {{ kind: {:?} }};", to_pascal_case(&v.name)));
+    }
     let has_str = e
         .variants
         .iter()
-        .any(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)));
+        .any(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
     // A plain `uint` / `int` variant, which takes any integer; int-literal
     // variants are matched by value first.
     let is_int = |v: &&EnumVariant| {
@@ -1257,7 +1265,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.line("switch (inner) {");
         w.indent();
         for v in &e.variants {
-            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)) {
+            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
                 let vname = to_pascal_case(&v.name);
                 let cddl_str = variant_str(v);
                 w.line(&format!("case {cddl_str:?}: return {{ kind: {vname:?} }};"));

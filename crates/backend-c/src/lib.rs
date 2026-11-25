@@ -862,6 +862,26 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 w.line("}");
             }
 
+            // `null` (CBOR null, dgtlrift/cddlc#147), a bool, or an integer:
+            // each tried on a copy of the decoder.
+            for v in &e.variants {
+                let vname  = to_snake_case(&v.name);
+                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                let get = match &v.ty {
+                    TypeRef::Primitive(Primitive::Null) => "nanocbor_get_null(&probe)".to_owned(),
+                    TypeRef::Primitive(Primitive::Bool) => format!("nanocbor_get_bool(&probe, &out->value.{vname})"),
+                    TypeRef::Primitive(Primitive::Uint) => format!("nanocbor_get_uint64(&probe, &out->value.{vname})"),
+                    TypeRef::Primitive(Primitive::Int) => format!("nanocbor_get_int64(&probe, &out->value.{vname})"),
+                    _ => continue,
+                };
+                w.line("{");
+                w.indent();
+                w.line("nanocbor_value_t probe = *dec;");
+                w.line(&format!("if ({get} >= 0) {{ *dec = probe; out->tag = {vconst}; return NANOCBOR_OK; }}"));
+                w.dedent();
+                w.line("}");
+            }
+
             // Peek at type
             w.line("uint8_t major = nanocbor_get_type(dec);");
             w.line("if (major == NANOCBOR_TYPE_TSTR) {");
@@ -879,20 +899,6 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 }
             }
             w.line("return -1; /* unknown variant */");
-            w.dedent();
-            w.line("} else if (major == NANOCBOR_TYPE_UINT || major == NANOCBOR_TYPE_NINT) {");
-            w.indent();
-            for v in &e.variants {
-                if matches!(&v.ty, TypeRef::Primitive(Primitive::Uint | Primitive::Int)) {
-                    let vname  = to_snake_case(&v.name);
-                    let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-                    w.line(&format!("if (nanocbor_get_int32(dec, (int32_t*)&out->value.{vname}) < 0) return -1;"));
-                    w.line(&format!("out->tag = {vconst};"));
-                    w.line("return NANOCBOR_OK;");
-                    break;
-                }
-            }
-            w.line("return -1;");
             w.dedent();
             w.line("}");
             w.line("return -1;");
@@ -2146,7 +2152,9 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
         w.line(&format!("case {vconst}:"));
         w.indent();
         match &v.ty {
-            TypeRef::Primitive(Primitive::Null | Primitive::Tstr) =>
+            // `null` is JSON null, not text (dgtlrift/cddlc#147).
+            TypeRef::Primitive(Primitive::Null) => w.line("return cJSON_CreateNull();"),
+            TypeRef::Primitive(Primitive::Tstr) =>
                 w.line(&format!("return cJSON_CreateString({cddl_str:?});")),
             TypeRef::Primitive(Primitive::Uint) =>
                 w.line(&format!("return cJSON_CreateNumber((double)obj->value.{vsnake});")),
@@ -2179,11 +2187,17 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
             to_snake_case(&n)
         ));
     }
+    for v in &e.variants {
+        if matches!(&v.ty, TypeRef::Primitive(Primitive::Null)) {
+            let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+            w.line(&format!("if (cJSON_IsNull(j)) {{ out->tag = {vconst}; return true; }}"));
+        }
+    }
     w.line("if (cJSON_IsString(j)) {");
     w.indent();
     w.line("const char* s = cJSON_GetStringValue(j);");
     for v in &e.variants {
-        if matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)) {
+        if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
             let vconst   = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
             let cddl_str = cddlc_codegen::enum_variant_text(v);
             w.line(&format!("if (strcmp(s, {cddl_str:?}) == 0) {{ out->tag = {vconst}; return true; }}"));

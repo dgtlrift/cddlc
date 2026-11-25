@@ -1092,8 +1092,15 @@ fn literal_wire(v: &EnumVariant) -> String {
     match int_literal(v) {
         Some(n) if n > i64::MAX as i128 => format!("Cddl.uint({})", long_lit(n)),
         Some(n) => long_lit(n),
+        // `null` is CBOR / JSON null, not text (dgtlrift/cddlc#147).
+        None if is_nil(v) => "null".into(),
         None => java_str(&cddlc_codegen::enum_variant_text(v)),
     }
+}
+
+/// Whether a variant is `null` / `nil` (or `undefined`).
+fn is_nil(v: &EnumVariant) -> bool {
+    matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined))
 }
 
 /// An enum whose variants are all literals: a Java `enum`.
@@ -1213,7 +1220,10 @@ fn emit_sealed_enum(w: &mut IndentWriter, cx: &Cx, e: &EnumDef) {
         e.variants.iter().find(|v| has_payload(v) && matches!(&v.ty, TypeRef::Primitive(p) if f(p)))
     };
     let rec = |v: &EnumVariant| java_variant_record(&e.name, &v.name);
-    let text_lits: Vec<&EnumVariant> = e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none()).collect();
+    let text_lits: Vec<&EnumVariant> = e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none() && !is_nil(v)).collect();
+    if let Some(v) = e.variants.iter().find(|v| is_nil(v)) {
+        w.line(&format!("if (v == null) return new {}();", rec(v)));
+    }
     let tstr = payload(&|p| matches!(p, Primitive::Tstr));
     let uint = payload(&|p| matches!(p, Primitive::Uint));
     let int = payload(&|p| matches!(p, Primitive::Int));
