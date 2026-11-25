@@ -665,3 +665,16 @@ fn test_json_bstr_alias_imports_traits() {
     assert!(enc.starts_with("pub fn encode_Blob(val: &Blob) -> Vec<u8> {\n    use base64::Engine;"), "{enc}");
     assert!(g.lib_rs.contains("<serde_json::Error as serde::de::Error>::custom(e.to_string())"), "{}", g.lib_rs);
 }
+
+#[test]
+fn test_bstr_alias_is_a_byte_string() {
+    // minicbor encodes a Vec<u8> as an array of integers; a bstr alias must be a bstr.
+    let src = "payload = bstr";
+    let parsed  = cddlc_parser::parse_cddl(src, std::path::PathBuf::from("t.cddl")).expect("parse");
+    let lowered = cddlc_ir::lower(&parsed.value, 16, 64).expect("lower");
+    let out = backend_rust::RustBackend
+        .generate(&lowered.module, &cddlc_codegen::CodegenOptions::default())
+        .expect("generate");
+    let lib = out.files.iter().find(|f| f.path.ends_with("lib.rs")).expect("lib.rs");
+    assert!(lib.content.contains("pub type Payload = minicbor::bytes::ByteVec;"), "{}", lib.content);
+}

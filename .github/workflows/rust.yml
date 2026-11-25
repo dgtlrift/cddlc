@@ -98,5 +98,7 @@ jobs:
     - name: Build tests
       run: cargo test -p backend-buildtest --test build_validation -- --ignored --exact --nocapture ${{ matrix.tests }}
     - name: Interop vectors
-      if: matrix.lang == 'csharp'
-      run: scripts/interop-csharp.sh
+      # The Rust-encoded vectors, decoded and re-encoded byte for byte by each
+      # language (no Dart harness yet).
+      if: matrix.lang != 'dart'
+      run: scripts/interop.sh ${{ matrix.lang }}
