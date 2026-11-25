@@ -117,7 +117,9 @@ cddlc validate --cddl my_schema.cddl --cbor instance.cbor
 cddlc validate --cddl my_schema.cddl --type sensor-reading --json a.json --json b.json
 ```
 
-Prints `OK`/`FAIL` per input file, with per-field diagnostics on failure
+CBOR is read strictly (RFC 8949): `undefined` is not `null`, a float has the width it was
+encoded at (`float16`, `float32` and `float64` each require theirs), and a map with a duplicate key
+or bytes after the data item doesn't decode. Prints `OK`/`FAIL` per input file, with per-field diagnostics on failure
 (`readings[3].value: expected float32, found text`), and exits non-zero if
 any file fails to validate. `--type` selects which schema rule to validate
 against; it defaults to the schema's root type (the first rule declared in

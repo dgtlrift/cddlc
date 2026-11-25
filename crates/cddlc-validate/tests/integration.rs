@@ -529,3 +529,56 @@ fn feature_is_the_type_it_marks() {
     assert_ok(&m, "r", &json(r#"{"x": 1}"#));
     assert_fails(&m, "r", &json(r#"{"x": "a"}"#));
 }
+
+// ── CBOR: undefined, float widths, duplicate keys (dgtlrift/cddlc#91) ───────
+
+fn cbor_check(m: &IrModule, ty: &str, bytes: &[u8]) -> Result<(), String> {
+    let v = cddlc_validate::cbor::decode(bytes)?;
+    cddlc_validate::validate_from(m, Some(ty), &v, cddlc_validate::Source::Cbor)
+        .map_err(|e| format!("{e:?}"))
+}
+
+#[test]
+fn cbor_undefined_is_not_null() {
+    let m = lower("u = undefined\nn = null\n");
+    assert!(cbor_check(&m, "u", &[0xf7]).is_ok());
+    assert!(cbor_check(&m, "u", &[0xf6]).unwrap_err().contains("expected undefined, found null"));
+    assert!(cbor_check(&m, "n", &[0xf7]).unwrap_err().contains("found undefined"));
+    // JSON has no undefined: null stands in.
+    assert_ok(&m, "u", &json("null"));
+}
+
+#[test]
+fn cbor_floats_have_their_width() {
+    let m = lower("h = float16\ns = float32\nd = float64\nf = float\n");
+    let (f16, f32, f64) = (&[0xf9, 0x3c, 0x00][..], &[0xfa, 0x3f, 0x80, 0, 0][..], &[0xfb, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0][..]);
+    for (ty, ok) in [("h", f16), ("s", f32), ("d", f64)] {
+        for b in [f16, f32, f64] {
+            let r = cbor_check(&m, ty, b);
+            assert_eq!(r.is_ok(), b == ok, "{ty} {b:02x?}: {r:?}");
+        }
+    }
+    for b in [f16, f32, f64] {
+        assert!(cbor_check(&m, "f", b).is_ok());
+    }
+    // 1.0 as float16 is 1.0.
+    assert_eq!(cddlc_validate::cbor::decode(f16).unwrap(), Value::SizedFloat(1.0, 16));
+}
+
+#[test]
+fn cbor_duplicate_keys_and_trailing_bytes_are_errors() {
+    use cddlc_validate::cbor::decode;
+    assert!(decode(&[0xa2, 0x61, 0x61, 0x01, 0x61, 0x61, 0x02]).unwrap_err().contains("duplicate map key \"a\""));
+    assert!(decode(&[0xa2, 0x01, 0x01, 0x01, 0x02]).unwrap_err().contains("duplicate map key 1"));
+    // 1 and "1" are different keys.
+    assert!(decode(&[0xa2, 0x01, 0x01, 0x61, 0x31, 0x02]).is_ok());
+    assert!(decode(&[0x01, 0x00]).unwrap_err().contains("after the data item"));
+    assert!(decode(&[0x82, 0x01]).unwrap_err().contains("truncated"));
+    // Indefinite lengths.
+    assert_eq!(decode(&[0x9f, 0x01, 0xff]).unwrap(), Value::Array(vec![Value::Uint(1)]));
+    assert_eq!(decode(&[0x7f, 0x61, 0x61, 0x61, 0x62, 0xff]).unwrap(), Value::Text("ab".into()));
+    // Embedded CBOR is decoded the same way.
+    let m = lower("r = bstr .cbor inner\ninner = { a: uint }\n");
+    let dup = [0x47, 0xa2, 0x61, 0x61, 0x01, 0x61, 0x61, 0x02];
+    assert!(cbor_check(&m, "r", &dup).unwrap_err().contains("duplicate map key"));
+}

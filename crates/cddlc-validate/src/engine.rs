@@ -290,9 +290,15 @@ impl<'m> Ctx<'m> {
             (Primitive::Any, _) => true,
             (Primitive::Bool, Value::Bool(_)) => true,
             (Primitive::Null, Value::Null) => true,
-            // Canonical `Value` has no distinct "undefined" — both JSON and
-            // ciborium's data model collapse it into Null. See lib.rs docs.
-            (Primitive::Undefined, Value::Null) => true,
+            (Primitive::Undefined, Value::Undefined) => true,
+            // JSON has no undefined; its null stands in.
+            (Primitive::Undefined, Value::Null) => !self.require_tags,
+            // A CBOR float is the width it was encoded at (RFC 8610 Appendix D:
+            // `float16 = #7.25`, ...); `float` is any of them.
+            (Primitive::Float16, Value::SizedFloat(_, w)) => *w == 16,
+            (Primitive::Float32, Value::SizedFloat(_, w)) => *w == 32,
+            (Primitive::Float64, Value::SizedFloat(_, w)) => *w == 64,
+            (Primitive::Float, Value::SizedFloat(..)) => true,
             (Primitive::Uint, Value::Uint(_)) => true,
             (Primitive::Int, Value::Uint(_) | Value::Int(_)) => true,
             (Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float,
@@ -490,7 +496,7 @@ impl<'m> Ctx<'m> {
         let n: Option<i128> = match value {
             Value::Uint(u) => Some(*u as i128),
             Value::Int(i)  => Some(*i as i128),
-            Value::Float(f) => Some(*f as i128),
+            Value::Float(f) | Value::SizedFloat(f, _) => Some(*f as i128),
             _ => None,
         };
         let Some(n) = n else {
@@ -517,7 +523,7 @@ impl<'m> Ctx<'m> {
         let n: Option<f64> = match value {
             Value::Uint(u) => Some(*u as f64),
             Value::Int(i)  => Some(*i as f64),
-            Value::Float(f) => Some(*f),
+            Value::Float(f) | Value::SizedFloat(f, _) => Some(*f),
             _ => None,
         };
         let Some(n) = n else {
@@ -572,28 +578,21 @@ impl<'m> Ctx<'m> {
         };
 
         if !is_seq {
-            match ciborium::from_reader::<ciborium::Value, _>(bytes.as_slice()) {
-                Ok(v) => self.check_typeref(inner, &Value::from(v), path),
+            match crate::cbor::decode(&bytes) {
+                Ok(v) => self.check_typeref(inner, &v, path),
                 Err(e) => self.err(path, format!("embedded CBOR did not decode: {e}")),
             }
             return;
         }
-
-        let mut cursor = bytes.as_slice();
-        let mut i = 0usize;
-        while !cursor.is_empty() {
-            match ciborium::from_reader::<ciborium::Value, _>(&mut cursor) {
-                Ok(v) => {
+        match crate::cbor::decode_seq(&bytes) {
+            Ok(items) => {
+                for (i, v) in items.iter().enumerate() {
                     path.push(PathSeg::Index(i));
-                    self.check_typeref(inner, &Value::from(v), path);
+                    self.check_typeref(inner, v, path);
                     path.pop();
-                    i += 1;
-                }
-                Err(e) => {
-                    self.err(path, format!("embedded CBOR sequence item {i} did not decode: {e}"));
-                    break;
                 }
             }
+            Err(e) => self.err(path, format!("embedded CBOR sequence did not decode: {e}")),
         }
     }
 }
@@ -637,7 +636,7 @@ fn literal_eq(lit: &LiteralValue, value: &Value) -> bool {
         (LiteralValue::Uint(a), Value::Int(b)) => *b >= 0 && (*b as u64) == *a,
         (LiteralValue::Int(a), Value::Int(b)) => a == b,
         (LiteralValue::Int(a), Value::Uint(b)) => *a >= 0 && (*a as u64) == *b,
-        (LiteralValue::Float(a), Value::Float(b)) => a == b,
+        (LiteralValue::Float(a), Value::Float(b) | Value::SizedFloat(b, _)) => a == b,
         (LiteralValue::Text(a), Value::Text(b)) => a == b,
         (LiteralValue::Bytes(a), Value::Bytes(b)) => a == b,
         (LiteralValue::Bytes(a), Value::Text(b)) => decode_base64url(b).is_some_and(|d| &d == a),
@@ -685,6 +684,11 @@ fn kind_name(v: &Value) -> &'static str {
         Value::Uint(_)    => "uint",
         Value::Int(_)     => "int",
         Value::Float(_)   => "float",
+        Value::SizedFloat(_, 16) => "float16",
+        Value::SizedFloat(_, 32) => "float32",
+        Value::SizedFloat(..) => "float64",
+        Value::Undefined  => "undefined",
+        Value::Simple(_)  => "simple value",
         Value::Text(_)    => "text",
         Value::Bytes(_)   => "bytes",
         Value::Array(_)   => "array",
