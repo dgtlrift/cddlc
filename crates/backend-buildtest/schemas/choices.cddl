@@ -5,3 +5,18 @@ reading = {
     stamp: #6.1(int / float),
     ? flag: bool / uint,
 }
+
+; A choice between maps
+shape = circle / square
+
+circle = { radius: float64 }
+
+square = { side: float64, ? label: tstr }
+
+; A choice between maps whose members overlap: a map is only the members
+; its schema gives it, so { x, y } is a `wide`, not a `narrow`
+span = narrow / wide
+
+narrow = { x: uint }
+
+wide = { x: uint, y: tstr }

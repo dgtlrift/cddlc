@@ -269,10 +269,14 @@ readings = [* sensor-reading]
 |---|---|---|
 | Primitives | `bool`, `uint`, `int`, `float32`, `float64`, `tstr`, `bstr`, `any` | `float16` maps to `float32`/`double` |
 | Named structs | `foo = { field: type, ? opt: type }` | Optional fields, integer map keys |
-| Type choices (enums) | `status = "ok" / "warn" / "error"` | String, integer, or mixed variants |
+| Type choices (enums) | `status = "ok" / "warn" / "error"`, `shape = circle / square` | String, integer, mixed or map variants; a map value decodes to the variant whose members it has |
 | Arrays | `readings = [* float32]`, `[+ T]`, `[n*m T]` | Capacity from pragma or `--max-array` |
 | Tables (open maps) | `props = { * tstr => any }`, `{ + uint => tstr }` | Any number of entries of the key and value types |
 | Maps with other entries | `device = { id: uint, * tstr => tstr }` | Named members plus an `extra` member holding the other entries; their keys are text |
+
+A map has only the members its schema gives it (RFC 8610 §3.5): generated decoders reject a key
+the schema doesn't define, as `cddlc validate` does. To accept other keys, say so in the schema
+with `* tstr => any`.
 | Type aliases | `device-id = tstr .size 16` | With optional constraints |
 | CBOR tags | `#6.1(uint)` | Tag verification on decode, emission on encode |
 | Generics | `pair<T> = [T, T]` | Monomorphised at use sites |

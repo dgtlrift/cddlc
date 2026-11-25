@@ -404,7 +404,7 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
         w.blank();
         emit_encode_fn(&mut w, def, name, opts);
         w.blank();
-        emit_decode_fn(&mut w, def, name, opts);
+        emit_decode_fn(&mut w, def, module, name, opts);
     }
 
     w.finish()
@@ -632,7 +632,7 @@ fn c_encode_call(p: &Primitive, expr: &str) -> String {
     }
 }
 
-fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &CodegenOptions) {
+fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     let type_name = to_snake_case(def.name());
     let pfx       = to_snake_case(mod_name);
     let pfx_upper = to_screaming_snake(mod_name);
@@ -706,6 +706,10 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
 
             // Zero-init the output
             w.line(&format!("memset(out, 0, sizeof({type_name}_t));"));
+            // Each required member must be read (dgtlrift/cddlc#102).
+            for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
+                w.line(&format!("bool have_{} = false;", to_snake_case(&f.name)));
+            }
             w.blank();
 
             w.line("while (!nanocbor_at_end(&map)) {");
@@ -725,6 +729,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                 emit_c_decode_field(w, &f.ty, &format!("out->{fname}"), &f.constraints, &fname, &pfx, &pfx_upper, "&map", opts);
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("out->{fname}_present = true;"));
+                }
+                if f.occurrence.is_required() {
+                    w.line(&format!("have_{fname} = true;"));
                 }
                 w.dedent();
                 w.line("} else");
@@ -747,7 +754,8 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                 w.dedent();
                 w.line("}");
             } else {
-                // Unknown field handler
+                // An unknown member: reported, and the map is rejected, as a map
+                // has only the members its schema gives it (dgtlrift/cddlc#102).
                 w.line("{");
                 w.indent();
                 w.line("if (cb && cb->on_unknown_field) {");
@@ -756,7 +764,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                 w.line("cb->on_unknown_field(ctx, uk);");
                 w.dedent();
                 w.line("}");
-                w.line("nanocbor_skip(&map);");
+                w.line("return -1;");
                 w.dedent();
                 w.line("}");
             }
@@ -765,28 +773,17 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
             w.line("}"); // while
 
             // Check required fields
-            for f in &s.fields {
-                if matches!(f.occurrence, Occurrence::Required) {
-                    let fname = to_snake_case(&f.name);
-                    // Simple check: for numeric fields, can't easily detect missing
-                    // For pointer fields, check for NULL
-                    match &f.ty {
-                        TypeRef::Primitive(Primitive::Tstr | Primitive::Bstr) => {
-                            w.line(&format!("if (!out->{fname}.ptr) {{"));
-                            w.indent();
-                            w.line(&format!(
-                                "if (cb && cb->on_error) cb->on_error(ctx, ({pfx}_field_err_t){{{pfx_upper}_ERR_MISSING, {:?}, 0}});",
-                                f.name.as_str()
-                            ));
-                            w.line("return -1;");
-                            w.dedent();
-                            w.line("}");
-                        }
-                        _ => {}
-                    }
-                }
+            for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
+                w.line(&format!("if (!have_{}) {{", to_snake_case(&f.name)));
+                w.indent();
+                w.line(&format!(
+                    "if (cb && cb->on_error) cb->on_error(ctx, ({pfx}_field_err_t){{{pfx_upper}_ERR_MISSING, {:?}, 0}});",
+                    f.name.as_str()
+                ));
+                w.line("return -1;");
+                w.dedent();
+                w.line("}");
             }
-
             w.line("nanocbor_leave_container(dec, &map);");
             w.line("return NANOCBOR_OK;");
         }
@@ -798,6 +795,26 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &Co
                 w.line("uint32_t tag;");
                 w.line("if (nanocbor_get_tag(dec, &tag) < 0) return -1;");
                 w.line(&format!("if (tag != {}) return -1;", tag.0));
+                w.dedent();
+                w.line("}");
+            }
+
+            // A variant of a map or array type: the first whose decoder reads
+            // the value, each tried on a copy of the decoder (dgtlrift/cddlc#102).
+            for v in &e.variants {
+                let TypeRef::Named(n) = &v.ty else { continue };
+                if !matches!(module.get(n), Some(TypeDef::Struct(_) | TypeDef::Array(_) | TypeDef::Map(_))) {
+                    continue;
+                }
+                let vname  = to_snake_case(&v.name);
+                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                w.line("{");
+                w.indent();
+                w.line("nanocbor_value_t probe = *dec;");
+                w.line(&format!(
+                    "if ({pfx}_{}_decode(&probe, &out->value.{vname}, NULL, NULL) == 0) {{ *dec = probe; out->tag = {vconst}; return NANOCBOR_OK; }}",
+                    to_snake_case(n)
+                ));
                 w.dedent();
                 w.line("}");
             }
@@ -1846,6 +1863,14 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
     w.indent();
     w.line("if (!cJSON_IsObject(j)) return false;");
     w.line("memset(out, 0, sizeof(*out));");
+    // A map has only the members its schema gives it (dgtlrift/cddlc#102).
+    if s.rest.is_none() {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("strcmp(k->string, {:?}) == 0", f.name.as_str())).collect();
+        w.line(&format!(
+            "{{ cJSON* k; cJSON_ArrayForEach(k, j) {{ if (!({})) return false; }} }}",
+            if named.is_empty() { "0".into() } else { named.join(" || ") }
+        ));
+    }
     for f in &s.fields {
         let fname = f.name.replace('-', "_");
         let key   = f.name.as_str();
@@ -2012,6 +2037,9 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
                 w.line(&format!("return cJSON_CreateNumber((double)obj->value.{vsnake});")),
             TypeRef::Primitive(Primitive::Bool) =>
                 w.line(&format!("return cJSON_CreateBool(obj->value.{vsnake});")),
+            // A variant of a named type (dgtlrift/cddlc#102).
+            TypeRef::Named(n) =>
+                w.line(&format!("return {mod_name}_{}_to_json(&obj->value.{vsnake});", n.replace('-', "_"))),
             _ => w.line("return cJSON_CreateNull();"),
         }
         w.dedent();
@@ -2024,6 +2052,16 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
 
     w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
     w.indent();
+    // A variant of a map or array type: the first whose decoder reads the value.
+    for v in &e.variants {
+        let TypeRef::Named(n) = &v.ty else { continue };
+        let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+        let vsnake = v.name.replace('-', "_");
+        w.line(&format!(
+            "if ((cJSON_IsObject(j) || cJSON_IsArray(j)) && {mod_name}_{}_from_json(j, &out->value.{vsnake})) {{ out->tag = {vconst}; return true; }}",
+            n.replace('-', "_")
+        ));
+    }
     w.line("if (cJSON_IsString(j)) {");
     w.indent();
     w.line("const char* s = cJSON_GetStringValue(j);");

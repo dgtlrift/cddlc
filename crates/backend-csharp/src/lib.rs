@@ -146,17 +146,17 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
 
     // Emit each type
     for (_, def) in &module.types {
-        emit_type(&mut w, def, opts);
+        emit_type(&mut w, def, &ns, opts);
         w.blank();
     }
 
     w.finish()
 }
 
-fn emit_type(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_type(w: &mut IndentWriter, def: &TypeDef, ns: &str, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum(w, e, opts),
+        TypeDef::Enum(e)   => emit_enum(w, e, ns, opts),
         TypeDef::Array(a)  => emit_array(w, a, opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
         TypeDef::Map(m)    => emit_map(w, m, opts),
@@ -171,6 +171,10 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
 
     let type_name = to_pascal_case(&s.name);
 
+    // A map has only the members its schema gives it (dgtlrift/cddlc#102).
+    if opts.is_json() && s.rest.is_none() {
+        w.line("[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]");
+    }
     w.line(&format!("public sealed class {type_name}"));
     w.line("{");
     w.indent();
@@ -335,7 +339,8 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.indent();
     match &s.rest {
         Some(r) => w.line(&format!("rest[key] = {};", cs_decode_expr(&r.val_ty, opts))),
-        None => w.line("reader.SkipValue();"),
+        // A map has only the members its schema gives it (dgtlrift/cddlc#102).
+        None => w.line(&format!("throw new CborContentException($\"{}: unknown member {{key}}\");", to_pascal_case(&s.name))),
     }
     w.line("break;");
     w.dedent();
@@ -367,9 +372,9 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
 
 // ── Enum (sealed class hierarchy) ─────────────────────────────────────────────
 
-fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions) {
     if opts.is_json() {
-        emit_enum_json(w, e);
+        emit_enum_json(w, e, ns);
         return;
     }
     emit_doc_comment(w, e.doc.as_deref());
@@ -417,7 +422,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                 w.line("}");
             }
             TypeRef::Named(n) => {
-                let ct = to_pascal_case(n);
+                // Qualified: inside the variant class `Circle`, `Circle` is the class
+                // itself, not the type (dgtlrift/cddlc#102).
+                let ct = format!("global::{ns}.{}", to_pascal_case(n));
                 w.line(&format!("public sealed class {vname} : {type_name}"));
                 w.line("{");
                 w.indent();
@@ -502,6 +509,18 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.line("}");
     }
 
+    // A variant of a named type: the first whose decoder reads the value.
+    let named: Vec<_> = e.variants.iter().filter(|v| matches!(v.ty, TypeRef::Named(_))).collect();
+    if !named.is_empty() {
+        w.line("var encoded = reader.ReadEncodedValue();");
+        for v in named {
+            let TypeRef::Named(n) = &v.ty else { unreachable!() };
+            w.line(&format!(
+                "try {{ return new {}(global::{ns}.{}.Decode(new CborReader(encoded))); }} catch (Exception) {{ /* next variant */ }}",
+                to_pascal_case(&v.name), to_pascal_case(n)
+            ));
+        }
+    }
     w.line(&format!("throw new CborContentException(\"Cannot decode {type_name}\");"));
 
     w.dedent();
@@ -511,7 +530,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     w.line("}");
 }
 
-fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef) {
+fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str) {
     emit_doc_comment(w, e.doc.as_deref());
     if e.deprecated { w.line("[Obsolete]"); }
 
@@ -547,7 +566,9 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef) {
                 w.line("}");
             }
             TypeRef::Named(n) => {
-                let ct = to_pascal_case(n);
+                // Qualified: inside the variant class `Circle`, `Circle` is the class
+                // itself, not the type (dgtlrift/cddlc#102).
+                let ct = format!("global::{ns}.{}", to_pascal_case(n));
                 w.line(&format!("public sealed class {vname} : {type_name}"));
                 w.line("{");
                 w.indent();
@@ -583,7 +604,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef) {
                 w.line(&format!("public static {vname} Create{vname}({ct} value) => new(value);"));
             }
             TypeRef::Named(n) => {
-                let ct = to_pascal_case(n);
+                let ct = format!("global::{ns}.{}", to_pascal_case(n));
                 w.line(&format!("public static {vname} Create{vname}({ct} value) => new(value);"));
             }
             _ => {
@@ -644,6 +665,14 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef) {
         }
         w.dedent();
         w.line("}");
+    }
+    // A variant of a named type: the first whose decoder reads the value.
+    for v in e.variants.iter().filter(|v| matches!(v.ty, TypeRef::Named(_))) {
+        let TypeRef::Named(n) = &v.ty else { unreachable!() };
+        w.line(&format!(
+            "try {{ return new {}(global::{ns}.{}.FromJson(data)); }} catch (Exception) {{ /* next variant */ }}",
+            to_pascal_case(&v.name), to_pascal_case(n)
+        ));
     }
     w.line(&format!("throw new JsonException(\"Cannot decode {type_name}\");"));
     w.dedent();

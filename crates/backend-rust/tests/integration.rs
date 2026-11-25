@@ -260,9 +260,10 @@ fn test_required_field_missing_errors() {
 }
 
 #[test]
-fn test_unknown_field_skipped() {
+fn test_unknown_field_rejected() {
+    // A map has only the members its schema gives it (dgtlrift/cddlc#102).
     let g = compile("msg = { id: uint }");
-    assert!(g.lib_rs.contains("d.skip()?"));
+    assert!(g.lib_rs.contains("_ => { return Err(DecodeError::message(\"msg: unknown member\")); }"), "{}", g.lib_rs);
 }
 
 #[test]

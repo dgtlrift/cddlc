@@ -633,8 +633,12 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             w.line("}");
         }
         Some(_) => w.line("_ => { rest.insert(key.to_string(), d.decode()?); }"),
-        // Unknown fields — permissive: skip with no error
-        None => w.line("_ => { d.skip()?; }"),
+        // A map has only the members its schema gives it (RFC 8610 §3.5;
+        // dgtlrift/cddlc#102), so a choice of maps decodes to the right one.
+        None => w.line(&format!(
+            "_ => {{ return Err(DecodeError::message(\"{}: unknown member\")); }}",
+            s.name
+        )),
     }
     w.dedent();
     w.line("}"); // match key
@@ -1646,7 +1650,7 @@ fn emit_roundtrip_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     for (_, def) in &module.types {
         match def {
             TypeDef::Struct(s) => emit_struct_roundtrip(&mut w, s, module, opts),
-            TypeDef::Enum(e)   => emit_enum_roundtrip(&mut w, e, opts),
+            TypeDef::Enum(e)   => emit_enum_roundtrip(&mut w, e, module, opts),
             TypeDef::Alias(a)  => emit_alias_roundtrip(&mut w, a, opts),
             TypeDef::Array(a)  => emit_array_roundtrip(&mut w, a, opts),
             TypeDef::Map(m)    => emit_map_roundtrip(&mut w, m, opts),
@@ -1728,7 +1732,12 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
     w.line("}");
 }
 
-fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+/// Whether `name` is a struct encoded as a map.
+fn is_map_struct(name: &str, module: &IrModule) -> bool {
+    matches!(module.get(name), Some(TypeDef::Struct(s)) if s.encoding == cddlc_ir::StructEncoding::Map)
+}
+
+fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&e.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&e.name));
     let mut used_tests = HashSet::from([format!("{test_name}_default")]);
@@ -1777,6 +1786,9 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions)
                 format!("{}::{}(false)", type_name, vname),
             TypeRef::Primitive(Primitive::Null) =>
                 format!("{}::{}", type_name, vname),
+            // A variant of a map type (dgtlrift/cddlc#102).
+            TypeRef::Named(n) if is_map_struct(n, module) =>
+                format!("{}::{}({}::default())", type_name, vname, to_pascal_case(n)),
             _ => continue,
         };
 
@@ -2355,6 +2367,10 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
         w.line("#[derive(Debug, Clone, PartialEq, Default)]");
     } else {
         w.line("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]");
+        // A map has only the members its schema gives it (dgtlrift/cddlc#102).
+        if s.rest.is_none() {
+            w.line("#[serde(deny_unknown_fields)]");
+        }
     }
     w.line(&format!("pub struct {} {{", to_pascal_case(&s.name)));
     w.indent();
@@ -2910,6 +2926,9 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
             TypeRef::Primitive(Primitive::Int)  => format!("{}::{}(0i64)", type_name, vname),
             TypeRef::Primitive(Primitive::Bool) => format!("{}::{}(false)", type_name, vname),
             TypeRef::Primitive(Primitive::Null) => format!("{}::{}", type_name, vname),
+            // A variant of a map type (dgtlrift/cddlc#102).
+            TypeRef::Named(n) if is_map_struct(n, module) =>
+                format!("{}::{}({}::default())", type_name, vname, to_pascal_case(n)),
             _ => continue,
         };
 

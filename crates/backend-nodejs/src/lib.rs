@@ -818,6 +818,15 @@ fn emit_struct_decode_json(
     w.dedent();
     w.line("}");
     w.line("const m = raw as Record<string, unknown>;");
+    // A map has only the members its schema gives it (RFC 8610 §3.5;
+    // dgtlrift/cddlc#102), unless it has other entries.
+    if s.rest.is_none() {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        w.line(&format!(
+            "for (const key of Object.keys(m)) if (![{}].includes(key)) throw new Error(`{iname}: unknown member ${{key}}`);",
+            named.join(", ")
+        ));
+    }
     w.blank();
 
     for f in &s.fields {
@@ -887,6 +896,15 @@ fn emit_struct_decode_cbor(
     w.dedent();
     w.line("}");
     w.line("const m = map as Record<string, unknown>;");
+    // A map has only the members its schema gives it (RFC 8610 §3.5;
+    // dgtlrift/cddlc#102), unless it has other entries.
+    if s.rest.is_none() {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        w.line(&format!(
+            "for (const key of Object.keys(m)) if (![{}].includes(key)) throw new Error(`{iname}: unknown member ${{key}}`);",
+            named.join(", ")
+        ));
+    }
     w.blank();
 
     for f in &s.fields {
@@ -1320,28 +1338,25 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
     }
-    if opts.is_json() {
-        // Map and array variants: the first whose decoder accepts the value.
-        let named: Vec<&EnumVariant> = e
-            .variants
-            .iter()
-            .filter(|v| matches!(&v.ty, TypeRef::Named(_)))
-            .collect();
-        if !named.is_empty() {
-            w.line("if (typeof inner === 'object' && inner !== null) {");
-            w.indent();
-            w.line("const bytes = new TextEncoder().encode(JSON.stringify(inner));");
-            for v in named {
-                let TypeRef::Named(n) = &v.ty else {
-                    unreachable!()
-                };
-                let vname = to_pascal_case(&v.name);
-                let df = decode_fn_name(n);
-                w.line(&format!("try {{ return {{ kind: {vname:?}, value: {df}(bytes) }}; }} catch {{ /* next variant */ }}"));
-            }
-            w.dedent();
-            w.line("}");
-        }
+    // Variants of a named type (a map, an array, ...): the first whose decoder
+    // accepts the value (dgtlrift/cddlc#102).
+    let named: Vec<&EnumVariant> = e
+        .variants
+        .iter()
+        .filter(|v| matches!(&v.ty, TypeRef::Named(_)))
+        .collect();
+    if !named.is_empty() && opts.is_json() {
+        w.line("const bytes = new TextEncoder().encode(JSON.stringify(inner));");
+    }
+    for v in named {
+        let TypeRef::Named(n) = &v.ty else { unreachable!() };
+        let vname = to_pascal_case(&v.name);
+        let value = if opts.is_json() {
+            format!("{}(bytes)", decode_fn_name(n))
+        } else {
+            format!("{}(inner)", from_cbor_fn_name(n))
+        };
+        w.line(&format!("try {{ return {{ kind: {vname:?}, value: {value} }}; }} catch {{ /* next variant */ }}"));
     }
 
     w.line(&format!("throw new Error(`Cannot decode {type_name}`);"));
@@ -2044,7 +2059,7 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
 fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct_tests(w, s, module, opts),
-        TypeDef::Enum(e) => emit_enum_tests(w, e, opts),
+        TypeDef::Enum(e) => emit_enum_tests(w, e, module, opts),
         TypeDef::Alias(a) => emit_alias_tests(w, a, module, opts),
         TypeDef::Array(a) => emit_array_tests(w, a, opts),
         TypeDef::Map(m) => emit_map_tests(w, m, module, opts),
@@ -2151,7 +2166,7 @@ fn ts_rest_value(s: &StructDef, module: &IrModule, opts: &CodegenOptions, explic
 }
 
 /// A test value for one enum variant.
-fn ts_enum_variant_value(e: &EnumDef, v: &EnumVariant, opts: &CodegenOptions) -> String {
+fn ts_enum_variant_value(e: &EnumDef, v: &EnumVariant, module: &IrModule, opts: &CodegenOptions, depth: usize) -> String {
     let type_name = to_pascal_case(&e.name);
     let vname = to_pascal_case(&v.name);
     let n = if opts.is_json() { "" } else { "n" };
@@ -2170,11 +2185,16 @@ fn ts_enum_variant_value(e: &EnumDef, v: &EnumVariant, opts: &CodegenOptions) ->
         TypeRef::Primitive(
             Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float,
         ) => format!("{{ kind: {vname:?}, value: 1.5 }} as {type_name}"),
+        // A variant of a named type holds a value of it (dgtlrift/cddlc#102).
+        TypeRef::Named(n) => format!(
+            "{{ kind: {vname:?}, value: {} }} as {type_name}",
+            ts_named_value(n, module, opts, false, depth + 1)
+        ),
         _ => format!("{{ kind: {vname:?} }} as {type_name}"),
     }
 }
 
-fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&e.name);
     let fname = encode_fn_name(&e.name);
     let dname = decode_fn_name(&e.name);
@@ -2184,7 +2204,7 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
     for v in &e.variants {
         let vname = to_pascal_case(&v.name);
-        let construct = ts_enum_variant_value(e, v, opts);
+        let construct = ts_enum_variant_value(e, v, module, opts, 0);
         w.line(&format!("test('roundtrip {vname}', () => {{"));
         w.indent();
         w.line(&format!("const original: {type_name} = {construct};"));
@@ -2384,7 +2404,7 @@ fn ts_named_value(name: &str, module: &IrModule, opts: &CodegenOptions, explicit
         Some(TypeDef::Enum(e)) => e
             .variants
             .first()
-            .map(|v| ts_enum_variant_value(e, v, opts))
+            .map(|v| ts_enum_variant_value(e, v, module, opts, depth + 1))
             .unwrap_or(fallback),
         Some(TypeDef::Alias(a)) => {
             let inner = ts_valid_constrained_value(&a.constraints, &a.ty, module, opts, depth + 1);

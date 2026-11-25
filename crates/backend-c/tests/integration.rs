@@ -297,10 +297,10 @@ fn test_struct_decode_map_entry() {
 }
 
 #[test]
-fn test_unknown_field_skipped() {
+fn test_unknown_field_rejected() {
+    // An unknown member is reported, then the map is rejected (dgtlrift/cddlc#102).
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("nanocbor_skip"));
-    assert!(g.source.contains("on_unknown_field"));
+    assert!(g.source.contains("cb->on_unknown_field(ctx, uk);\n            }\n            return -1;"), "{}", g.source);
 }
 
 #[test]

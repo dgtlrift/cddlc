@@ -511,7 +511,7 @@ fn test_json_choice_decodes_maps_and_numbers() {
     );
     assert!(
         g.source
-            .contains("typeof inner === 'object' && inner !== null"),
+            .contains("const bytes = new TextEncoder().encode(JSON.stringify(inner));"),
         "{}",
         g.source
     );

@@ -819,6 +819,10 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             }
             w.line("nanocbor_value_t map;");
             w.line("if (nanocbor_enter_map(dec, &map) < 0) return -1;");
+            // Each required member must be read (dgtlrift/cddlc#102).
+            for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
+                w.line(&format!("bool have_{} = false;", to_snake_case(&f.name)));
+            }
             w.line("while (!nanocbor_at_end(&map)) {");
             w.indent();
             w.line("const uint8_t *key_ptr; size_t key_len;");
@@ -838,6 +842,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                     w.line(&format!("out.{fname} = _v;"));
                 } else {
                     emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}"), &f.constraints, fkey, "&map", opts);
+                }
+                if f.occurrence.is_required() {
+                    w.line(&format!("have_{fname} = true;"));
                 }
                 w.dedent();
                 w.line("} else");
@@ -861,15 +868,20 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                         w.line(&format!("out.{rname}[out.{rname}_count++] = e;"));
                     }
                 }
+                // An unknown member: reported, and the map is rejected, as a map
+                // has only the members its schema gives it (dgtlrift/cddlc#102).
                 None => {
                     w.line("if (cb.on_unknown_field) cb.on_unknown_field(ctx, key);");
-                    w.line("nanocbor_skip(&map);");
+                    w.line("return -1;");
                 }
             }
             w.dedent();
             w.line("}");
             w.dedent();
             w.line("}");
+            for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
+                w.line(&format!("if (!have_{}) return -1; /* missing member */", to_snake_case(&f.name)));
+            }
             w.line("nanocbor_leave_container(dec, &map);");
             w.line("return NANOCBOR_OK;");
         }
@@ -1948,6 +1960,14 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("{ctype} out{{}};"));
+            // A map has only the members its schema gives it (dgtlrift/cddlc#102).
+            if s.rest.is_none() {
+                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", f.name.as_str())).collect();
+                w.line(&format!(
+                    "for (const auto& [key, value] : j.items()) if (!({})) throw std::invalid_argument(\"{ctype}: unknown member \" + key);",
+                    if named.is_empty() { "false".into() } else { named.join(" || ") }
+                ));
+            }
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
                 let key   = f.name.as_str();
