@@ -115,3 +115,9 @@ fn floats_are_written_at_their_width() {
     assert_eq!(bytes, [0x84, 0xf9, 0, 0, 0xfa, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(cddlc_validate::cbor::decode(&[0xf9, 0x3c, 0x00]).map(|v| to_cbor(&v)), Ok(vec![0xf9, 0x3c, 0x00]));
 }
+
+#[test]
+fn repeated_group_members_sit_inline() {
+    check_all("groups", "r = [ + ( a: uint, b: tstr ) ]", SampleOptions::default());
+    assert_eq!(diag("r = [ + ( a: uint, b: tstr ) ]", "r", SampleOptions::default()), r#"[0, "text"]"#);
+}

@@ -1330,7 +1330,19 @@ fn emit_array(w: &mut IndentWriter, cx: &Cx, a: &ArrayDef) {
     w.indent();
     w.line("validate();");
     w.line("List<Object> l = new ArrayList<>();");
-    w.line(&format!("for ({elem} x : this.items) l.add({});", to_raw(&a.element, "x")));
+    // A repeated group: each record's members, inline (dgtlrift/cddlc#90).
+    let flat = match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match cx.module.get(n) {
+            Some(TypeDef::Struct(r)) => Some(r.fields.len()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if flat.is_some() {
+        w.line(&format!("for ({elem} x : this.items) l.addAll((List<?>) {});", to_raw(&a.element, "x")));
+    } else {
+        w.line(&format!("for ({elem} x : this.items) l.add({});", to_raw(&a.element, "x")));
+    }
     let ret = match a.tagged { Some(t) => format!("Cddl.tag({}L, l)", t.0), None => "l".into() };
     w.line(&format!("return {ret};"));
     w.dedent();
@@ -1341,7 +1353,16 @@ fn emit_array(w: &mut IndentWriter, cx: &Cx, a: &ArrayDef) {
     w.indent();
     let raw = match a.tagged { Some(t) => format!("Cddl.untag(raw, {}L, {})", t.0, java_str(&class)), None => "raw".into() };
     w.line(&format!("List<{elem}> out = new ArrayList<>();"));
-    w.line(&format!("for (Object x : Cddl.asList({raw}, {})) out.add({});", java_str(&class), from_raw(&a.element, "x", &format!("{class} item"), None)));
+    if let Some(n) = flat {
+        w.line(&format!("List<Object> all = Cddl.asList({raw}, {});", java_str(&class)));
+        w.line(&format!("if (all.size() % {n} != 0) throw Cddl.invalid({}, \"a partial group\");", java_str(&class)));
+        w.line(&format!(
+            "for (int i = 0; i < all.size(); i += {n}) out.add({});",
+            from_raw(&a.element, &format!("all.subList(i, i + {n})"), &format!("{class} item"), None)
+        ));
+    } else {
+        w.line(&format!("for (Object x : Cddl.asList({raw}, {})) out.add({});", java_str(&class), from_raw(&a.element, "x", &format!("{class} item"), None)));
+    }
     w.line(&format!("return new {class}(out);"));
     w.dedent();
     w.line("}");

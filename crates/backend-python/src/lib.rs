@@ -251,7 +251,7 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
 
     for (_, def) in &module.types {
-        emit_type(&mut w, def, opts);
+        emit_type(&mut w, def, module, opts);
         w.blank();
         w.blank();
     }
@@ -302,11 +302,11 @@ fn module_tags(module: &IrModule) -> Vec<u64> {
     out
 }
 
-fn emit_type(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, s, opts),
         TypeDef::Enum(e)   => emit_enum(w, e, opts),
-        TypeDef::Array(a)  => emit_array(w, a, opts),
+        TypeDef::Array(a)  => emit_array(w, a, flat_width(a, module), opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
         TypeDef::Map(m)    => emit_map(w, m, opts),
     }
@@ -812,7 +812,19 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
 // ── Array ─────────────────────────────────────────────────────────────────────
 
-fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
+/// For an array of a repeated group, the number of members in the group,
+/// which sit inline in the array (dgtlrift/cddlc#90).
+fn flat_width(a: &ArrayDef, module: &IrModule) -> Option<usize> {
+    match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match module.get(n) {
+            Some(TypeDef::Struct(s)) => Some(s.fields.len()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn emit_array(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
     if a.deprecated { w.line("# @deprecated"); }
 
@@ -828,7 +840,11 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
 
     w.line("def _to_raw(self) -> Any:");
     w.indent();
-    let raw = format!("[{} for item in self.items]", py_to_raw(&a.element, "item", opts));
+    let raw = match flat {
+        // A repeated group: each record's members, inline.
+        Some(_) => format!("[m for item in self.items for m in {}]", py_to_raw(&a.element, "item", opts)),
+        None => format!("[{} for item in self.items]", py_to_raw(&a.element, "item", opts)),
+    };
     return_tagged(w, a.tagged, &raw, opts);
     w.dedent();
     w.blank();
@@ -841,8 +857,17 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.indent();
     w.line(&format!("raise ValueError(\"{class_name}: expected an array\")"));
     w.dedent();
-    let conv = py_from_raw(&a.element, "item", &format!("{class_name} item"), opts);
-    w.line(&format!("return cls(items=[{conv} for item in raw])"));
+    if let Some(n) = flat {
+        w.line(&format!("if len(raw) % {n} != 0:"));
+        w.indent();
+        w.line(&format!("raise ValueError(\"{class_name}: a partial group\")"));
+        w.dedent();
+        let conv = py_from_raw(&a.element, &format!("raw[i:i + {n}]"), &format!("{class_name} item"), opts);
+        w.line(&format!("return cls(items=[{conv} for i in range(0, len(raw), {n})])"));
+    } else {
+        let conv = py_from_raw(&a.element, "item", &format!("{class_name} item"), opts);
+        w.line(&format!("return cls(items=[{conv} for item in raw])"));
+    }
     w.dedent();
     w.blank();
     emit_encode_decode(w, &class_name);

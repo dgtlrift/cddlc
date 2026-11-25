@@ -242,6 +242,11 @@ pub struct ArrayDef {
     pub name:       SmolStr,
     pub element:    TypeRef,
     pub occurrence: Occurrence,
+    /// A repeated group (`[* (a: uint, b: tstr)]`, RFC 8610 §2.1): `element`
+    /// names a record (a [`StructDef`] with [`StructEncoding::Array`]) whose
+    /// members sit inline in this array, with no array of their own, so
+    /// `[1, "x", 2, "y"]` holds two elements. Its members are all required.
+    pub flat:       bool,
     pub tagged:     Option<CborTag>,
     pub doc:        Option<String>,
     pub deprecated: bool,

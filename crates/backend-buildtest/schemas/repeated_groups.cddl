@@ -1,0 +1,15 @@
+; Reference schema: arrays of a repeated group (RFC 8610 §2.1).
+; The group's members sit inline: `pairs` is ["a", 1, "b", 2].
+
+; @capacity 8
+pairs = [+ (name: tstr, value: int)]
+
+point = (x: int, y: int)
+
+; @capacity 4
+path = [* point]
+
+trace = {
+  id: uint,
+  steps: [+ (at: uint, ok: bool)],
+}

@@ -215,7 +215,16 @@ impl Sampler<'_> {
             }
             TypeDef::Array(a) => {
                 let n = if self.height(&a.element, &[]) < INF { self.count(&a.occurrence, depth) } else { 0 };
-                Value::Array((0..n).map(|_| self.typed(&a.element, &[], depth + 1)).collect::<Result<_, _>>()?)
+                let items: Vec<Value> = (0..n).map(|_| self.typed(&a.element, &[], depth + 1)).collect::<Result<_, _>>()?;
+                // A repeated group's members sit inline (dgtlrift/cddlc#90).
+                if a.flat {
+                    Value::Array(items.into_iter().flat_map(|v| match v {
+                        Value::Array(members) => members,
+                        other => vec![other],
+                    }).collect())
+                } else {
+                    Value::Array(items)
+                }
             }
             TypeDef::Map(m) => {
                 let n = self.count(&m.occurrence, depth);

@@ -103,7 +103,11 @@ impl<'m> Ctx<'m> {
             }
             TypeDef::Array(a) => {
                 if let Some(payload) = self.unwrap_tag(a.tagged, value, path) {
-                    self.check_array(&a.element, &a.occurrence, &a.name, payload, path);
+                    if a.flat {
+                        self.check_flat_array(a, payload, path);
+                    } else {
+                        self.check_array(&a.element, &a.occurrence, &a.name, payload, path);
+                    }
                 }
             }
             TypeDef::Map(m) => {
@@ -215,6 +219,36 @@ impl<'m> Ctx<'m> {
             path.push(PathSeg::Index(i));
             self.check_typeref(element, item, path);
             path.pop();
+        }
+    }
+
+    /// An array of a repeated group (`[* (a: uint, b: tstr)]`): each run of
+    /// the group's members, in turn, is one record (dgtlrift/cddlc#90).
+    fn check_flat_array(&mut self, a: &cddlc_ir::ArrayDef, value: &Value, path: &mut Vec<PathSeg>) {
+        let Value::Array(items) = value else {
+            self.err(path, format!("expected an array for '{}', found {}", a.name, kind_name(value)));
+            return;
+        };
+        let module = self.module;
+        let Some(TypeDef::Struct(rec)) = (match &a.element { TypeRef::Named(n) => module.get(n), _ => None }) else {
+            self.err(path, format!("'{}' names no record for its group", a.name));
+            return;
+        };
+        let width = rec.fields.len().max(1);
+        if items.len() % width != 0 {
+            self.err(path, format!(
+                "'{}' repeats a group of {width} items, but holds {} item(s)", a.name, items.len()
+            ));
+            return;
+        }
+        check_cardinality(&a.occurrence, items.len() / width, &a.name, self, path);
+        for (i, chunk) in items.chunks(width).enumerate() {
+            for (j, (field, v)) in rec.fields.iter().zip(chunk).enumerate() {
+                path.push(PathSeg::Index(i * width + j));
+                self.check_typeref(&field.ty, v, path);
+                self.check_constraints(&field.constraints, &field.ty, v, path);
+                path.pop();
+            }
         }
     }
 
