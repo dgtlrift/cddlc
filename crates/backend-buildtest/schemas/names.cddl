@@ -1,0 +1,21 @@
+; CDDL names that aren't identifiers in most languages: sockets ($, $$),
+; dots and an @ (dgtlrift/cddlc#123).
+
+session.request = {
+  id: uint,
+  value: $value,
+  status: session.status,
+  owner: @owner,
+  $$session-ext,
+}
+
+$value /= uint
+$value /= tstr
+
+session.status = "ok" / "failed"
+
+@owner = tstr .size (1..16)
+
+$$session-ext //= (
+  ? note: tstr,
+)

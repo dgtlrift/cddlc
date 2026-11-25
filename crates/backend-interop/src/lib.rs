@@ -559,6 +559,15 @@ fn valid_alias_val(constraints: &[Constraint], ty: &TypeRef) -> FieldVal {
                     return FieldVal::Bytes(vec![0u8; *n]),
                 _ => {}
             },
+            // The shortest size allowed: `tstr .size (1..16)` is "a".
+            Constraint::SizeRange { min, .. } => {
+                let n = min.unwrap_or(0);
+                match ty {
+                    TypeRef::Primitive(Primitive::Tstr) => return FieldVal::Text("a".repeat(n)),
+                    TypeRef::Primitive(Primitive::Bstr) => return FieldVal::Bytes(vec![0u8; n]),
+                    _ => {}
+                }
+            }
             Constraint::ValueRangeInt { min, .. } => {
                 if let Some(lo) = min { return FieldVal::Int(*lo); }
             }
@@ -642,7 +651,7 @@ fn emit_cbor_hex(vectors: &[TestVector], opts: &CodegenOptions) -> String {
 
 fn emit_rust_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -> String {
     let mut w = IndentWriter::new(4);
-    let crate_name = format!("{}_cbor", schema.replace('-', "_"));
+    let crate_name = format!("{}_cbor", to_snake_case(&schema));
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
         w.line(&l);
@@ -660,7 +669,7 @@ fn emit_rust_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions
         let test_name = format!(
             "interop_{}_{}",
             to_snake_case(&v.type_name),
-            v.description.replace(' ', "_").replace('-', "_")
+            to_snake_case(&v.description.replace(' ', "_"))
         );
         let bytes = v.cbor_bytes.iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
         w.line("#[test]");
@@ -1065,7 +1074,7 @@ fn emit_nodejs_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
 // ── Python harness ────────────────────────────────────────────────────────────
 
 fn emit_python_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -> String {
-    let mod_name = schema.replace('-', "_");
+    let mod_name = to_snake_case(&schema);
     let mut w    = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Hash) {
@@ -1108,7 +1117,7 @@ fn emit_python_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
         w.indent();
 
         for v in &type_vecs {
-            let test_name = format!("test_{}", v.description.replace(' ', "_").replace('-', "_"));
+            let test_name = format!("test_{}", to_snake_case(&v.description.replace(' ', "_")));
             let hex = v.cbor_hex();
 
             w.line(&format!("def {test_name}(self):"));

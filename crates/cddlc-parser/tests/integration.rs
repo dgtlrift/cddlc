@@ -677,6 +677,16 @@ fn a_comment_above_the_first_member_documents_it() {
     assert_eq!(member_docs("r = {\n  ; Header.\n\n  id: uint,\n}\n"), [vec![None]]);
 }
 
+// ── Names (dgtlrift/cddlc#123) ───────────────────────────────────────────────
+
+#[test]
+fn names_can_hold_at_and_dollar_signs_and_dots() {
+    // RFC 8610: `EALPHA = ALPHA / "@" / "_" / "$"`.
+    let m = parse("@owner = tstr\n$val /= uint\n$$ext //= ( a: 1 )\nsession.status = 1\na$b@c = 2\n");
+    let names: Vec<&str> = m.rules.iter().map(|r| r.node.name.node.as_str()).collect();
+    assert_eq!(names, ["@owner", "$val", "$$ext", "session.status", "a$b@c"]);
+}
+
 // ── Optional commas and error positions (dgtlrift/cddlc#108) ─────────────────
 
 /// The entries of each alternative of the map, array or group `r`.

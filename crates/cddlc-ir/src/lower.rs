@@ -800,8 +800,15 @@ impl<'m> LowerCtx<'m> {
         in_array: bool,
     ) -> Result<TypeDef, IrError> {
         let mut variants = Vec::new();
+        let tags = if in_array { None } else { discriminants(choices) };
         for (i, gc) in choices.iter().enumerate() {
-            let mut alt: SmolStr = format!("{name}-alt{}", i + 1).into();
+            // `Command-browser.close` when the alternatives differ by a literal
+            // member (`method: "browser.close"`), else `Command-alt1`.
+            let variant: SmolStr = match &tags {
+                Some(t) => t[i].as_str().into(),
+                None => format!("alt{}", i + 1).into(),
+            };
+            let mut alt: SmolStr = format!("{name}-{variant}").into();
             while self.output.contains_key(&alt) || self.known_rules.contains(&alt) {
                 alt = format!("{alt}-type").into();
             }
@@ -817,7 +824,7 @@ impl<'m> LowerCtx<'m> {
                 self.sources.types.insert(alt.clone(), src);
             }
             variants.push(EnumVariant {
-                name:        format!("alt{}", i + 1).into(),
+                name:        variant,
                 ty:          TypeRef::Named(alt),
                 constraints: vec![],
             });
@@ -962,26 +969,9 @@ impl<'m> LowerCtx<'m> {
         choices: &[GroupChoice],
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
-        let expanded = self.expand_groups(name, choices, false)?;
-        if expanded.len() > 1 {
-            return self.lower_alternatives(name, &expanded, meta, false);
-        }
-        let choices = expanded.as_slice();
-        let fields = choices.iter()
-            .flat_map(|gc| gc.entries.iter())
-            .map(|e| self.lower_member_entry(e, name))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(TypeDef::Struct(StructDef {
-            name:       name.into(),
-            fields,
-            encoding:   StructEncoding::Map,
-            rest:       None,
-            tagged:     meta.tag,
-            dcbor:      false,
-            doc:        meta.doc.clone(),
-            deprecated: meta.deprecated,
-        }))
+        // Used as a type, a group rule is the map holding its members, which
+        // can include computed keys (`Extensible = (* text => any)`).
+        self.lower_map_as_struct(name, choices, meta)
     }
 
     fn lower_member_entry(
@@ -1800,7 +1790,65 @@ fn fold_literal(op: &str, a: &Value, b: &Value) -> Option<LiteralValue> {
 }
 
 /// The most alternatives a map or array may expand to from group choices.
-const MAX_ALTERNATIVES: usize = 32;
+/// The most alternatives group choices can make one map or array (the product
+/// of the choices of the groups it includes), a guard against an exponential
+/// number of types. WebDriver BiDi's `Command` has 33 (dgtlrift/cddlc#120).
+const MAX_ALTERNATIVES: usize = 256;
+
+/// The name of each alternative of a choice of maps, when they all have a member
+/// under one key whose value is a text literal, a different one in each
+/// (`method: "browser.close"` / `method: "session.end"`): that literal, made a
+/// CDDL name (`browser.close`). `None` when there is no such key.
+fn discriminants(choices: &[GroupChoice]) -> Option<Vec<String>> {
+    use cddlc_parser::MemberKey;
+    fn key_of(k: &MemberKey) -> Option<&str> {
+        match k {
+            MemberKey::Bareword(id) => Some(id.0.as_str()),
+            MemberKey::Value(Value::Text(t)) => Some(t.as_str()),
+            _ => None,
+        }
+    }
+    // The text literal under `key` in `gc`.
+    fn literal<'a>(gc: &'a GroupChoice, key: &str) -> Option<&'a str> {
+        gc.entries.iter().find_map(|e| match &e.node.kind {
+            MemberKind::KeyValue { key: k, value, .. }
+                if e.node.occurrence.is_none() && key_of(&k.node) == Some(key) =>
+            {
+                match value.node.choices.as_slice() {
+                    [t1] if t1.node.ops.is_empty() => match &t1.node.base.node {
+                        Type2::Value(Value::Text(t)) => Some(t.as_str()),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+    }
+    let first = choices.first()?;
+    for e in &first.entries {
+        let MemberKind::KeyValue { key, .. } = &e.node.kind else { continue };
+        let Some(key) = key_of(&key.node) else { continue };
+        let Some(names) = choices.iter()
+            .map(|gc| literal(gc, key).map(|t| {
+                let n: String = t.chars()
+                    .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '-' })
+                    .collect();
+                n.trim_matches(['-', '.']).to_owned()
+            }))
+            .collect::<Option<Vec<String>>>()
+        else { continue };
+        // Distinct, non-empty, and still distinct as identifiers.
+        let mut seen = std::collections::HashSet::new();
+        if names.iter().all(|n| {
+            n.starts_with(|c: char| c.is_ascii_alphabetic())
+                && seen.insert(n.replace(['.', '-', '_'], "").to_ascii_lowercase())
+        }) {
+            return Some(names);
+        }
+    }
+    None
+}
 
 /// The one Type2 of a type with no choices or operators.
 fn single_type2(ty: &Type) -> Option<&Type2> {

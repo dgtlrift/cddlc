@@ -278,7 +278,9 @@ readings = [* sensor-reading]
 
 | Type aliases | `device-id = tstr .size 16` | With optional constraints |
 | CBOR tags | `#6.1(uint)` | Tag verification on decode, emission on encode |
-| Generics | `pair<T> = [T, T]` | Monomorphised at use sites |
+| Generics | `pair<T> = [T, T]`, `pair<A, B> = [A, B]` | Monomorphised at use sites |
+| Sockets | `$value /= uint`, `$$ext //= ( ? note: tstr )` | A type socket is the choice of its `/=` types; a group socket adds its members |
+| Names | `session.status`, `$value`, `@owner` | `.` and `-` separate words, `$` and `@` are dropped: `SessionStatus`, `Value`, `Owner` |
 | Imports | `; @import "common.cddl"` | Transitive, cycle-detected |
 | Constraints | `.size`, `.range`, `.ge`, `.le`, `.gt`, `.lt`, `.eq`, `.ne`, `.regexp`, `.cbor`, `.cborseq` | |
 | Type operators | `.within`, `.and`, `.bits`, `.plus`, `.cat` | `.within` / `.and` add the other type's constraints; `.plus` / `.cat` of literals compute one; `.bits` is checked by `cddlc validate` only. `.abnf` and other operators cddlc can't check warn |
@@ -401,12 +403,12 @@ language's harness, as CI does after the build tests.
 - **Groups** are inlined where they are used: group references, `? group`, unwrapped maps
   and arrays (`~base`) and group sockets (`$$ext //= (...)`). A choice between groups
   (`{ a: uint // b: tstr }`, or a group `g = (a // b)` used in one) is a choice between maps
-  or arrays, one per alternative (`<rule>-alt1`, ...), up to 32 of them. A repeated group in a
+  or arrays, one per alternative, up to 256 of them. Alternatives that differ by a text literal
+  under one key (`method: "browser.close"` / `method: "session.end"`) are named after it
+  (`<rule>-browser.close`); others are numbered (`<rule>-alt1`, ...). A repeated group in a
   map (`{ * g }`), and a socket extended by more than one `//=` with choices, are rejected as
   unsupported; several `//=` extensions of one socket add members rather than alternatives.
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
-- **Type sockets** (`$socket /= T`) are lowered and validated, but the generated code names the
-  type `$socket`, which doesn't compile (#123). Group sockets (`$$socket //= (...)`) work.
 - **Maps with named members and other entries** need text keys for the other entries
   (`{ a: uint, * tstr => any }`); other key types there (`{ 1 => int, * int => any }`), and
   more than one member with a computed key, are rejected with an "unsupported" error.
