@@ -1090,6 +1090,22 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     w.line("if err != nil {");
     w.line("    return err");
     w.line("}");
+    // A map has only the members its schema gives it (RFC 8610 §3.5;
+    // dgtlrift/cddlc#102), unless it has other entries.
+    if s.rest.is_none() {
+        let named: Vec<String> = s.fields.iter().map(|f| go_str(&f.name)).collect();
+        w.line("for k := range m {");
+        w.indent();
+        if !named.is_empty() {
+            w.line("switch k {");
+            w.line(&format!("case {}:", named.join(", ")));
+            w.line("    continue");
+            w.line("}");
+        }
+        w.line(&format!("return fmt.Errorf(\"%s: unknown member %q\", {}, k)", go_str(&name)));
+        w.dedent();
+        w.line("}");
+    }
     w.line(&format!("var out {name}"));
     for f in &s.fields {
         let field = format!("out.{}", go_field_name(&f.name));

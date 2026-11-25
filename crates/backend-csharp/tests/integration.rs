@@ -188,9 +188,10 @@ fn test_struct_decode_has_switch() {
 }
 
 #[test]
-fn test_struct_unknown_field_skipped() {
+fn test_struct_unknown_field_rejected() {
+    // A map has only the members its schema gives it (dgtlrift/cddlc#102).
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("SkipValue()"));
+    assert!(g.source.contains("throw new CborContentException($\"Sensor: unknown member {key}\");"), "{}", g.source);
 }
 
 #[test]

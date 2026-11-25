@@ -446,6 +446,19 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     w.indent();
     w.line(&format!("raise ValueError(\"{class_name}: expected a map\")"));
     w.dedent();
+    // A map has only the members its schema gives it (RFC 8610 §3.5;
+    // dgtlrift/cddlc#102), unless it has other entries.
+    if s.rest.is_none() {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        w.line(&format!(
+            "unknown = set(raw) - {{{}}}",
+            if named.is_empty() { "None".into() } else { named.join(", ") }
+        ));
+        w.line("if unknown:");
+        w.indent();
+        w.line(&format!("raise ValueError(f\"{class_name}: unknown member(s) {{sorted(map(str, unknown))}}\")"));
+        w.dedent();
+    }
     let mut args = Vec::new();
     for f in &s.fields {
         let fname = to_snake_case(&f.name);

@@ -379,7 +379,17 @@ fn named_keys(s: &StructDef) -> String {
 }
 
 fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
-    w.line(&format!("factory {class_name}.fromJson(Map<String, dynamic> json) => {class_name}("));
+    w.line(&format!("factory {class_name}.fromJson(Map<String, dynamic> json) {{"));
+    w.indent();
+    // A map has only the members its schema gives it (RFC 8610 §3.5;
+    // dgtlrift/cddlc#102), unless it has other entries.
+    if s.rest.is_none() {
+        w.line(&format!(
+            "for (final k in json.keys) {{ if (!{}.contains(k)) throw ArgumentError('{class_name}: unknown member $k'); }}",
+            named_keys(s)
+        ));
+    }
+    w.line(&format!("return {class_name}("));
     w.indent();
     for f in &s.fields {
         let fname = dart_field(&f.name);
@@ -405,6 +415,8 @@ fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     }
     w.dedent();
     w.line(");");
+    w.dedent();
+    w.line("}");
 }
 
 fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &CodegenOptions) {
@@ -454,6 +466,13 @@ fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     w.indent();
     if let Some(tag) = s.tagged {
         w.line(&format!("_untag({}, m, '{class_name}');", tag.0));
+    }
+    // A map has only the members its schema gives it (dgtlrift/cddlc#102).
+    if s.rest.is_none() {
+        w.line(&format!(
+            "for (final k in m.keys) {{ if (!{}.contains(k.toString())) throw ArgumentError('{class_name}: unknown member $k'); }}",
+            named_keys(s)
+        ));
     }
     w.line(&format!("return {class_name}("));
     w.indent();
@@ -536,6 +555,15 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
 
     let class_name = to_pascal_case(&e.name);
 
+    // A variant's constructor shares its type's name (`Shape.Circle(Circle c)`),
+    // which hides the type inside the class: a private alias names it there
+    // (dgtlrift/cddlc#102).
+    for v in &e.variants {
+        if let TypeRef::Named(n) = &v.ty {
+            w.line(&format!("typedef _{class_name}{} = {};", to_pascal_case(&v.name), to_pascal_case(n)));
+        }
+    }
+
     // Represent as a class with a kind string and optional value.
     // This tagged-union approach covers both homogeneous and mixed-type variants.
     w.line(&format!("class {class_name} {{"));
@@ -573,10 +601,9 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
                     "static {class_name} {vname}({dart_t} value) => \
                      {class_name}._({kind_str:?}, value);"));
             }
-            TypeRef::Named(n) => {
-                let ct = to_pascal_case(n);
+            TypeRef::Named(_) => {
                 w.line(&format!(
-                    "static {class_name} {vname}({ct} value) => \
+                    "static {class_name} {vname}(_{class_name}{vname} value) => \
                      {class_name}._({kind_str:?}, value);"));
             }
             _ => {
@@ -588,7 +615,7 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
     w.blank();
 
     if opts.is_json() {
-        emit_enum_json(w, e, &class_name, opts);
+        emit_enum_json(w, module, e, &class_name, opts);
     } else {
         emit_enum_cbor(w, module, e, &class_name, opts);
     }
@@ -597,7 +624,18 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
     w.line("}");
 }
 
-fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, class_name: &str, _opts: &CodegenOptions) {
+/// `expr` with a leading `Type.` (a variant's type, hidden inside the enum
+/// class by the variant's constructor) through the private alias for it.
+fn via_alias(expr: String, class_name: &str, v: &cddlc_ir::EnumVariant) -> String {
+    let TypeRef::Named(n) = &v.ty else { return expr };
+    let ty = format!("{}.", to_pascal_case(n));
+    match expr.strip_prefix(&ty) {
+        Some(rest) => format!("_{class_name}{}.{rest}", to_pascal_case(&v.name)),
+        None => expr,
+    }
+}
+
+fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_name: &str, opts: &CodegenOptions) {
     w.line("String encode() => jsonEncode(toJson());");
     w.blank();
     w.line("dynamic toJson() {");
@@ -704,6 +742,14 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, class_name: &str, _opts: &C
         w.line("}");
     }
 
+    // Variants of a named type: the first whose decoder accepts the value.
+    for v in e.variants.iter().filter(|v| matches!(v.ty, TypeRef::Named(_))) {
+        w.line(&format!(
+            "try {{ return {class_name}._({:?}, {}); }} catch (_) {{ /* next variant */ }}",
+            variant_kind_str(v),
+            via_alias(json_from_expr(&v.ty, "raw", module, opts), &class_name, v)
+        ));
+    }
     w.line(&format!("throw ArgumentError('Cannot decode {class_name}: $raw');"));
     w.dedent();
     w.line("}");
@@ -814,6 +860,14 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         w.line("}");
     }
 
+    // Variants of a named type: the first whose decoder accepts the value.
+    for v in e.variants.iter().filter(|v| matches!(v.ty, TypeRef::Named(_))) {
+        w.line(&format!(
+            "try {{ return {class_name}._({:?}, {}); }} catch (_) {{ /* next variant */ }}",
+            variant_kind_str(v),
+            via_alias(cbor_from_expr(&v.ty, "v", module, opts), &class_name, v)
+        ));
+    }
     w.line(&format!("throw ArgumentError('Cannot decode {class_name}: $v');"));
     w.dedent();
     w.line("}");
@@ -878,7 +932,7 @@ fn emit_tests(module: &IrModule, lib_name: &str, opts: &CodegenOptions) -> Strin
             emit_struct_test(&mut w, module, s, opts);
         }
         if let TypeDef::Enum(e) = def {
-            emit_enum_test(&mut w, e, opts);
+            emit_enum_test(&mut w, module, e, opts);
         }
     }
 
@@ -960,7 +1014,7 @@ fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts
     w.line("});");
 }
 
-fn emit_enum_test(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &CodegenOptions) {
     let class_name = to_pascal_case(&e.name);
     // Test the first string-like variant
     let first_str = e.variants.iter().find(|v|
@@ -978,6 +1032,28 @@ fn emit_enum_test(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
             w.line(&format!("final decoded = {class_name}.decode(encoded);"));
         }
         w.line("expect(decoded.kind, equals(obj.kind));");
+        w.dedent();
+        w.line("});");
+    }
+    // Each variant of a map type whose members are primitives.
+    for v in &e.variants {
+        let TypeRef::Named(n) = &v.ty else { continue };
+        let Some(TypeDef::Struct(st)) = module.get(n) else { continue };
+        if st.encoding != cddlc_ir::StructEncoding::Map || st.rest.is_some()
+            || st.fields.iter().any(|f| f.occurrence.is_repeated() || !matches!(f.ty, TypeRef::Primitive(_)))
+        {
+            continue;
+        }
+        let vname = to_pascal_case(&v.name);
+        let args: Vec<String> = st.fields.iter()
+            .map(|f| format!("{}: {}", dart_field(&f.name), test_default_for(&f.ty, &f.occurrence, opts)))
+            .collect();
+        w.line(&format!("test('{class_name} {vname} roundtrip', () {{"));
+        w.indent();
+        w.line(&format!("final obj = {class_name}.{vname}({}({}));", to_pascal_case(n), args.join(", ")));
+        w.line(&format!("final decoded = {class_name}.decode(obj.encode());"));
+        w.line("expect(decoded.kind, equals(obj.kind));");
+        w.line(&format!("expect(decoded.value, isA<{}>());", to_pascal_case(n)));
         w.dedent();
         w.line("});");
     }
