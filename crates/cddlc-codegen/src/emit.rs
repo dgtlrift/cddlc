@@ -36,14 +36,30 @@ impl IndentWriter {
 
 // ── Name mangling ─────────────────────────────────────────────────────────────
 
+// A CDDL name (RFC 8610 `id`) can hold `$` and `@` (socket names: `$val`,
+// `$$ext`), `.` (`session.Status`) and `-`, none of which most targets allow in an
+// identifier (dgtlrift/cddlc#123). `.` and `-` separate words; `$` and `@` are dropped.
+
+fn is_word_separator(c: char) -> bool {
+    matches!(c, '-' | '_' | '.')
+}
+
+fn is_dropped(c: char) -> bool {
+    matches!(c, '$' | '@')
+}
+
 /// Convert a CDDL identifier to snake_case (Rust fields, C variables).
 pub fn to_snake_case(s: &str) -> String {
-    s.replace('-', "_")
+    s.chars()
+        .filter(|&c| !is_dropped(c))
+        .map(|c| if c == '-' || c == '.' { '_' } else { c })
+        .collect()
 }
 
 /// Convert a CDDL identifier to PascalCase (Rust types, C# types).
 pub fn to_pascal_case(s: &str) -> String {
-    s.split(|c: char| c == '-' || c == '_')
+    let s: String = s.chars().filter(|&c| !is_dropped(c)).collect();
+    s.split(is_word_separator)
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {
@@ -56,7 +72,7 @@ pub fn to_pascal_case(s: &str) -> String {
 
 /// Convert a CDDL identifier to SCREAMING_SNAKE_CASE (C enum constants).
 pub fn to_screaming_snake(s: &str) -> String {
-    s.replace('-', "_").to_uppercase()
+    to_snake_case(s).to_uppercase()
 }
 
 // ── Primitive type mapping ────────────────────────────────────────────────────

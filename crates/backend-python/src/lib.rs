@@ -1075,7 +1075,7 @@ fn py_primitive(p: &Primitive) -> &'static str {
 }
 
 fn py_module_name(name: &str) -> String {
-    name.replace('-', "_")
+    to_snake_case(&name)
 }
 
 // ── Test file ─────────────────────────────────────────────────────────────────

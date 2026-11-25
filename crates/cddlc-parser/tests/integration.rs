@@ -647,3 +647,14 @@ fn member_keys_label_value_or_type() {
         assert!(matches!(&keys[0], MemberKey::Type(_)), "{src}: {keys:?}");
     }
 }
+
+// ── Names (dgtlrift/cddlc#123) ───────────────────────────────────────────────
+
+#[test]
+fn names_can_hold_at_and_dollar_signs_and_dots() {
+    // RFC 8610: `EALPHA = ALPHA / "@" / "_" / "$"`.
+    let m = parse("@owner = tstr\n$val /= uint\n$$ext //= ( a: 1 )\nsession.status = 1\na$b@c = 2\n");
+    let names: Vec<&str> = m.rules.iter().map(|r| r.node.name.node.as_str()).collect();
+    assert_eq!(names, ["@owner", "$val", "$$ext", "session.status", "a$b@c"]);
+}
+

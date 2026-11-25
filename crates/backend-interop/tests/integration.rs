@@ -560,3 +560,12 @@ fn test_nodejs_harness_imports_hyphenated_module() {
     let h = files.iter().find(|f| f.path.ends_with("interop.test.ts")).expect("harness");
     assert!(h.content.contains("from '../src/my-schema.js';"), "{}", h.content);
 }
+
+#[test]
+fn test_sized_range_alias_vector_has_the_shortest_allowed_size() {
+    // `.size (1..16)`: "a", not "" (dgtlrift/cddlc#123's reference schema).
+    let vs = compile("owner = tstr .size (1..16)\nkey = bstr .size (4..8)\n");
+    let hex: Vec<(String, String)> = vs.iter().map(|v| (v.cddl_name.clone(), v.cbor_hex())).collect();
+    assert!(hex.contains(&("owner".into(), "6161".into())), "{hex:?}");
+    assert!(hex.contains(&("key".into(), "4400000000".into())), "{hex:?}");
+}

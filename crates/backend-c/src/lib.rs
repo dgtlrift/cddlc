@@ -159,7 +159,7 @@ add_test(NAME roundtrip COMMAND test_roundtrip)
 
 fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     let name    = module.name.as_str();
-    let guard   = format!("{}_H", name.to_uppercase().replace('-', "_"));
+    let guard   = format!("{}_H", to_screaming_snake(&name));
     let mut w   = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
@@ -1647,8 +1647,8 @@ fn emit_type_decl_h_json(w: &mut IndentWriter, def: &TypeDef, _mod_name: &str, o
 
 fn emit_header_json(module: &IrModule, opts: &CodegenOptions) -> String {
     let name     = module.name.as_str();
-    let guard    = name.to_uppercase().replace('-', "_");
-    let mod_name = name.replace('-', "_");
+    let guard    = to_screaming_snake(&name);
+    let mod_name = to_snake_case(&name);
     let mut w    = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
@@ -1700,7 +1700,7 @@ fn emit_json_fn_decls(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts:
         TypeDef::Alias(a)  => (a.name.as_str(), format!("{}_t", to_snake_case(&a.name))),
         TypeDef::Map(m)    => (m.name.as_str(), format!("{}_t", to_snake_case(&m.name))),
     };
-    let snake = name.replace('-', "_");
+    let snake = to_snake_case(&name);
     let pfx   = format!("{mod_name}_{snake}");
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj);"));
     w.line(&format!("bool   {pfx}_from_json(const cJSON* j, {ctype}* out);"));
@@ -1711,7 +1711,7 @@ fn emit_json_fn_decls(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts:
 
 fn emit_source_json(module: &IrModule, opts: &CodegenOptions) -> String {
     let name     = module.name.as_str();
-    let mod_name = name.replace('-', "_");
+    let mod_name = to_snake_case(&name);
     let mut w    = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
@@ -1823,7 +1823,7 @@ fn json_value_expr(ty: &TypeRef, expr: &str, mod_name: &str) -> String {
             format!("cJSON_CreateString(cddlc_b64url_encode(({expr}).data, ({expr}).len))"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "cJSON_CreateNull()".into(),
         TypeRef::Named(n) => {
-            let snake = n.replace('-', "_");
+            let snake = to_snake_case(&n);
             format!("{mod_name}_{snake}_to_json(&{expr})")
         }
         TypeRef::Tagged(_, inner) => json_value_expr(inner, expr, mod_name),
@@ -1832,7 +1832,7 @@ fn json_value_expr(ty: &TypeRef, expr: &str, mod_name: &str) -> String {
 }
 
 fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, opts: &CodegenOptions) {
-    let snake = s.name.replace('-', "_");
+    let snake = to_snake_case(&s.name);
     let ctype = format!("{}_t", to_snake_case(&s.name));
     let pfx   = format!("{mod_name}_{snake}");
 
@@ -1848,7 +1848,7 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
     w.line("cJSON* j = cJSON_CreateObject();");
     w.line("if (!j) return NULL;");
     for f in &s.fields {
-        let fname    = f.name.replace('-', "_");
+        let fname    = to_snake_case(&f.name);
         let key      = f.name.as_str();
         let access   = format!("obj->{fname}");
         let val_expr = json_value_expr(&f.ty, &access, mod_name);
@@ -1886,7 +1886,7 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
         ));
     }
     for f in &s.fields {
-        let fname = f.name.replace('-', "_");
+        let fname = to_snake_case(&f.name);
         let key   = f.name.as_str();
         w.line(&format!("cJSON* _{fname} = cJSON_GetObjectItemCaseSensitive(j, {key:?});"));
         match &f.occurrence {
@@ -1944,13 +1944,13 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
     for pair in optional.windows(2) {
         w.line(&format!(
             "if (obj->{}_present && !obj->{}_present) return NULL;",
-            pair[1].name.replace('-', "_"), pair[0].name.replace('-', "_")
+            to_snake_case(&pair[1].name), to_snake_case(&pair[0].name)
         ));
     }
     w.line("cJSON* j = cJSON_CreateArray();");
     w.line("if (!j) return NULL;");
     for f in &s.fields {
-        let fname = f.name.replace('-', "_");
+        let fname = to_snake_case(&f.name);
         let val_expr = json_value_expr(&f.ty, &format!("obj->{fname}"), mod_name);
         if matches!(f.occurrence, Occurrence::Optional) {
             w.line(&format!("if (obj->{fname}_present) cJSON_AddItemToArray(j, {val_expr});"));
@@ -1971,7 +1971,7 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
     w.line(&format!("if (n < {required} || n > {}) return false;", s.fields.len()));
     w.line("memset(out, 0, sizeof(*out));");
     for (i, f) in s.fields.iter().enumerate() {
-        let fname = f.name.replace('-', "_");
+        let fname = to_snake_case(&f.name);
         if matches!(f.occurrence, Occurrence::Optional) {
             w.line(&format!("if (n > {i}) {{"));
             w.indent();
@@ -2020,7 +2020,7 @@ fn json_decode_field(w: &mut IndentWriter, ty: &TypeRef, dest: &str, src: &str, 
             w.line(&format!("if (_b64_{v}) {{ size_t _bl; uint8_t* _bd = cddlc_b64url_decode(_b64_{v}, &_bl); if(_bd) {{ memcpy(out->{dest}.data, _bd, _bl); out->{dest}.len = _bl; free(_bd); }} }}"));
         }
         TypeRef::Named(n) => {
-            let snake = n.replace('-', "_");
+            let snake = to_snake_case(&n);
             w.line(&format!("{mod_name}_{snake}_from_json({src}, &out->{dest});"));
         }
         TypeRef::Tagged(_, inner) => json_decode_field(w, inner, dest, src, mod_name, _opts),
@@ -2029,7 +2029,7 @@ fn json_decode_field(w: &mut IndentWriter, ty: &TypeRef, dest: &str, src: &str, 
 }
 
 fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: &CodegenOptions) {
-    let snake = e.name.replace('-', "_");
+    let snake = to_snake_case(&e.name);
     let ctype = format!("{}_t", to_snake_case(&e.name));
     let pfx   = format!("{mod_name}_{snake}");
 
@@ -2038,7 +2038,7 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
     w.line("switch (obj->tag) {");
     for v in &e.variants {
         let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-        let vsnake = v.name.replace('-', "_");
+        let vsnake = to_snake_case(&v.name);
         let cddl_str = cddlc_codegen::enum_variant_text(v);
         w.line(&format!("case {vconst}:"));
         w.indent();
@@ -2053,7 +2053,7 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
                 w.line(&format!("return cJSON_CreateBool(obj->value.{vsnake});")),
             // A variant of a named type (dgtlrift/cddlc#102).
             TypeRef::Named(n) =>
-                w.line(&format!("return {mod_name}_{}_to_json(&obj->value.{vsnake});", n.replace('-', "_"))),
+                w.line(&format!("return {mod_name}_{}_to_json(&obj->value.{vsnake});", to_snake_case(&n))),
             _ => w.line("return cJSON_CreateNull();"),
         }
         w.dedent();
@@ -2070,10 +2070,10 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
     for v in &e.variants {
         let TypeRef::Named(n) = &v.ty else { continue };
         let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-        let vsnake = v.name.replace('-', "_");
+        let vsnake = to_snake_case(&v.name);
         w.line(&format!(
             "if ((cJSON_IsObject(j) || cJSON_IsArray(j)) && {mod_name}_{}_from_json(j, &out->value.{vsnake})) {{ out->tag = {vconst}; return true; }}",
-            n.replace('-', "_")
+            to_snake_case(&n)
         ));
     }
     w.line("if (cJSON_IsString(j)) {");
@@ -2096,7 +2096,7 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
         w.indent();
         for v in &e.variants {
             let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-            let vsnake = v.name.replace('-', "_");
+            let vsnake = to_snake_case(&v.name);
             if matches!(&v.ty, TypeRef::Primitive(Primitive::Uint)) {
                 w.line(&format!("out->tag = {vconst};"));
                 w.line(&format!("out->value.{vsnake} = (uint64_t)cJSON_GetNumberValue(j);"));
@@ -2122,7 +2122,7 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
 }
 
 fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, mod_name: &str, opts: &CodegenOptions) {
-    let snake = a.name.replace('-', "_");
+    let snake = to_snake_case(&a.name);
     let ctype = format!("{}_t", to_snake_case(&a.name));
     let pfx   = format!("{mod_name}_{snake}");
 
@@ -2161,7 +2161,7 @@ fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, mod_name: &str, opts
 }
 
 fn emit_json_map_impl(w: &mut IndentWriter, m: &MapDef, mod_name: &str, opts: &CodegenOptions) {
-    let snake = m.name.replace('-', "_");
+    let snake = to_snake_case(&m.name);
     let ctype = format!("{}_t", to_snake_case(&m.name));
     let pfx   = format!("{mod_name}_{snake}");
     let cap = capacity_value(
@@ -2205,7 +2205,7 @@ fn emit_json_map_impl(w: &mut IndentWriter, m: &MapDef, mod_name: &str, opts: &C
 }
 
 fn emit_json_alias_impl(w: &mut IndentWriter, a: &AliasDef, mod_name: &str, opts: &CodegenOptions) {
-    let snake      = a.name.replace('-', "_");
+    let snake      = to_snake_case(&a.name);
     let ctype      = format!("{}_t", to_snake_case(&a.name));
     let pfx        = format!("{mod_name}_{snake}");
     let is_newtype = a.tagged.is_some() || !a.constraints.is_empty();
@@ -2296,7 +2296,7 @@ fn emit_json_encode_decode(w: &mut IndentWriter, pfx: &str, ctype: &str) {
 
 fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
     let name     = module.name.as_str();
-    let mod_name = name.replace('-', "_");
+    let mod_name = to_snake_case(&name);
     let mut w    = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
@@ -2322,7 +2322,7 @@ fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
             TypeDef::Alias(a)  => a.name.as_str(),
             TypeDef::Map(m)    => m.name.as_str(),
         };
-        let snake = tname.replace('-', "_");
+        let snake = to_snake_case(&tname);
         w.line(&format!("test_{mod_name}_{snake}();"));
     }
     w.line("printf(\"All JSON roundtrip tests passed.\\n\");");
@@ -2336,7 +2336,7 @@ fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
 fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => {
-            let snake = s.name.replace('-', "_");
+            let snake = to_snake_case(&s.name);
             let ctype = format!("{}_t", to_snake_case(&s.name));
             let pfx   = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
@@ -2352,7 +2352,7 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.blank();
         }
         TypeDef::Enum(e) => {
-            let snake = e.name.replace('-', "_");
+            let snake = to_snake_case(&e.name);
             let ctype = format!("{}_t", to_snake_case(&e.name));
             let pfx   = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
@@ -2368,7 +2368,7 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.blank();
         }
         TypeDef::Array(a) => {
-            let snake = a.name.replace('-', "_");
+            let snake = to_snake_case(&a.name);
             let ctype = format!("{}_t", to_snake_case(&a.name));
             let pfx   = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
@@ -2384,7 +2384,7 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.blank();
         }
         TypeDef::Alias(a) => {
-            let snake = a.name.replace('-', "_");
+            let snake = to_snake_case(&a.name);
             let ctype = format!("{}_t", to_snake_case(&a.name));
             let pfx   = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
@@ -2400,7 +2400,7 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.blank();
         }
         TypeDef::Map(m) => {
-            let snake = m.name.replace('-', "_");
+            let snake = to_snake_case(&m.name);
             let ctype = format!("{}_t", to_snake_case(&m.name));
             let pfx   = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
