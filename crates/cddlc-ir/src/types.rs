@@ -428,6 +428,11 @@ pub enum Constraint {
 
     /// `.default value`
     Default(LiteralValue),
+
+    /// `.bits` — only these bit numbers may be set (RFC 8610 §3.8.2): in an
+    /// unsigned integer, bit n is the value 2^n; in a byte string, bit n is
+    /// bit n % 8 (counting from the least significant) of byte n / 8.
+    Bits(Vec<u64>),
 }
 
 /// A literal constant value.

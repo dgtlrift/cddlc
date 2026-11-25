@@ -543,6 +543,13 @@ fn explicit_field_val(ty: &TypeRef) -> FieldVal {
 }
 
 fn valid_alias_val(constraints: &[Constraint], ty: &TypeRef) -> FieldVal {
+    // A value pinned to a literal (`40 .plus 2`; dgtlrift/cddlc#86).
+    if let Some(v) = constraints.iter().find_map(|c| match c {
+        Constraint::Eq(lit) => literal_val(lit),
+        _ => None,
+    }) {
+        return v;
+    }
     for c in constraints {
         match c {
             Constraint::SizeExact(n) => match ty {
