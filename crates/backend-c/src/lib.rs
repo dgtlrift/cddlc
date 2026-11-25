@@ -1252,6 +1252,20 @@ fn emit_c_alias_test(w: &mut IndentWriter, a: &AliasDef, pfx: &str, _opts: &Code
     }).filter(|_| matches!(&a.ty, TypeRef::Primitive(Primitive::Tstr)));
 
     w.line(&format!("{type_name}_t original = {{0}};"));
+    // A value pinned to a literal, or with a lower bound (`40 .plus 2`,
+    // `uint .within (1..5)`; dgtlrift/cddlc#86).
+    for c in &a.constraints {
+        let set = match c {
+            Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => format!("(cbor_str_t){{ {t:?}, {} }}", t.len()),
+            Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => format!("{n}U"),
+            Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => format!("{n}"),
+            Constraint::ValueRangeUint { min: Some(lo), inclusive, .. } if *lo > 0 => format!("{}U", if *inclusive { *lo } else { lo + 1 }),
+            Constraint::ValueRangeInt { min: Some(lo), inclusive, .. } if *lo > 0 => format!("{}", if *inclusive { *lo } else { lo + 1 }),
+            _ => continue,
+        };
+        w.line(&format!("original.value = {set};"));
+        break;
+    }
     if let Some(n) = tstr_size {
         let s_lit: String = "a".repeat(n);
         w.line(&format!("static const char _val_data[{n}] = {:?};", s_lit));

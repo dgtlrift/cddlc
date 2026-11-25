@@ -376,7 +376,33 @@ impl<'m> Ctx<'m> {
                 Constraint::CborSeq(inner) => self.check_cbor_embedded(value, inner, true, path),
                 // Informational only — does not relax presence/type checks.
                 Constraint::Default(_) => {}
+                Constraint::Bits(bits) => self.check_bits(value, bits, path),
             }
+        }
+    }
+
+    /// `.bits`: only the listed bit numbers are set (RFC 8610 §3.8.2).
+    fn check_bits(&mut self, value: &Value, bits: &[u64], path: &mut Vec<PathSeg>) {
+        let set: Vec<u64> = match value {
+            Value::Uint(n) => (0..64).filter(|i| n >> i & 1 == 1).collect(),
+            Value::Bytes(b) => b.iter().enumerate()
+                .flat_map(|(i, byte)| (0..8).filter(move |j| byte >> j & 1 == 1).map(move |j| i as u64 * 8 + j))
+                .collect(),
+            // JSON has no byte strings: they are base64url text.
+            Value::Text(t) => match decode_base64url(t) {
+                Some(b) => return self.check_bits(&Value::Bytes(b), bits, path),
+                None => {
+                    self.err(path, "expected an unsigned integer or byte string for .bits".to_string());
+                    return;
+                }
+            },
+            other => {
+                self.err(path, format!("expected an unsigned integer or byte string for .bits, found {}", kind_name(other)));
+                return;
+            }
+        };
+        if let Some(b) = set.iter().find(|b| !bits.contains(b)) {
+            self.err(path, format!("bit {b} is set, but .bits allows only {bits:?}"));
         }
     }
 

@@ -11,3 +11,17 @@ temperature = int .ge -40 .le 85
 
 ; Byte string alias
 payload = bstr
+
+; Type operators (RFC 8610 §3.8, RFC 9165)
+level = uint .within (1..5)
+
+digit = uint .and (0..9)
+
+answer = 40 .plus 2
+
+greeting = "hello, " .cat "world"
+
+; Checked by cddlc validate; generated code holds the integer
+flags = uint .bits flag-names
+
+flag-names = &( read: 0, write: 1 )

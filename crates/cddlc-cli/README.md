@@ -8,7 +8,7 @@ files to disk.
 
 ```mermaid
 flowchart TD
-    USER["👤 user\ncddlc my.cddl --lang rust"] --> CLI
+    USER["👤 user\ncddlc generate my.cddl --lang rust"] --> CLI
     CLI["cddlc-cli\n(this crate)"]:::active --> LOAD["loader\n@import resolution\ncycle detection"]
     LOAD --> PARSER["cddlc-parser"]
     PARSER --> IR["cddlc-ir"]

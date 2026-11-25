@@ -1262,9 +1262,18 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         // For size-constrained string/bytes aliases, derive Default would create
         // an empty value that fails constraint validation. Generate a custom Default
         // that satisfies the constraint instead.
+        // So would a value pinned to a literal, or one with a lower bound
+        // (`40 .plus 2`, `uint .within (1..5)`; dgtlrift/cddlc#86).
         let size_default: Option<String> = a.constraints.iter().find_map(|c| match c {
             Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. } => {
                 sized_value(&a.ty, *n, opts)
+            }
+            Constraint::Eq(lit) => Some(literal_value_expr(lit, opts.no_std)),
+            Constraint::ValueRangeUint { min: Some(lo), inclusive, .. } if *lo > 0 => {
+                Some(format!("{}u64", if *inclusive { *lo } else { lo + 1 }))
+            }
+            Constraint::ValueRangeInt { min: Some(lo), inclusive, .. } if *lo > 0 => {
+                Some(format!("{}i64", if *inclusive { *lo } else { lo + 1 }))
             }
             _ => None,
         });

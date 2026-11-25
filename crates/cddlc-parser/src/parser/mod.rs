@@ -248,14 +248,20 @@ impl ParseState {
                 eprintln!("[cddlc-trace] rule[{rule_index}] at {line}:{col} — {:?}", preview);
             }
 
-            let rule = self.parse_rule(&mut input, src)
-                .map_err(|e| ParseError::Syntax {
-                    path:    self.path.clone(),
-                    line,
-                    col,
-                    message: format!("{e:?}"),
-                    span:    Span::new(start, start),
-                })?;
+            let rule = match self.parse_rule(&mut input, src) {
+                Ok(rule) => rule,
+                // Where the parse stopped, not where the rule starts.
+                Err(e) => {
+                    let at = byte_offset(src, input);
+                    return Err(ParseError::Syntax {
+                        path:    self.path.clone(),
+                        line:    line_of(src, at),
+                        col:     col_of(src, at),
+                        message: syntax_message(&e),
+                        span:    Span::new(at, at),
+                    });
+                }
+            };
 
             if trace {
                 eprintln!("[cddlc-trace] rule[{rule_index}] parsed: {:?}", rule.name.node.as_str());
@@ -756,7 +762,8 @@ fn parse_group_entry_inner(
     Ok(GroupEntry { choices })
 }
 
-/// Parse one group choice: a sequence of member entries separated by `,`.
+/// Parse one group choice: a sequence of member entries separated by `,` or
+/// whitespace.
 ///
 /// Comments between entries document them (dgtlrift/cddlc#8): the lines directly above
 /// an entry (no blank line in between), an `@doc` pragma among them, and a comment on
@@ -778,7 +785,14 @@ fn parse_group_choice(
         }
 
         let start = here(input);
-        let mut entry = parse_member_entry(input)?;
+        // After the first entry, one that doesn't parse is the error: left to
+        // backtrack, the group would end before it and the error point at the
+        // group's start.
+        let mut entry = if entries.is_empty() {
+            parse_member_entry(input)?
+        } else {
+            parse_member_entry(input).map_err(|e| e.cut())?
+        };
         let end = here(input);
         entry.doc = above.leading();
 
@@ -792,7 +806,11 @@ fn parse_group_choice(
             push_doc(&mut entry.doc, &t);
         }
         entries.push(Spanned::new(entry, Span::new(start, end)));
-        if !comma {
+        // The comma is optional (RFC 8610 `optcom = S ["," S]`): entries can
+        // follow each other with only whitespace between them (dgtlrift/cddlc#108).
+        // Not at the top of a group rule (`g = a: uint, b: tstr`), which has
+        // no closing delimiter, where a missing comma ends the rule.
+        if !comma && close_ch == '\0' {
             break;
         }
         above = after;
@@ -1162,6 +1180,24 @@ fn wsc0(input: &mut &str) {
 fn wsc0_fn(input: &mut &str) -> ModalResult<()> {
     wsc0(input);
     Ok(())
+}
+
+/// A parse error as a message (`expected '}' to close map`), not the parser's
+/// error type.
+fn syntax_message(e: &ErrMode<ContextError>) -> String {
+    // The innermost expectation: the outer ones (`type expression` for the
+    // whole rule) say less about what's wrong.
+    let expected = match e {
+        ErrMode::Backtrack(c) | ErrMode::Cut(c) => c.context().find_map(|c| match c {
+            StrContext::Expected(v) => Some(v.to_string()),
+            _ => None,
+        }),
+        ErrMode::Incomplete(_) => None,
+    };
+    match expected {
+        Some(v) => format!("expected {v}"),
+        None => "unexpected input".into(),
+    }
 }
 
 // ── Offset helpers ────────────────────────────────────────────────────────────

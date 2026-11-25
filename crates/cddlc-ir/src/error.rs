@@ -85,6 +85,9 @@ pub enum IrWarningKind {
     DefaultCapacityUsed,
     /// A `.regexp` control op has no `@regex-hook` — validation will be skipped.
     NoRegexHook,
+    /// A control operator cddlc can't check (`.abnf`, or an operand it can't
+    /// reduce): neither `cddlc validate` nor generated code enforces it.
+    UncheckedControlOp,
 }
 
 impl std::fmt::Display for IrWarning {
