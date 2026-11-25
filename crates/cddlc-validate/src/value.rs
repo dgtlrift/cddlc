@@ -14,7 +14,15 @@ pub enum Value {
     /// Negative integer (or an integer read from a source that doesn't
     /// distinguish sign, e.g. JSON, and happened to be negative).
     Int(i64),
+    /// A float whose width isn't known: JSON, or a value built in code.
     Float(f64),
+    /// A CBOR float and the width it was encoded at (16, 32 or 64 bits), which
+    /// `float16` / `float32` / `float64` check (dgtlrift/cddlc#91).
+    SizedFloat(f64, u8),
+    /// CBOR `undefined` (simple value 23), which only `undefined` matches.
+    Undefined,
+    /// A CBOR simple value other than false, true, null and undefined.
+    Simple(u8),
     Text(String),
     /// Native CBOR byte string. JSON has no byte-string type; JSON input
     /// represents `bstr` fields as base64url text instead (see
