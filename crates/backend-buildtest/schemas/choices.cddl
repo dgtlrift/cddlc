@@ -25,4 +25,7 @@ wide = { x: uint, y: tstr }
 ; (`certs-alt1`, `labels-alt0`)
 certs = tstr / [2* tstr]
 
-labels = { + tstr => tstr } / tstr
+labels = { + tstr => tstr } / null
+
+; `null` is CBOR null, not the text "null"
+power = "on" / "off" / null

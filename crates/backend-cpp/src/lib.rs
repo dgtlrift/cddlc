@@ -672,8 +672,11 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                             w.line(&format!("nanocbor_fmt_int(enc, {n});"));
                         }
                     }
-                    (TypeRef::Primitive(Primitive::Tstr | Primitive::Null | Primitive::Undefined), None) => {
-                        // Text and nil variants are written as their CDDL text.
+                    // `null` is CBOR null, not text (dgtlrift/cddlc#147).
+                    (TypeRef::Primitive(Primitive::Null | Primitive::Undefined), None) => {
+                        w.line("nanocbor_fmt_null(enc);");
+                    }
+                    (TypeRef::Primitive(Primitive::Tstr), None) => {
                         let (lit, len) = cpp_str_lit(&cddlc_codegen::enum_variant_text(v));
                         w.line(&format!("nanocbor_put_tstrn(enc, {lit}, {len});"));
                     }
@@ -1023,16 +1026,14 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
 
     w.line("switch (nanocbor_get_type(dec)) {");
 
-    // Text: text and nil literals, then a `tstr` payload variant.
+    // Text: text literals, then a `tstr` payload variant.
     w.line("case NANOCBOR_TYPE_TSTR: {");
     w.indent();
     w.line("const uint8_t *s; size_t slen;");
     w.line("if (nanocbor_get_tstr(dec, &s, &slen) < 0) return -1;");
     w.line("std::string_view sv(reinterpret_cast<const char*>(s), slen);");
     for v in &e.variants {
-        if cpp_variant_payload(v, opts).is_none()
-            && matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null | Primitive::Undefined))
-        {
+        if cpp_variant_payload(v, opts).is_none() && matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
             let text = cddlc_codegen::enum_variant_text(v);
             w.line(&format!("if (sv == std::string_view({text:?})) {{ {} }}", make(v, "")));
         }
@@ -1095,9 +1096,13 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
     let bool_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Bool)));
     let f64_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Float64 | Primitive::Float)));
     let f32_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Float32 | Primitive::Float16)));
-    if bool_v.is_some() || f64_v.is_some() || f32_v.is_some() {
+    let nil_v = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined)));
+    if bool_v.is_some() || f64_v.is_some() || f32_v.is_some() || nil_v.is_some() {
         w.line("case NANOCBOR_TYPE_FLOAT: {");
         w.indent();
+        if let Some(v) = nil_v {
+            w.line(&format!("if (nanocbor_get_null(dec) >= 0) {{ {} }}", make(v, "")));
+        }
         if let Some(v) = bool_v {
             w.line(&format!("{{ bool b; if (nanocbor_get_bool(dec, &b) >= 0) {{ {} }} }}", make(v, "b")));
         }
@@ -1768,7 +1773,7 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
             cddlc_codegen::emit_doc_lines(w, e.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
             // Emit as std::variant for mixed enums or string enum
             let all_str = e.variants.iter().all(|v|
-                matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)));
+                matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
             if all_str {
                 let variants: Vec<String> = e.variants.iter()
                     .map(|v| format!("{:?}", cddlc_codegen::enum_variant_text(v)))
@@ -1924,7 +1929,7 @@ fn json_named_kind(n: &str, module: &IrModule) -> JsonNamed {
 
 /// A text-only enum is emitted as `using X = std::string`.
 fn json_enum_is_string(e: &EnumDef) -> bool {
-    e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)))
+    e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)))
 }
 
 /// A C++ expression converting `expr` to a `nlohmann::json` value.
@@ -2105,7 +2110,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
         TypeDef::Enum(e) => {
             let ctype   = to_pascal_case(&e.name);
             let all_str = e.variants.iter().all(|v|
-                matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)));
+                matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
 
             if all_str {
                 // string enum — type alias, no methods needed
@@ -2255,7 +2260,7 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
             TypeDef::Enum(e) => {
                 let ctype   = to_pascal_case(&e.name);
                 let all_str = e.variants.iter().all(|v|
-                    matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)));
+                    matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
                 if !all_str {
                     w.line(&format!("void test_{ctype}() {{"));
                     w.indent();
@@ -2317,7 +2322,7 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
             TypeDef::Enum(e) => {
                 let ctype   = to_pascal_case(&e.name);
                 let all_str = e.variants.iter().all(|v|
-                    matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Tstr)));
+                    matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
                 if !all_str { w.line(&format!("test_{ctype}();")); }
             }
             TypeDef::Array(a) => { let ctype = to_pascal_case(&a.name); w.line(&format!("test_{ctype}();")); }

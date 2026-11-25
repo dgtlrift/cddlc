@@ -195,8 +195,6 @@ nanocbor (or nlohmann/json) on the first configure.
 ## Known gaps
 
 - **nanocbor only**: `--runtime` is accepted, but only nanocbor is wired up.
-- **`nil` enum variants** are written as their CDDL text, as in the other
-  backends, not as CBOR null.
 - **`.regexp`** constraints need a user-supplied `@regex-hook`.
 
 ## License

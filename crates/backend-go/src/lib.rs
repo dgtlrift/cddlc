@@ -1359,6 +1359,11 @@ pub fn payload_field(v: &EnumVariant) -> String {
     if n == "Kind" { "KindValue".into() } else { n }
 }
 
+/// Whether a variant is `null` / `nil` (or `undefined`): CBOR / JSON null.
+fn is_nil(v: &EnumVariant) -> bool {
+    matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined)) && !has_payload(v)
+}
+
 fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     let name = to_pascal_case(&e.name);
     let kind_ty = format!("{name}Kind");
@@ -1416,8 +1421,11 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
             if n < 0 { format!("marshal(int64({n}))") } else { format!("marshal(uint64({n}))") }
         } else if has_payload(v) {
             enc_expr(&v.ty, &format!("v.{}", payload_field(v)))
+        } else if is_nil(v) {
+            // `null` is CBOR / JSON null, not text (dgtlrift/cddlc#147).
+            "marshal(nil)".to_owned()
         } else {
-            // Text and nil variants are written as their CDDL text, as in the other backends.
+            // A text literal is written as its text.
             format!("marshal({})", go_str(&cddlc_codegen::enum_variant_text(v)))
         };
         return_encoded(w, tag, &expr);
@@ -1441,7 +1449,8 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         Some(x) => format!("*v = {name}{{Kind: {}, {}: {x}}}", go_kind_const(&e.name, &v.name), payload_field(v)),
         None => format!("*v = {name}{{Kind: {}}}", go_kind_const(&e.name, &v.name)),
     };
-    let text_lits: Vec<&EnumVariant> = e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none()).collect();
+    let text_lits: Vec<&EnumVariant> = e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none() && !is_nil(v)).collect();
+    let nil = e.variants.iter().find(|v| is_nil(v));
     let tstr = payload(&|p| matches!(p, Primitive::Tstr));
     let uint = payload(&|p| matches!(p, Primitive::Uint));
     let int = payload(&|p| matches!(p, Primitive::Int));
@@ -1456,6 +1465,11 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     let neg_lits: Vec<(&EnumVariant, i128)> = e.variants.iter().filter_map(|v| int_literal(v).map(|n| (v, n))).filter(|(_, n)| *n < 0).collect();
 
     w.line("switch kindOf(r) {");
+    if let Some(v) = nil {
+        w.line("case kindNull:");
+        w.line(&format!("    {}", set(v, None)));
+        w.line("    return nil");
+    }
     if !text_lits.is_empty() || tstr.is_some() || json_bytes.is_some() {
         w.line("case kindText:");
         w.indent();

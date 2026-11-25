@@ -641,6 +641,11 @@ fn has_payload(v: &EnumVariant) -> bool {
     }
 }
 
+/// Whether a variant is `null` / `nil` (or `undefined`), which is CBOR null.
+fn is_nil(v: &EnumVariant) -> bool {
+    matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined))
+}
+
 fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, e.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
     if e.deprecated { w.line("# @deprecated"); }
@@ -697,9 +702,11 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
             n.to_string()
         } else if has_payload(v) {
             py_to_raw(&v.ty, "self.value", opts)
+        } else if is_nil(v) {
+            // `null` is CBOR / JSON null, not text (dgtlrift/cddlc#147).
+            "None".to_owned()
         } else {
-            // Text and nil variants are written as their CDDL text, as in the
-            // other backends.
+            // A text literal is written as its text.
             format!("{:?}", cddlc_codegen::enum_variant_text(v))
         };
         w.line(&format!("raw: Any = {raw}"));
@@ -726,8 +733,14 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
     // Each type check is emitted only when some variant can match it, so a
     // text-only or integer-only enum has no empty `if` block.
+    if let Some(v) = e.variants.iter().find(|v| is_nil(v)) {
+        w.line("if raw is None:");
+        w.indent();
+        w.line(&format!("return cls(kind={:?})", to_pascal_case(&v.name)));
+        w.dedent();
+    }
     let text_lits: Vec<&EnumVariant> =
-        e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none()).collect();
+        e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none() && !is_nil(v)).collect();
     let tstr_payload = payload(&|p| matches!(p, Primitive::Tstr));
     if !text_lits.is_empty() || tstr_payload.is_some() {
         w.line("if isinstance(raw, str):");
