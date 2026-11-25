@@ -398,3 +398,12 @@ fn mixed_maps_validate_other_entries() {
     assert_fails(&m, "r", &json(r#"{"id": 1}"#));
     assert_ok(&m, "r", &json(r#"{"id": 1, "x": 2}"#));
 }
+
+// ── Groups (dgtlrift/cddlc#83) ────────────────────────────────────────────────
+
+#[test]
+fn groups_validate_inlined() {
+    let m = lower("r = { g, ~base, b: tstr }\ng = ( a: uint )\nbase = { c: bool }\n");
+    assert_ok(&m, "r", &json(r#"{"a": 1, "c": true, "b": "x"}"#));
+    assert_fails(&m, "r", &json(r#"{"c": true, "b": "x"}"#));
+}

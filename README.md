@@ -390,9 +390,11 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 
 - **Generics with multiple parameters** (`pair<T, U>`) are not yet monomorphised correctly in all cases.
 - **Group-level choices** (`//=` extensions) have limited support — only the first group choice is lowered.
-- **Unwrapped groups** (`~group`) are not fully handled.
+- **Groups** are inlined where they are used: group references, `? group`, unwrapped maps
+  and arrays (`~base`) and group sockets (`$$ext //= (...)`). A repeated group in a map
+  (`{ * g }`) and a choice between groups (`g = (a // b)`) are rejected as unsupported.
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
-- **Socket/plug rules** (`$socket /= T`) are not supported.
+- **Type sockets** (`$socket /= T`) are not supported; group sockets (`$$socket //= (...)`) are.
 - **Maps with named members and other entries** need text keys for the other entries
   (`{ a: uint, * tstr => any }`); other key types there (`{ 1 => int, * int => any }`), and
   more than one member with a computed key, are rejected with an "unsupported" error.

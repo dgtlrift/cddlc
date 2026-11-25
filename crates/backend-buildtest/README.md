@@ -38,6 +38,7 @@ The `schemas/` directory contains CDDL files that collectively exercise the full
 | `tagged.cddl` | CBOR tag `#6.N(T)` — tag emission and verification |
 | `iot_sensor.cddl` | Realistic IoT device schema combining all features |
 | `maps.cddl` | Tables (`{ * tstr => V }`): table members, `+` occurrence, struct and constrained values; maps with named members and other entries |
+| `groups.cddl` | Groups inlined into maps and arrays: references, `? group`, `~map`, `$$socket` |
 | `inline-enum-in-group-after-comment.cddl` | Edge case: inline enum variant inside a group following a comment |
 
 ## Running the build tests
