@@ -165,6 +165,24 @@ impl<'m> LowerCtx<'m> {
             i += 1;
         }
 
+        // Variant names unique within each enum (`"Infinity"` / `"-Infinity"`
+        // are `Infinity` / `MinusInfinity`, but `"a-b"` / `"a_b"` are both `AB`).
+        for def in self.output.values_mut() {
+            if let TypeDef::Enum(e) = def {
+                let mut seen: HashSet<SmolStr> = HashSet::new();
+                for (i, v) in e.variants.iter_mut().enumerate() {
+                    if !seen.insert(v.name.clone()) {
+                        let mut name: SmolStr = format!("{}{i}", v.name).into();
+                        while seen.contains(&name) {
+                            name = format!("{name}_").into();
+                        }
+                        seen.insert(name.clone());
+                        v.name = name;
+                    }
+                }
+            }
+        }
+
         // Pass 4: topological sort
         let sorted = topo_sort(&self.output)?;
 
@@ -399,7 +417,7 @@ impl<'m> LowerCtx<'m> {
     ) -> Result<(SmolStr, TypeRef, Vec<Constraint>), IrError> {
         match t2 {
             Type2::Value(Value::Text(s)) => {
-                let var_name = pascal_case(s);
+                let var_name = literal_variant_name(s);
                 let lit = LiteralValue::Text(s.clone());
                 Ok((var_name.into(), TypeRef::Primitive(Primitive::Tstr), vec![Constraint::Eq(lit)]))
             }
@@ -2261,6 +2279,32 @@ impl PragmaMeta {
 }
 
 // ── Utility helpers ───────────────────────────────────────────────────────────
+
+/// A variant name for a text literal, usable as an identifier in every
+/// backend: its ASCII words in PascalCase (`"free-space"` → `FreeSpace`,
+/// `"text/plain"` → `TextPlain`), `Minus` for a leading `-` (`"-0"` →
+/// `Minus0`, dgtlrift/cddlc#141), `V` before a leading digit and `Empty`
+/// for no words at all.
+fn literal_variant_name(s: &str) -> String {
+    let mut out = String::new();
+    if s.starts_with('-') {
+        out.push_str("Minus");
+    }
+    for word in s.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let mut chars = word.chars();
+        if let Some(f) = chars.next() {
+            out.push(f.to_ascii_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    if out.is_empty() {
+        out.push_str("Empty");
+    }
+    if out.starts_with(|c: char| c.is_ascii_digit()) {
+        out.insert(0, 'V');
+    }
+    out
+}
 
 fn pascal_case(s: &str) -> String {
     s.split(|c: char| c == '-' || c == '_' || c == ' ')
