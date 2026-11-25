@@ -1848,7 +1848,7 @@ fn ts_constraint_check(c: &Constraint, expr: &str, json: bool) -> Option<String>
             max,
             inclusive,
         } => {
-            let (ge, le) = if *inclusive { (">=", "<=") } else { (">", "<") };
+            let (ge, le) = (">=", if *inclusive { "<=" } else { "<" });
             match (min, max) {
                 (Some(lo), Some(hi)) => Some(format!("{expr} {ge} {lo}{n} && {expr} {le} {hi}{n}")),
                 (Some(lo), None) => Some(format!("{expr} {ge} {lo}{n}")),
@@ -1861,7 +1861,7 @@ fn ts_constraint_check(c: &Constraint, expr: &str, json: bool) -> Option<String>
             max,
             inclusive,
         } => {
-            let (ge, le) = if *inclusive { (">=", "<=") } else { (">", "<") };
+            let (ge, le) = (">=", if *inclusive { "<=" } else { "<" });
             match (min, max) {
                 (Some(lo), Some(hi)) => Some(format!("{expr} {ge} {lo}{n} && {expr} {le} {hi}{n}")),
                 (Some(lo), None) => Some(format!("{expr} {ge} {lo}{n}")),

@@ -1304,11 +1304,11 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
                 sized_value(&a.ty, *n, opts)
             }
             Constraint::Eq(lit) => Some(literal_value_expr(lit, opts.no_std)),
-            Constraint::ValueRangeUint { min: Some(lo), inclusive, .. } if *lo > 0 => {
-                Some(format!("{}u64", if *inclusive { *lo } else { lo + 1 }))
+            Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 => {
+                Some(format!("{}u64", *lo))
             }
-            Constraint::ValueRangeInt { min: Some(lo), inclusive, .. } if *lo > 0 => {
-                Some(format!("{}i64", if *inclusive { *lo } else { lo + 1 }))
+            Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 => {
+                Some(format!("{}i64", *lo))
             }
             _ => None,
         });
