@@ -1188,6 +1188,24 @@ fn cpp_constraint_check(c: &Constraint, val_expr: &str, p: &Primitive) -> Option
             Primitive::Uint | Primitive::Int => None, // uncommon; skip
             _ => constraint_to_cpp_check(c, val_expr),
         },
+        // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
+        Constraint::Bits(bits) => match p {
+            Primitive::Uint => Some(format!(
+                "(({val_expr}) & ~{:#x}ULL) == 0", cddlc_codegen::bits_mask_u64(bits)
+            )),
+            Primitive::Bstr => {
+                let m = cddlc_codegen::bits_mask_bytes(bits);
+                let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+                Some(format!(
+                    "[](const auto& v) {{ static const uint8_t m[] = {{{bytes}{}}}; std::size_t i = 0; \
+                     for (auto b : v) {{ if (static_cast<uint8_t>(b) & static_cast<uint8_t>(~(i < {n} ? m[i] : 0))) return false; ++i; }} \
+                     return true; }}({val_expr})",
+                    if m.is_empty() { "0" } else { "" },
+                    n = m.len(),
+                ))
+            }
+            _ => None,
+        },
         _ => constraint_to_cpp_check(c, val_expr),
     }
 }
@@ -1414,6 +1432,26 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                 }) {
                     w.line(&format!("original.{fname} = {lit};"));
                     continue;
+                }
+                // `.bits`: the mask itself is a value it allows (dgtlrift/cddlc#107).
+                if let Some(bits) = f.constraints.iter().find_map(|c| match c {
+                    Constraint::Bits(b) => Some(b),
+                    _ => None,
+                }) {
+                    match effective_ty {
+                        TypeRef::Primitive(Primitive::Uint) => {
+                            w.line(&format!("original.{fname} = {:#x}ULL;", cddlc_codegen::bits_mask_u64(bits)));
+                            continue;
+                        }
+                        TypeRef::Primitive(Primitive::Bstr) => {
+                            let m = cddlc_codegen::bits_mask_bytes(bits);
+                            let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+                            w.line(&format!("static const uint8_t _{fname}_cbor[{}] = {{{bytes}}};", m.len().max(1)));
+                            w.line(&format!("original.{fname} = std::string_view(reinterpret_cast<const char*>(_{fname}_cbor), {});", m.len()));
+                            continue;
+                        }
+                        _ => {}
+                    }
                 }
                 match effective_ty {
                     TypeRef::Primitive(Primitive::Uint) => {

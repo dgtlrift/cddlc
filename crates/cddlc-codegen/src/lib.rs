@@ -15,4 +15,5 @@ pub use emit::{
     literal_to_c, literal_to_rust, primitive_to_c, primitive_to_rust,
     to_pascal_case, to_screaming_snake, to_snake_case, IndentWriter,
     emit_doc_lines, with_source_docs, DocStyle, enum_variant_text, rust_field_ident,
+    bits_mask_bytes, bits_mask_u64, module_uses_bits,
 };

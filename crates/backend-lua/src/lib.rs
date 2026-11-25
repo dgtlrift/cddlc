@@ -402,6 +402,16 @@ fn lua_check(c: &Constraint, p: &Primitive, x: &str) -> Option<String> {
         }
         Constraint::Eq(v) if literal_fits(v, p) => lua_literal(v).map(|l| format!("{x} == {l}")),
         Constraint::Ne(v) if literal_fits(v, p) => lua_literal(v).map(|l| format!("{x} ~= {l}")),
+        // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
+        Constraint::Bits(bits) if is_uint => Some(format!(
+            "({x} & ~{}) == 0", lua_int(cddlc_codegen::bits_mask_u64(bits) as i128)
+        )),
+        Constraint::Bits(bits) if matches!(p, Primitive::Bstr) => {
+            let m = cddlc_codegen::bits_mask_bytes(bits).iter().map(|b| b.to_string()).collect::<Vec<_>>().join(", ");
+            Some(format!(
+                "(function(s) local m = {{ {m} }} for i = 1, #s do if (s:byte(i) & ~(m[i] or 0)) ~= 0 then return false end end return true end)({x})"
+            ))
+        }
         _ => None,
     }
 }
@@ -1198,6 +1208,9 @@ fn lua_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint]
         }
         for c in constraints {
             match (c, p) {
+                // `.bits`: every allowed bit set (dgtlrift/cddlc#107).
+                (Constraint::Bits(b), Primitive::Uint) => return lua_int(cddlc_codegen::bits_mask_u64(b) as i128),
+                (Constraint::Bits(b), Primitive::Bstr) => return lua_bytes(&cddlc_codegen::bits_mask_bytes(b)),
                 (Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. }, Primitive::Tstr) => return format!("string.rep(\"a\", {n})"),
                 (Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. }, Primitive::Bstr | Primitive::Any) => return format!("string.rep(\"\\0\", {n})"),
                 (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) => return lua_int(*lo as i128),
@@ -1252,6 +1265,16 @@ fn lua_invalid_value(constraints: &[Constraint], ty: &TypeRef) -> Option<String>
             (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) if *lo > i64::MIN => return Some(lua_int(*lo as i128 - 1)),
             (Constraint::ValueRangeUint { min: Some(lo), .. }, Primitive::Uint) if *lo > 0 => return Some(lua_int(*lo as i128 - 1)),
             (Constraint::ValueRangeUint { max: Some(hi), .. }, Primitive::Uint) if *hi < u64::MAX => return Some(lua_int(*hi as i128 + 1)),
+            // `.bits`: the lowest bit it doesn't allow.
+            (Constraint::Bits(b), Primitive::Uint | Primitive::Bstr) => {
+                let Some(bad) = (0u64..64).find(|n| !b.contains(n)) else { continue };
+                if *p == Primitive::Uint {
+                    return Some(lua_int((1u64 << bad) as i128));
+                }
+                let mut bytes = vec![0u8; bad as usize / 8 + 1];
+                bytes[bad as usize / 8] = 1 << (bad % 8);
+                return Some(lua_bytes(&bytes));
+            }
             _ => {}
         }
     }

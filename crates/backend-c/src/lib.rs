@@ -399,6 +399,21 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line(&format!("#include \"{name}.h\""));
     w.line("#include <string.h>");
     w.blank();
+    if cddlc_codegen::module_uses_bits(module) {
+        w.line("/* `.bits`: only the bits `m` has set may be set (bit n is bit n % 8 of byte n / 8). */");
+        w.line("static bool cddlc_bits_ok(const uint8_t *p, size_t n, const uint8_t *m, size_t mn) {");
+        w.indent();
+        w.line("size_t i;");
+        w.line("for (i = 0; i < n; i++) {");
+        w.indent();
+        w.line("if (p[i] & (uint8_t)~(i < mn ? m[i] : 0)) return false;");
+        w.dedent();
+        w.line("}");
+        w.line("return true;");
+        w.dedent();
+        w.line("}");
+        w.blank();
+    }
 
     for (_, def) in &module.types {
         w.blank();
@@ -1048,8 +1063,30 @@ fn c_constraint_check(c: &Constraint, val_expr: &str, p: &Primitive) -> Option<S
             "!({val_expr}.len == {n} && memcmp({val_expr}.ptr, {t:?}, {n}) == 0)",
             n = t.len()
         )),
+        // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
+        Constraint::Bits(bits) => match p {
+            Primitive::Uint => Some(format!(
+                "(({val_expr}) & ~UINT64_C({:#x})) == 0", cddlc_codegen::bits_mask_u64(bits)
+            )),
+            Primitive::Bstr => {
+                let m = cddlc_codegen::bits_mask_bytes(bits);
+                let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+                Some(format!(
+                    "cddlc_bits_ok({val_expr}.ptr, {val_expr}.len, (const uint8_t[]){{{bytes}}}, {})", m.len()
+                ))
+            }
+            _ => None,
+        },
         _ => constraint_to_c_check(c, val_expr),
     }
+}
+
+/// The bits a member's `.bits` allows.
+fn bits_of(f: &cddlc_ir::FieldDef) -> Option<&Vec<u64>> {
+    f.constraints.iter().find_map(|c| match c {
+        Constraint::Bits(b) => Some(b),
+        _ => None,
+    })
 }
 
 fn uint_max_for_bytes(n: usize) -> Option<String> {
@@ -1159,6 +1196,12 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
                 let text = text_literal_of(f).unwrap_or("hello");
                 w.line(&format!("static const char _{fname}_str[] = {text:?};"));
             }
+            // `.bits`: the mask itself is a value it allows (dgtlrift/cddlc#107).
+            Some(Primitive::Bstr) if bits_of(f).is_some() => {
+                let m = cddlc_codegen::bits_mask_bytes(bits_of(f).expect("checked"));
+                let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+                w.line(&format!("static const uint8_t _{fname}_cbor[{}] = {{{bytes}}};", m.len().max(1)));
+            }
             Some(Primitive::Bstr | Primitive::Any) => {
                 w.line(&format!("static const uint8_t _{fname}_cbor[1] = {{0xf6}};"));
             }
@@ -1187,6 +1230,17 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
                 let len = text_literal_of(f).map_or(5, str::len);
                 w.line(&format!("original.{fname}.ptr = _{fname}_str;"));
                 w.line(&format!("original.{fname}.len = {len};"));
+                continue;
+            }
+            Some(Primitive::Bstr) if bits_of(f).is_some() => {
+                let n = cddlc_codegen::bits_mask_bytes(bits_of(f).expect("checked")).len();
+                w.line(&format!("original.{fname}.ptr = _{fname}_cbor;"));
+                w.line(&format!("original.{fname}.len = {n};"));
+                continue;
+            }
+            Some(Primitive::Uint) if bits_of(f).is_some() => {
+                let m = cddlc_codegen::bits_mask_u64(bits_of(f).expect("checked"));
+                w.line(&format!("original.{fname} = UINT64_C({m:#x});"));
                 continue;
             }
             Some(Primitive::Bstr | Primitive::Any) => {

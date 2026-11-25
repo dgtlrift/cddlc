@@ -529,6 +529,18 @@ fn java_check(c: &Constraint, p: &Primitive, x: &str) -> Option<String> {
             Some(if matches!(c, Constraint::Ne(_)) { format!("!({eq})") } else { eq })
         }
         Constraint::Regexp { pattern, .. } if matches!(p, Primitive::Tstr) => Some(format!("{x}.matches({})", java_str(pattern))),
+        // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
+        Constraint::Bits(bits) if is_uint => Some(format!(
+            "({x} & ~{}) == 0L", long_lit(cddlc_codegen::bits_mask_u64(bits) as i128)
+        )),
+        Constraint::Bits(bits) if matches!(p, Primitive::Bstr) => {
+            let m = cddlc_codegen::bits_mask_bytes(bits);
+            let ints = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+            Some(format!(
+                "java.util.stream.IntStream.range(0, {x}.length).allMatch(i -> ({x}[i] & ~(i < {n} ? new int[] {{ {ints} }}[i] : 0) & 0xff) == 0)",
+                n = m.len(),
+            ))
+        }
         _ => None,
     }
 }
@@ -1647,6 +1659,12 @@ fn java_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint
         }
         for c in constraints {
             match (c, p) {
+                // `.bits`: every allowed bit set (dgtlrift/cddlc#107).
+                (Constraint::Bits(b), Primitive::Uint) => return long_lit(cddlc_codegen::bits_mask_u64(b) as i128),
+                (Constraint::Bits(b), Primitive::Bstr) => {
+                    let bytes = cddlc_codegen::bits_mask_bytes(b).iter().map(|x| format!("(byte) {x:#04x}")).collect::<Vec<_>>().join(", ");
+                    return format!("new byte[] {{ {bytes} }}");
+                }
                 (Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. }, Primitive::Tstr) => return java_str(&"a".repeat(*n)),
                 (Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. }, Primitive::Bstr | Primitive::Any) => return format!("new byte[{n}]"),
                 (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) => return long_lit(*lo as i128),

@@ -173,6 +173,10 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
 
     // File header
     emit_header(&mut w, opts);
+    if cddlc_codegen::module_uses_bits(module) {
+        w.blank();
+        emit_bits_check(&mut w);
+    }
 
     // Each type definition
     for (_, def) in &module.types {
@@ -187,6 +191,37 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
     }
 
     w.finish()
+}
+
+/// The `BitsCheck` trait `.bits` checks call (dgtlrift/cddlc#107): only the
+/// bits the mask allows are set, bit `n` being bit `n % 8` of byte `n / 8`.
+fn emit_bits_check(w: &mut IndentWriter) {
+    w.line("/// `.bits`: only the bits `allowed` has set may be set (bit n is bit n % 8 of byte n / 8).");
+    w.line("pub trait BitsCheck {");
+    w.indent();
+    w.line("fn bits_ok(&self, allowed: &[u8]) -> bool;");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line("impl BitsCheck for u64 {");
+    w.indent();
+    w.line("fn bits_ok(&self, allowed: &[u8]) -> bool {");
+    w.indent();
+    w.line("(0..64).all(|n| self >> n & 1 == 0 || allowed.get(n / 8).is_some_and(|b| b >> (n % 8) & 1 == 1))");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line("impl BitsCheck for [u8] {");
+    w.indent();
+    w.line("fn bits_ok(&self, allowed: &[u8]) -> bool {");
+    w.indent();
+    w.line("self.iter().enumerate().all(|(i, b)| b & !allowed.get(i).copied().unwrap_or(0) == 0)");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
 }
 
 fn emit_header(w: &mut IndentWriter, opts: &CodegenOptions) {
@@ -1716,6 +1751,9 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
             (Occurrence::Required, _) if field_literal(f).is_some() => {
                 literal_value_expr(field_literal(f).expect("checked"), opts.no_std)
             }
+            (Occurrence::Required, TypeRef::Primitive(p)) if bits_value(&f.constraints, p, opts).is_some() => {
+                bits_value(&f.constraints, p, opts).expect("checked")
+            }
             (Occurrence::Required, TypeRef::Named(n)) => {
                 if let Some(v) = tstr_test_value_for(n, module, opts) {
                     v
@@ -2005,6 +2043,23 @@ fn emit_array_roundtrip(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOption
 
 // ── Default value expression helpers ─────────────────────────────────────────
 
+/// A value `.bits` allows: every allowed bit set (dgtlrift/cddlc#107).
+fn bits_value(constraints: &[Constraint], p: &Primitive, opts: &CodegenOptions) -> Option<String> {
+    let bits = constraints.iter().find_map(|c| match c {
+        Constraint::Bits(b) => Some(b),
+        _ => None,
+    })?;
+    match p {
+        Primitive::Uint => Some(format!("{:#x}u64", cddlc_codegen::bits_mask_u64(bits))),
+        Primitive::Bstr => {
+            let bytes = cddlc_codegen::bits_mask_bytes(bits).iter()
+                .map(|b| format!("{b:#04x}u8")).collect::<Vec<_>>().join(", ");
+            Some(if opts.no_std { no_std_bytes(&format!("&[{bytes}]")) } else { format!("vec![{bytes}]") })
+        }
+        _ => None,
+    }
+}
+
 fn default_value_expr(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     match occ {
         Occurrence::Optional => "None".into(),
@@ -2072,6 +2127,10 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
 
     w.line("use serde::{Deserialize, Serialize};");
     w.blank();
+    if cddlc_codegen::module_uses_bits(module) {
+        emit_bits_check(&mut w);
+        w.blank();
+    }
 
     w.line("/// Byte strings (`bstr`), in the form each serde format expects.");
     w.line("///");

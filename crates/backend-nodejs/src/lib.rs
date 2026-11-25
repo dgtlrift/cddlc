@@ -402,6 +402,25 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.dedent();
     w.line("}");
 
+    if cddlc_codegen::module_uses_bits(module) {
+        // `.bits` (dgtlrift/cddlc#107), on an integer or a byte string.
+        w.blank();
+        w.line("/** `.bits`: only the bits `m` has set may be set (bit n is bit n % 8 of byte n / 8). */");
+        w.line("function cddlBitsOk(v: bigint | number | Uint8Array, m: readonly number[]): boolean {");
+        w.indent();
+        w.line("if (v instanceof Uint8Array) return v.every((b, i) => (b & ~(m[i] ?? 0)) === 0);");
+        w.line("if (typeof v !== 'bigint' && !Number.isInteger(v)) return false;");
+        w.line("let x = BigInt(v);");
+        w.line("for (let n = 0; x > 0n; n++, x >>= 1n) {");
+        w.indent();
+        w.line("if ((x & 1n) === 1n && (((m[n >> 3] ?? 0) >> (n & 7)) & 1) === 0) return false;");
+        w.dedent();
+        w.line("}");
+        w.line("return true;");
+        w.dedent();
+        w.line("}");
+    }
+
     if !opts.is_json() {
         w.blank();
         for line in CBOR_TAG_HELPERS.lines() {
@@ -1853,6 +1872,10 @@ fn ts_constraint_check(c: &Constraint, expr: &str, json: bool) -> Option<String>
         Constraint::Eq(v) => Some(format!("{expr} === {}", ts_literal(v, json))),
         Constraint::Ne(v) => Some(format!("{expr} !== {}", ts_literal(v, json))),
         Constraint::Regexp { hook: Some(h), .. } => Some(format!("{h}({expr})")),
+        Constraint::Bits(bits) => Some(format!(
+            "cddlBitsOk({expr}, [{}])",
+            cddlc_codegen::bits_mask_bytes(bits).iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ")
+        )),
         _ => None,
     }
 }
@@ -2346,9 +2369,50 @@ fn ts_field_value(f: &FieldDef, module: &IrModule, opts: &CodegenOptions, explic
         }) {
             return ts_literal(lit, opts.is_json());
         }
+        if let (Some(v), true) = (ts_bits_value(&f.constraints, &f.ty, opts), explicit) {
+            return v;
+        }
     }
     bool_literal_value(f, explicit)
         .unwrap_or_else(|| ts_test_value(&f.ty, &f.occurrence, module, opts, explicit, depth))
+}
+
+/// A value `.bits` allows, with every allowed bit set (dgtlrift/cddlc#107).
+fn ts_bits_value(constraints: &[Constraint], ty: &TypeRef, opts: &CodegenOptions) -> Option<String> {
+    let bits = constraints.iter().find_map(|c| match c {
+        Constraint::Bits(b) => Some(b),
+        _ => None,
+    })?;
+    match ty {
+        TypeRef::Primitive(Primitive::Uint) => {
+            let m = cddlc_codegen::bits_mask_u64(bits);
+            Some(if opts.is_json() { format!("{}", m.min(1 << 53)) } else { format!("{m:#x}n") })
+        }
+        TypeRef::Primitive(Primitive::Bstr) => Some(format!(
+            "new Uint8Array([{}])",
+            cddlc_codegen::bits_mask_bytes(bits).iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ")
+        )),
+        _ => None,
+    }
+}
+
+/// A value `.bits` rejects: the lowest bit it doesn't allow.
+fn ts_bits_invalid(constraints: &[Constraint], ty: &TypeRef, opts: &CodegenOptions) -> Option<String> {
+    let bits = constraints.iter().find_map(|c| match c {
+        Constraint::Bits(b) => Some(b),
+        _ => None,
+    })?;
+    let bad = (0u64..64).find(|b| !bits.contains(b))?;
+    match ty {
+        TypeRef::Primitive(Primitive::Uint) if opts.is_json() && bad < 53 => Some(format!("{} as any", 1u64 << bad)),
+        TypeRef::Primitive(Primitive::Uint) if !opts.is_json() => Some(format!("{:#x}n as any", 1u64 << bad)),
+        TypeRef::Primitive(Primitive::Bstr) => {
+            let mut b = vec![0u8; bad as usize / 8 + 1];
+            b[bad as usize / 8] = 1 << (bad % 8);
+            Some(format!("new Uint8Array([{}]) as any", b.iter().map(|x| format!("{x:#04x}")).collect::<Vec<_>>().join(", ")))
+        }
+        _ => None,
+    }
 }
 
 /// A roundtrip-test value of a type: zero-ish values, or (`explicit`) non-default ones.
@@ -2437,6 +2501,9 @@ fn ts_valid_constrained_value(
     opts: &CodegenOptions,
     depth: usize,
 ) -> String {
+    if let Some(v) = ts_bits_value(constraints, ty, opts) {
+        return v;
+    }
     for c in constraints {
         match c {
             // A value pinned to a literal (`40 .plus 2`; dgtlrift/cddlc#86).
@@ -2475,6 +2542,9 @@ fn ts_invalid_constrained_value(
     ty: &TypeRef,
     opts: &CodegenOptions,
 ) -> String {
+    if let Some(v) = ts_bits_invalid(constraints, ty, opts) {
+        return v;
+    }
     for c in constraints {
         match c {
             Constraint::SizeExact(n) => match ty {
