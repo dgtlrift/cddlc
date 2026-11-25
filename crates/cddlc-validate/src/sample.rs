@@ -258,7 +258,8 @@ impl Sampler<'_> {
                 let v = Value::Bool(false);
                 if ne(&v) { Value::Bool(true) } else { v }
             }
-            Primitive::Null | Primitive::Undefined => Value::Null,
+            Primitive::Null => Value::Null,
+            Primitive::Undefined => Value::Undefined,
             Primitive::Uint | Primitive::Int => {
                 let (lo, hi) = int_range(constraints, *p == Primitive::Uint);
                 let mut n = 0i128.clamp(lo, hi.max(lo));
@@ -276,7 +277,15 @@ impl Sampler<'_> {
                         }
                     }
                 }
-                Value::Float(0f64.clamp(lo, hi.max(lo)))
+                let x = 0f64.clamp(lo, hi.max(lo));
+                // `float16` / `float32` / `float64` are written at their width
+                // (RFC 8610 Appendix D); `float` is any.
+                match p {
+                    Primitive::Float16 => Value::SizedFloat(x, 16),
+                    Primitive::Float32 => Value::SizedFloat(x, 32),
+                    Primitive::Float64 => Value::SizedFloat(x, 64),
+                    _ => Value::Float(x),
+                }
             }
             Primitive::Tstr => {
                 let n = size(constraints, 4).unwrap_or(4);
@@ -358,28 +367,9 @@ fn literal(l: &LiteralValue) -> Value {
 
 // ── Output ────────────────────────────────────────────────────────────────────
 
-/// The value as CBOR.
+/// The value as CBOR, each float at the width its type has.
 pub fn to_cbor(v: &Value) -> Vec<u8> {
-    let mut out = Vec::new();
-    ciborium::into_writer(&to_ciborium(v), &mut out).expect("writing to a Vec");
-    out
-}
-
-fn to_ciborium(v: &Value) -> ciborium::Value {
-    use ciborium::Value as C;
-    match v {
-        Value::Null => C::Null,
-        Value::Bool(b) => C::Bool(*b),
-        Value::Uint(n) => C::Integer((*n).into()),
-        Value::Int(n) => C::Integer((*n).into()),
-        Value::Float(x) | Value::SizedFloat(x, _) => C::Float(*x),
-        Value::Undefined | Value::Simple(_) => C::Null,
-        Value::Text(t) => C::Text(t.clone()),
-        Value::Bytes(b) => C::Bytes(b.clone()),
-        Value::Array(a) => C::Array(a.iter().map(to_ciborium).collect()),
-        Value::Map(m) => C::Map(m.iter().map(|(k, v)| (to_ciborium(k), to_ciborium(v))).collect()),
-        Value::Tag(t, inner) => C::Tag(*t, Box::new(to_ciborium(inner))),
-    }
+    crate::cbor::encode(v)
 }
 
 /// The value as JSON (RFC 8949 §6.1): byte strings are base64url text, tags are

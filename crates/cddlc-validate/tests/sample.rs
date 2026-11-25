@@ -19,8 +19,9 @@ fn check_all(name: &str, src: &str, opts: SampleOptions) {
         if let Err(e) = validate_from(&m, Some(ty), &json, Source::Json) {
             panic!("{name}: {ty}: JSON {}: {e:?}", to_json(&v));
         }
-        let cbor: ciborium::Value = ciborium::from_reader(to_cbor(&v).as_slice()).expect("cbor");
-        if let Err(e) = validate_from(&m, Some(ty), &Value::from(cbor), Source::Cbor) {
+        // Read back as `cddlc validate --cbor` does: float widths count.
+        let cbor = cddlc_validate::cbor::decode(&to_cbor(&v)).expect("cbor");
+        if let Err(e) = validate_from(&m, Some(ty), &cbor, Source::Cbor) {
             panic!("{name}: {ty}: CBOR {}: {e:?}", to_diag(&v));
         }
     }
@@ -91,4 +92,12 @@ fn a_type_that_cannot_end_is_an_error() {
     let m = module("r = [uint, r]\n");
     let err = sample(&m, Some("r"), SampleOptions::default()).unwrap_err();
     assert!(err.contains("doesn't end"), "{err}");
+}
+
+#[test]
+fn floats_are_written_at_their_width() {
+    let m = module("r = [float16, float32, float64, float]\n");
+    let bytes = to_cbor(&sample(&m, Some("r"), SampleOptions::default()).unwrap());
+    assert_eq!(bytes, [0x84, 0xf9, 0, 0, 0xfa, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(cddlc_validate::cbor::decode(&[0xf9, 0x3c, 0x00]).map(|v| to_cbor(&v)), Ok(vec![0xf9, 0x3c, 0x00]));
 }

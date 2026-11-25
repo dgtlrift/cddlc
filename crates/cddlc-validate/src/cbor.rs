@@ -218,3 +218,77 @@ fn f16_to_f64(h: u16) -> f64 {
         e => (1.0 + frac / 1024.0) * 2f64.powi(e - 15),
     }
 }
+
+/// The value as CBOR, each float at its width (`SizedFloat`), or 64 bits when
+/// it has none. The inverse of [`decode`].
+pub fn encode(v: &Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    write(v, &mut out);
+    out
+}
+
+fn head(major: u8, n: u64, out: &mut Vec<u8>) {
+    let m = major << 5;
+    match n {
+        0..=23 => out.push(m | n as u8),
+        24..=0xff => out.extend([m | 24, n as u8]),
+        0x100..=0xffff => { out.push(m | 25); out.extend((n as u16).to_be_bytes()); }
+        0x1_0000..=0xffff_ffff => { out.push(m | 26); out.extend((n as u32).to_be_bytes()); }
+        _ => { out.push(m | 27); out.extend(n.to_be_bytes()); }
+    }
+}
+
+fn write(v: &Value, out: &mut Vec<u8>) {
+    match v {
+        Value::Uint(n) => head(0, *n, out),
+        Value::Int(n) if *n >= 0 => head(0, *n as u64, out),
+        Value::Int(n) => head(1, (-1 - *n) as u64, out),
+        Value::Bytes(b) => { head(2, b.len() as u64, out); out.extend(b); }
+        Value::Text(t) => { head(3, t.len() as u64, out); out.extend(t.as_bytes()); }
+        Value::Array(a) => { head(4, a.len() as u64, out); a.iter().for_each(|x| write(x, out)); }
+        Value::Map(m) => {
+            head(5, m.len() as u64, out);
+            for (k, x) in m { write(k, out); write(x, out); }
+        }
+        Value::Tag(t, inner) => { head(6, *t, out); write(inner, out); }
+        Value::Bool(false) => out.push(0xf4),
+        Value::Bool(true) => out.push(0xf5),
+        Value::Null => out.push(0xf6),
+        Value::Undefined => out.push(0xf7),
+        Value::Simple(n) if *n < 24 => out.push(0xe0 | n),
+        Value::Simple(n) => out.extend([0xf8, *n]),
+        Value::SizedFloat(x, 16) => { out.push(0xf9); out.extend(f64_to_f16(*x).to_be_bytes()); }
+        Value::SizedFloat(x, 32) => { out.push(0xfa); out.extend((*x as f32).to_be_bytes()); }
+        Value::SizedFloat(x, _) | Value::Float(x) => { out.push(0xfb); out.extend(x.to_be_bytes()); }
+    }
+}
+
+/// IEEE 754 half precision, rounding to nearest even.
+fn f64_to_f16(x: f64) -> u16 {
+    let f = x as f32;
+    let b = f.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xff) as i32;
+    let man = b & 0x7f_ffff;
+    if exp == 0xff {
+        return sign | 0x7c00 | if man != 0 { 0x200 } else { 0 };
+    }
+    let e = exp - 127 + 15;
+    if e >= 31 {
+        return sign | 0x7c00;
+    }
+    if e <= 0 {
+        if e < -10 { return sign; }
+        let m = man | 0x80_0000;
+        let shift = (14 - e) as u32;
+        let half = 1 << (shift - 1);
+        let mut r = m >> shift;
+        let rem = m & ((1 << shift) - 1);
+        if rem > half || (rem == half && r & 1 == 1) { r += 1; }
+        return sign | r as u16;
+    }
+    let mut r = ((e as u32) << 10) | (man >> 13);
+    let rem = man & 0x1fff;
+    if rem > 0x1000 || (rem == 0x1000 && r & 1 == 1) { r += 1; }
+    sign | r as u16
+}
