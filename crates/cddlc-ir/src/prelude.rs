@@ -12,7 +12,7 @@ use crate::types::{CborTag, Primitive, TypeRef};
 pub fn prelude_names() -> HashSet<&'static str> {
     [
         // Core primitives
-        "any", "uint", "int", "bstr", "bytes", "tstr", "text",
+        "any", "uint", "nint", "int", "bstr", "bytes", "tstr", "text",
         "bool", "nil", "null", "undefined", "true", "false",
         // Float variants
         "float16", "float32", "float64", "float",
@@ -54,7 +54,7 @@ pub fn is_prelude(name: &str) -> bool {
     // Fast path for the most common cases
     matches!(
         name,
-        "any" | "uint" | "int" | "bstr" | "bytes" | "tstr" | "text"
+        "any" | "uint" | "nint" | "int" | "bstr" | "bytes" | "tstr" | "text"
         | "bool" | "nil" | "null" | "undefined" | "true" | "false"
         | "float16" | "float32" | "float64" | "float"
         | "number" | "b64legacy" | "tdate" | "time"
