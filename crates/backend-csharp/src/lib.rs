@@ -152,17 +152,17 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
 
     // Emit each type
     for (_, def) in &module.types {
-        emit_type(&mut w, def, opts);
+        emit_type(&mut w, def, &ns, opts);
         w.blank();
     }
 
     w.finish()
 }
 
-fn emit_type(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_type(w: &mut IndentWriter, def: &TypeDef, ns: &str, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum(w, e, opts),
+        TypeDef::Enum(e)   => emit_enum(w, e, ns, opts),
         TypeDef::Array(a)  => emit_array(w, a, opts),
         TypeDef::Alias(a)  => emit_alias(w, a, opts),
         TypeDef::Map(m)    => emit_map(w, m, opts),
@@ -180,6 +180,10 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     let record = s.encoding == cddlc_ir::StructEncoding::Array;
     if record && opts.is_json() {
         w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]"));
+    }
+    // A map has only the members its schema gives it (dgtlrift/cddlc#102).
+    if !record && opts.is_json() && s.rest.is_none() {
+        w.line("[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]");
     }
     w.line(&format!("public sealed class {type_name}"));
     w.line("{");
@@ -561,7 +565,8 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.indent();
     match &s.rest {
         Some(r) => w.line(&format!("rest[key] = {};", cs_decode_expr(&r.val_ty, opts))),
-        None => w.line("reader.SkipValue();"),
+        // A map has only the members its schema gives it (dgtlrift/cddlc#102).
+        None => w.line(&format!("throw new CborContentException($\"{}: unknown member {{key}}\");", to_pascal_case(&s.name))),
     }
     w.line("break;");
     w.dedent();
@@ -608,9 +613,9 @@ fn enum_literal(v: &cddlc_ir::EnumVariant) -> Option<String> {
     })
 }
 
-fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions) {
     if opts.is_json() {
-        emit_enum_json(w, e, opts);
+        emit_enum_json(w, e, ns, opts);
         return;
     }
     emit_doc_comment(w, e.doc.as_deref());
@@ -636,7 +641,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                 w.line(&format!("public override void Encode(CborWriter writer) => {};", cs_encode_call(p, &lit, opts)));
             }
             None => {
-                let ct = cs_typeref(&v.ty, opts);
+                let ct = qualified(cs_typeref(&v.ty, opts), &v.ty, ns);
                 w.line(&format!("public {ct} Value {{ get; }}"));
                 w.line(&format!("public {vname}({ct} value) => Value = value;"));
                 w.line("public override void Encode(CborWriter writer)");
@@ -652,7 +657,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.blank();
     }
 
-    w.line(&format!("public static {type_name} Default => {};", enum_variant_default(e, opts)));
+    w.line(&format!("public static {type_name} Default => {};", enum_variant_default(e, ns, opts)));
     w.blank();
 
     w.line("public abstract void Encode(CborWriter writer);");
@@ -679,7 +684,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                 "r => {} == {lit} ? {vname}.Instance : throw new CborContentException(\"not {vname}\"){sep}",
                 cs_decode_expr_from(&v.ty, "r", opts)
             )),
-            None => w.line(&format!("r => new {vname}({}){sep}", cs_decode_expr_from(&v.ty, "r", opts))),
+            None => w.line(&format!("r => new {vname}({}){sep}", qualified(cs_decode_expr_from(&v.ty, "r", opts), &v.ty, ns))),
         }
     }
     if n == 0 {
@@ -693,18 +698,36 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     w.line("}");
 }
 
+/// `expr`, a type or an expression starting with one, with a named type
+/// qualified by its namespace: inside an enum, a variant class shares the
+/// type's name (`Shape.Circle` holds a `Circle`) and hides it (dgtlrift/cddlc#102).
+fn qualified(expr: String, ty: &TypeRef, ns: &str) -> String {
+    let TypeRef::Named(n) = cs_base(ty) else { return expr };
+    let t = to_pascal_case(n);
+    if expr == t || expr == format!("{t}?") {
+        return format!("global::{ns}.{expr}");
+    }
+    if let Some(rest) = expr.strip_prefix(&format!("{t}.")) {
+        return format!("global::{ns}.{t}.{rest}");
+    }
+    if let Some(rest) = expr.strip_prefix(&format!("new {t}(")) {
+        return format!("new global::{ns}.{t}({rest}");
+    }
+    expr
+}
+
 /// An enum's first variant, as a value.
-fn enum_variant_default(e: &EnumDef, opts: &CodegenOptions) -> String {
+fn enum_variant_default(e: &EnumDef, ns: &str, opts: &CodegenOptions) -> String {
     let type_name = to_pascal_case(&e.name);
     let Some(v) = e.variants.first() else { return "null!".into() };
     let vname = to_pascal_case(&v.name);
     match enum_literal(v) {
         Some(_) => format!("{type_name}.{vname}.Instance"),
-        None => format!("new {type_name}.{vname}({})", cs_type_default(&v.ty, opts)),
+        None => format!("new {type_name}.{vname}({})", qualified(cs_type_default(&v.ty, opts), &v.ty, ns)),
     }
 }
 
-fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions) {
     emit_doc_comment(w, e.doc.as_deref());
     if e.deprecated { w.line("[Obsolete]"); }
 
@@ -727,7 +750,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                     cs_typeref(&v.ty, opts)));
             }
             None => {
-                let ct = cs_typeref(&v.ty, opts);
+                let ct = qualified(cs_typeref(&v.ty, opts), &v.ty, ns);
                 w.line(&format!("public {ct} Value {{ get; }}"));
                 w.line(&format!("public {vname}({ct} value) => Value = value;"));
                 w.line(&format!("public override byte[] ToJson() => {};", cs_json_to_bytes(&v.ty, "Value", opts)));
@@ -743,12 +766,12 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         let vname = to_pascal_case(&v.name);
         match enum_literal(v) {
             Some(_) => w.line(&format!("public static {vname} Create{vname}() => {vname}.Instance;")),
-            None => w.line(&format!("public static {vname} Create{vname}({} value) => new(value);", cs_typeref(&v.ty, opts))),
+            None => w.line(&format!("public static {vname} Create{vname}({} value) => new(value);", qualified(cs_typeref(&v.ty, opts), &v.ty, ns))),
         }
     }
     w.blank();
 
-    w.line(&format!("public static {type_name} Default => {};", enum_variant_default(e, opts)));
+    w.line(&format!("public static {type_name} Default => {};", enum_variant_default(e, ns, opts)));
     w.blank();
 
     w.line("public abstract byte[] ToJson();");
@@ -773,7 +796,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                 "j => {} == {lit} ? {vname}.Instance : throw new JsonException(\"not {vname}\"){sep}",
                 cs_json_from_element(&v.ty, "j", opts)
             )),
-            None => w.line(&format!("j => new {vname}({}){sep}", cs_json_from_element(&v.ty, "j", opts))),
+            None => w.line(&format!("j => new {vname}({}){sep}", qualified(cs_json_from_element(&v.ty, "j", opts), &v.ty, ns))),
         }
     }
     if n == 0 {

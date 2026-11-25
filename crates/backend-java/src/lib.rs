@@ -927,6 +927,16 @@ fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
     let raw = match s.tagged { Some(t) => format!("Cddl.untag(raw, {}L, {})", t.0, java_str(&class)), None => "raw".into() };
     w.line(&format!("Map<String, Object> m = Cddl.asMap({raw}, {});", java_str(&class)));
     let mut args = Vec::new();
+    // A map has only the members its schema gives it (RFC 8610 §3.5;
+    // dgtlrift/cddlc#102), unless it has other entries.
+    if s.rest.is_none() {
+        let named: Vec<String> = s.fields.iter().map(|f| java_str(&f.name)).collect();
+        w.line(&format!(
+            "for (String k : m.keySet()) if (!List.<String>of({}).contains(k)) throw Cddl.invalid({}, \"unknown member \" + k);",
+            named.join(", "),
+            java_str(&class)
+        ));
+    }
     for f in &s.fields {
         let local = format!("f_{}", java_member_name(&f.name));
         let key = java_str(&f.name);

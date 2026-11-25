@@ -115,7 +115,8 @@ int decode(nanocbor_value_t *dec, Device &out, const Callbacks &cb = {}, void *c
 ```
 
 Both return a negative value on failure. `Callbacks` lets the caller observe
-errors and unknown map keys during decode:
+errors and unknown map keys during decode; a map with a key its schema doesn't
+define is reported to `on_unknown_field`, then rejected:
 
 ```cpp
 struct Callbacks {

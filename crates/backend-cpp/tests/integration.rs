@@ -284,9 +284,9 @@ fn test_struct_decode_enters_map() {
 
 #[test]
 fn test_unknown_field_handled() {
+    // An unknown member is reported, then the map is rejected (dgtlrift/cddlc#102).
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("on_unknown_field"));
-    assert!(g.source.contains("nanocbor_skip"));
+    assert!(g.source.contains("if (cb.on_unknown_field) cb.on_unknown_field(ctx, key);\n            return -1;"), "{}", g.source);
 }
 
 #[test]

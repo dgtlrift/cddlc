@@ -584,6 +584,16 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     let raw = match s.tagged { Some(tag) => format!("R.untag(raw, {}, {})", lua_int(tag.0 as i128), lua_str(&t)), None => "raw".into() };
     w.line(&format!("local m = R.as_map({raw}, {})", lua_str(&t)));
     w.line(&format!("local v = setmetatable({{}}, M.{t})"));
+    // A map has only the members its schema gives it (RFC 8610 §3.5;
+    // dgtlrift/cddlc#102), unless it has other entries.
+    if s.rest.is_none() {
+        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&f.name))).collect();
+        w.line(&format!(
+            "for k in pairs(m) do if not ({{ {} }})[k] then R.fail({}, \"unknown member \" .. k) end end",
+            named.join(", "),
+            lua_str(&t)
+        ));
+    }
     for f in &s.fields {
         let m = format!("v.{}", lua_member_name(&f.name));
         let key = lua_str(&f.name);
