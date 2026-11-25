@@ -1048,3 +1048,38 @@ fn printf_and_join_warn() {
     let r = compile_warns("r = tstr .printf [\"%d\", 1]\n");
     assert!(r.warnings.iter().any(|w| w.message.contains("'.printf' isn't checked")), "{:?}", r.warnings);
 }
+
+// ── Found by the published-schema corpus (dgtlrift/cddlc#113) ─────────────────
+
+#[test]
+fn test_nint_is_a_negative_int() {
+    let m = compile("r = { a: nint }\ns = nint");
+    let TypeDef::Struct(st) = m.get("r").unwrap() else { panic!("not a struct") };
+    assert!(matches!(st.fields[0].ty, TypeRef::Primitive(Primitive::Int)));
+    assert!(st.fields[0].constraints.iter().any(|c| matches!(c, Constraint::ValueRangeInt { max: Some(-1), .. })));
+    let TypeDef::Alias(a) = m.get("s").unwrap() else { panic!("not an alias") };
+    assert!(a.constraints.iter().any(|c| matches!(c, Constraint::ValueRangeInt { max: Some(-1), .. })));
+}
+
+#[test]
+fn test_size_bounded_by_a_uint() {
+    let m = compile("p = bytes .size (uint .le 16)\nq = bytes .size (uint .ge 2 .lt 8)");
+    let TypeDef::Alias(p) = m.get("p").unwrap() else { panic!("not an alias") };
+    assert!(matches!(p.constraints[..], [Constraint::SizeRange { min: Some(0), max: Some(16) }]));
+    let TypeDef::Alias(q) = m.get("q").unwrap() else { panic!("not an alias") };
+    assert!(matches!(q.constraints[..], [Constraint::SizeRange { min: Some(2), max: Some(7) }]));
+}
+
+#[test]
+fn test_group_recursing_through_inline_maps_ends() {
+    // RFC 8927's shape: a group that holds a map of itself.
+    let m = compile("root = { schema }\nschema = ( elements: { schema } // type: tstr )");
+    assert!(m.get("root").is_some());
+}
+
+#[test]
+fn test_undefined_generic_is_undefined() {
+    let parsed = parse_cddl("r = g<uint>", PathBuf::from("t.cddl")).unwrap();
+    let err = lower(&parsed.value, 16, 64).err().expect("should fail").to_string();
+    assert!(err.contains("undefined type 'g'"), "{err}");
+}

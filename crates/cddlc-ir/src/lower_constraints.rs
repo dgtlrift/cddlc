@@ -84,6 +84,26 @@ fn size_operand(operand: &Type2) -> Option<SizeOperand> {
     if entry.node.occurrence.is_some() { return None; }
     let MemberKind::Type(t) = &entry.node.kind else { return None };
     let [t1] = t.node.choices.as_slice() else { return None };
+    // `uint` bounded by controls: `.size (uint .le 16)` (RFC 9164).
+    if matches!(&t1.node.base.node, Type2::Typename { name, args } if args.is_empty() && name.node.as_str() == "uint") {
+        let (mut min, mut max) = (0u64, None::<u64>);
+        for op in &t1.node.ops {
+            let TypeOp::Control { op, operand } = op else { return None };
+            let n = count_literal(&operand.node)?;
+            match op.node {
+                CtlOp::Le => max = Some(max.map_or(n, |m| m.min(n))),
+                CtlOp::Lt => {
+                    let n = n.checked_sub(1)?;
+                    max = Some(max.map_or(n, |m| m.min(n)));
+                }
+                CtlOp::Ge => min = min.max(n),
+                CtlOp::Gt => min = min.max(n + 1),
+                CtlOp::Eq => { min = min.max(n); max = Some(max.map_or(n, |m| m.min(n))); }
+                _ => return None,
+            }
+        }
+        return Some(SizeOperand::Range { min, max });
+    }
     let lo = count_literal(&t1.node.base.node)?;
     match t1.node.ops.as_slice() {
         [] => Some(SizeOperand::Exact(lo)),

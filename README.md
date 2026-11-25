@@ -421,6 +421,14 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 `scripts/interop.sh <lang>` runs the interop vectors for every reference schema through that
 language's harness, as CI does after the build tests.
 
+### Published schemas
+
+`crates/cddlc-cli/tests/corpus/` holds CDDL written by others: the RFC collection that
+[cabo/cddlc](https://github.com/cabo/cddlc) bundles (COSE, CWT, CoSWID, EDHOC, ...) and
+WebDriver BiDi. `cargo test -p cddlc-cli --test corpus` generates each one in every language
+and format. A schema cddlc can't take yet is listed with its error and the issue tracking it,
+and the test fails when one starts working, so the list stays current.
+
 ---
 
 ## Known Gaps and Future Enhancements

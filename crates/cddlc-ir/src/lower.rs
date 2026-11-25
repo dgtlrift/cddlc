@@ -68,6 +68,12 @@ struct LowerCtx<'m> {
     sources: Sources,
 
     warnings: Vec<IrWarning>,
+
+    /// The type an inline map or array of just a group rule (`{ g }`, `[ g ]`)
+    /// was lowered to, keyed by (is it an array, the group's name): one type
+    /// for every use, which also ends a group that recurses through one
+    /// (`schema = ( elements: { schema } // ... )`, RFC 8927).
+    inline_groups: HashMap<(bool, SmolStr), SmolStr>,
 }
 
 impl<'m> LowerCtx<'m> {
@@ -85,6 +91,7 @@ impl<'m> LowerCtx<'m> {
             output:       IndexMap::new(),
             sources:      Sources::default(),
             warnings:     Vec::new(),
+            inline_groups: HashMap::new(),
         }
     }
 
@@ -1273,6 +1280,10 @@ impl<'m> LowerCtx<'m> {
 
         // Gather constraints from control operators
         let mut constraints: Vec<Constraint> = Vec::new();
+        // The prelude's `nint` is `#1`, a negative integer.
+        if ref_name == "nint" {
+            constraints.extend(major_type(1, None).1);
+        }
         for op in &t1.ops {
             let cs = self.lower_op(op, &t1.base.node, name, meta.regex_hook.as_deref(), 0)?;
             constraints.extend(cs);
@@ -1301,7 +1312,11 @@ impl<'m> LowerCtx<'m> {
             .generics
             .get(generic_name)
             .map(|(p, r)| (p.clone(), *r))
-            .ok_or_else(|| IrError::NotGeneric { name: generic_name.to_owned() })?;
+            .ok_or_else(|| if self.known_rules.contains(generic_name) {
+                IrError::NotGeneric { name: generic_name.to_owned() }
+            } else {
+                IrError::UndefinedType { name: generic_name.to_owned(), in_rule: instance_name.to_owned() }
+            })?;
 
         if params.len() != args.len() {
             return Err(IrError::GenericArgCount {
@@ -1617,6 +1632,10 @@ impl<'m> LowerCtx<'m> {
 
     /// Resolve a type name to a TypeRef.
     fn resolve_typeref(&self, name: &str, in_rule: &str) -> Result<TypeRef, IrError> {
+        // `nint` is `#1`, a negative integer (RFC 8610 Appendix D).
+        if name == "nint" {
+            return Ok(major_type(1, None).0);
+        }
         if let Some(p) = Primitive::from_prelude(name) {
             return Ok(TypeRef::Primitive(p));
         }
@@ -1672,11 +1691,35 @@ impl<'m> LowerCtx<'m> {
             }
         }
         if let Some((is_array, group)) = inline {
+            // `{ g }` for a group rule `g`: one type, shared by every use.
+            let only_group = match group.node.choices.as_slice() {
+                [gc] => match gc.entries.as_slice() {
+                    [e] if e.node.occurrence.is_none() => match &e.node.kind {
+                        MemberKind::Type(t) => match single_type2(&t.node) {
+                            Some(Type2::Typename { name, args }) if args.is_empty()
+                                && self.group_alternatives(name.node.as_str()).is_some() =>
+                                Some(SmolStr::from(name.node.as_str())),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(g) = &only_group {
+                if let Some(done) = self.inline_groups.get(&(is_array, g.clone())) {
+                    return Ok((TypeRef::Named(done.clone()), vec![]));
+                }
+            }
             let mut name: SmolStr = format!("{rule_name}-{field_name}").into();
             while self.output.contains_key(&name) || self.known_rules.contains(&name) {
                 name = format!("{name}-type").into();
             }
             self.known_rules.insert(name.clone());
+            if let Some(g) = only_group {
+                self.inline_groups.insert((is_array, g), name.clone());
+            }
             let meta = PragmaMeta::default();
             let def = if is_array {
                 self.lower_array_type(&name, &group.node.choices, &meta)?
@@ -1746,6 +1789,10 @@ impl<'m> LowerCtx<'m> {
         // A major type's constraints (`#1` is a negative integer).
         if let Type2::MajorType(mt, ai) = &t1.base.node {
             constraints.extend(major_type(*mt, *ai).1);
+        }
+        // The prelude's `nint` is `#1`.
+        if matches!(&t1.base.node, Type2::Typename { name, args } if args.is_empty() && name.node.as_str() == "nint") {
+            constraints.extend(major_type(1, None).1);
         }
         // So are the prelude's `true` and `false` (dgtlrift/cddlc#15).
         if let Some(b) = bool_value_name(&t1.base.node) {
