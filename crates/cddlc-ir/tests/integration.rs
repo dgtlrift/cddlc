@@ -1092,6 +1092,8 @@ fn test_undefined_generic_is_undefined() {
     let parsed = parse_cddl("r = g<uint>", PathBuf::from("t.cddl")).unwrap();
     let err = lower(&parsed.value, 16, 64).err().expect("should fail").to_string();
     assert!(err.contains("undefined type 'g'"), "{err}");
+}
+
 // ── Repeated groups in arrays (dgtlrift/cddlc#90) ─────────────────────────────
 
 #[test]
