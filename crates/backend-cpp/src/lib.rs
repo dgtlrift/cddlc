@@ -1344,6 +1344,29 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                     (TypeRef::Primitive(Primitive::Float32 | Primitive::Float16), _) => "1.5f".into(),
                     (TypeRef::Primitive(Primitive::Float64 | Primitive::Float), _) => "1.5".into(),
                     (TypeRef::Primitive(Primitive::Tstr), _) => "std::string_view(\"hello\")".into(),
+                    // A map variant's members pinned to a literal (`type: "start"`) hold it.
+                    (TypeRef::Named(n), Some(t)) => match module.get(n) {
+                        Some(TypeDef::Struct(st)) => {
+                            let sets: Vec<String> = st.fields.iter()
+                                .filter(|f| f.occurrence.is_required())
+                                .filter_map(|f| f.constraints.iter().find_map(|c| match c {
+                                    cddlc_ir::Constraint::Eq(LiteralValue::Text(x)) =>
+                                        Some(format!("v.{} = std::string_view({x:?});", to_snake_case(&f.name))),
+                                    cddlc_ir::Constraint::Eq(LiteralValue::Uint(x)) =>
+                                        Some(format!("v.{} = {x}u;", to_snake_case(&f.name))),
+                                    cddlc_ir::Constraint::Eq(LiteralValue::Int(x)) =>
+                                        Some(format!("v.{} = {x};", to_snake_case(&f.name))),
+                                    _ => None,
+                                }))
+                                .collect();
+                            if sets.is_empty() {
+                                format!("{t}{{}}")
+                            } else {
+                                format!("[] {{ {t} v{{}}; {} return v; }}()", sets.join(" "))
+                            }
+                        }
+                        _ => format!("{t}{{}}"),
+                    },
                     (_, Some(t)) => format!("{t}{{}}"),
                 };
                 format!("{type_name}::make_{k}({arg})")

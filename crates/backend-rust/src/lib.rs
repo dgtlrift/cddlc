@@ -179,7 +179,7 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
         w.blank();
         match def {
             TypeDef::Struct(s) => emit_struct(&mut w, s, opts, module),
-            TypeDef::Enum(e)   => emit_enum(&mut w, e, opts),
+            TypeDef::Enum(e)   => emit_enum(&mut w, e, opts, module),
             TypeDef::Array(a)  => emit_array(&mut w, a, opts, module),
             TypeDef::Alias(a)  => emit_alias(&mut w, a, opts),
             TypeDef::Map(m)    => emit_map(&mut w, m, opts, module),
@@ -682,7 +682,7 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
 
 // ── Enum ──────────────────────────────────────────────────────────────────────
 
-fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, e.doc.as_deref());
     if e.deprecated { w.line("#[deprecated]"); }
 
@@ -760,12 +760,12 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     }
 
     w.blank();
-    emit_enum_encode(w, e, opts);
+    emit_enum_encode(w, e, opts, module);
     w.blank();
-    emit_enum_decode(w, e, opts);
+    emit_enum_decode(w, e, opts, module);
 }
 
-fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions) {
+fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&e.name);
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<C> Encode<C> for {} {{", type_name));
@@ -818,6 +818,10 @@ fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions) {
             TypeRef::Primitive(p) if is_float(p) => {
                 w.line(&format!("{}::{}(f) => {{ e.f64(*f as f64)?; }}", type_vname, vname));
             }
+            // With `--no-std`, an array or table variant has its own encoder.
+            TypeRef::Named(n) if opts.no_std && is_container(n, Some(module)) => {
+                w.line(&format!("{}::{}(inner) => {{ encode_{}(inner, e, ctx)?; }}", type_vname, vname, to_snake_case(n)));
+            }
             TypeRef::Named(_) => {
                 w.line(&format!("{}::{}(inner) => {{ inner.encode(e, ctx)?; }}", type_vname, vname));
             }
@@ -835,7 +839,7 @@ fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions) {
     w.line("}");
 }
 
-fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&e.name);
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<'b> Decode<'b, ()> for {} {{", type_name));
@@ -973,10 +977,14 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                 w.line("{");
                 w.indent();
                 w.line("let mut probe = d.clone();");
-                w.line(&format!(
-                    "if let Ok(inner) = <{} as Decode<'b, ()>>::decode(&mut probe, ctx) {{",
-                    to_pascal_case(n)
-                ));
+                if opts.no_std && is_container(n, Some(module)) {
+                    w.line(&format!("if let Ok(inner) = decode_{}(&mut probe, ctx) {{", to_snake_case(n)));
+                } else {
+                    w.line(&format!(
+                        "if let Ok(inner) = <{} as Decode<'b, ()>>::decode(&mut probe, ctx) {{",
+                        to_pascal_case(n)
+                    ));
+                }
                 w.indent();
                 w.line("*d = probe;");
                 w.line(&format!("return Ok({enum_name}::{vname}(inner));"));
