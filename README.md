@@ -346,6 +346,7 @@ with `* tstr => any`.
 | Enums (string/int/mixed) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Arrays / typed lists | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Record arrays (`[a: uint, b: tstr]`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Repeated groups in arrays (`[* (a: uint, b: tstr)]`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Tables (`{ * tstr => V }`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Maps with other entries (`{ id: uint, * tstr => V }`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Type aliases | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -452,6 +453,11 @@ language's harness, as CI does after the build tests.
   (`<rule>-browser.close`); others are numbered (`<rule>-alt1`, ...). A repeated group in a
   map (`{ * g }`), and a socket extended by more than one `//=` with choices, are rejected as
   unsupported; several `//=` extensions of one socket add members rather than alternatives.
+- **A repeated group in an array** (`[* (a: uint, b: tstr)]`, or `[+ pair]` for a group rule
+  `pair`) is a list of `<rule>-entry` records whose members sit inline: `[1, "x", 2, "y"]` holds
+  two. Each repetition must have the same members, so a group with optional or repeated
+  members, or with choices, is rejected as unsupported, as is a repeated group among other
+  array members (`[id: uint, * (a: uint, b: tstr)]`).
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
 - **Maps with named members and other entries** need text keys for the other entries
   (`{ a: uint, * tstr => any }`); other key types there (`{ 1 => int, * int => any }`), and

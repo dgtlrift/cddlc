@@ -93,6 +93,8 @@ pub enum VectorShape {
     Enum,
     Alias,
     Array,
+    /// An array of a repeated group (dgtlrift/cddlc#90).
+    FlatArray,
     Map,
 }
 
@@ -345,6 +347,22 @@ fn write_array(
         Occurrence::Bounded { min, .. } => *min as u64,
         _ => 0,
     };
+    if a.flat {
+        // A repeated group (dgtlrift/cddlc#90): each record's members, inline.
+        let width = match &a.element {
+            TypeRef::Named(n) => match module.get(n)? { TypeDef::Struct(s) => s.fields.len() as u64, _ => return None },
+            _ => return None,
+        };
+        enc.array(min * width).ok()?;
+        for _ in 0..min {
+            let mut item = Vec::new();
+            write_sample(&mut Encoder::new(&mut item), &a.element, module, explicit, opts, depth + 1)?;
+            // Drop the record's own array header (a one-byte head: fewer than 24 members).
+            if !(0x80..0x98).contains(item.first()?) { return None; }
+            enc.writer_mut().extend_from_slice(&item[1..]);
+        }
+        return Some(());
+    }
     enc.array(min).ok()?;
     for _ in 0..min {
         write_sample(enc, &a.element, module, explicit, opts, depth + 1)?;
@@ -475,7 +493,7 @@ fn encode_array_empty(a: &ArrayDef, module: &IrModule, opts: &CodegenOptions) ->
     drop(enc);
     Some(TestVector {
         cddl_name:   a.name.to_string(),
-        shape:       VectorShape::Array,
+        shape:       if a.flat { VectorShape::FlatArray } else { VectorShape::Array },
         type_name:   to_pascal_case(&a.name),
         description: "minimal array".into(),
         cbor_bytes:  buf,
@@ -677,10 +695,20 @@ fn emit_rust_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions
         w.line(&format!("fn {test_name}() {{"));
         w.indent();
         w.line(&format!("let bytes: &[u8] = &[{bytes}];"));
-        w.line(&format!(
-            "let decoded: {} = minicbor::decode(bytes).expect(\"decode\");",
-            v.type_name
-        ));
+        // An array of a repeated group has its own functions (its members sit inline).
+        let flat = v.shape == VectorShape::FlatArray;
+        let snake = to_snake_case(&v.cddl_name);
+        if flat {
+            w.line(&format!(
+                "let decoded: {} = decode_{snake}(&mut minicbor::Decoder::new(bytes), &mut ()).expect(\"decode\");",
+                v.type_name
+            ));
+        } else {
+            w.line(&format!(
+                "let decoded: {} = minicbor::decode(bytes).expect(\"decode\");",
+                v.type_name
+            ));
+        }
         for f in &v.fields {
             let field = cddlc_codegen::rust_field_ident(&f.name);
             match &f.value {
@@ -710,7 +738,12 @@ fn emit_rust_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions
         }
         w.blank();
         w.line("// Re-encode and verify the bytes match");
-        w.line("let reencoded = minicbor::to_vec(&decoded).expect(\"encode\");");
+        if flat {
+            w.line("let mut reencoded = Vec::new();");
+            w.line(&format!("encode_{snake}(&decoded, &mut minicbor::Encoder::new(&mut reencoded), &mut ()).expect(\"encode\");"));
+        } else {
+            w.line("let reencoded = minicbor::to_vec(&decoded).expect(\"encode\");");
+        };
         w.line("assert_eq!(reencoded, bytes);");
         w.dedent();
         w.line("}");

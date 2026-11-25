@@ -540,9 +540,9 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
 
     for (_, def) in &module.types {
         w.blank();
-        emit_encode_fn(&mut w, def, opts);
+        emit_encode_fn(&mut w, def, module, opts);
         w.blank();
-        emit_decode_fn(&mut w, def, opts);
+        emit_decode_fn(&mut w, def, module, opts);
     }
 
     w.blank();
@@ -550,7 +550,29 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+/// The record an array of a repeated group holds, whose members sit inline
+/// in the array (dgtlrift/cddlc#90).
+fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m cddlc_ir::StructDef> {
+    match (&a.element, a.flat) {
+        (TypeRef::Named(n), true) => match module.get(n) {
+            Some(TypeDef::Struct(s)) => Some(s),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Reads one array element into `dest`: for a repeated group, each member in turn.
+fn emit_cpp_array_item_decode(w: &mut IndentWriter, a: &ArrayDef, module: &IrModule, dest: &str, opts: &CodegenOptions) {
+    match flat_record(a, module) {
+        Some(r) => for f in &r.fields {
+            emit_cpp_decode_field(w, &f.ty, &format!("{dest}.{}", to_snake_case(&f.name)), &f.constraints, &f.name, "&arr", opts);
+        },
+        None => emit_cpp_decode_field(w, &a.element, dest, &[], "item", "&arr", opts),
+    }
+}
+
+fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(def.name());
     w.line(&format!("int encode(nanocbor_encoder_t *enc, const {type_name} &val) {{"));
     w.indent();
@@ -679,16 +701,24 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             if let Some(tag) = a.tagged {
                 w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
             }
-            if is_heap(opts) {
-                w.line("nanocbor_fmt_array(enc, val.items.size());");
+            // A repeated group's members sit inline (dgtlrift/cddlc#90).
+            let rec = flat_record(a, module);
+            let width = rec.map_or(String::new(), |r| format!(" * {}", r.fields.len()));
+            let item = if is_heap(opts) {
+                w.line(&format!("nanocbor_fmt_array(enc, val.items.size(){width});"));
                 w.line("for (const auto &item : val.items) {");
-                w.indent();
-                emit_cpp_encode_field(w, &a.element, "item", &Occurrence::Required, opts);
+                "item"
             } else {
-                w.line("nanocbor_fmt_array(enc, val.count);");
+                w.line(&format!("nanocbor_fmt_array(enc, val.count{width});"));
                 w.line("for (std::size_t i = 0; i < val.count; i++) {");
-                w.indent();
-                emit_cpp_encode_field(w, &a.element, "val.items[i]", &Occurrence::Required, opts);
+                "val.items[i]"
+            };
+            w.indent();
+            match rec {
+                Some(r) => for f in &r.fields {
+                    emit_cpp_encode_field(w, &f.ty, &format!("{item}.{}", to_snake_case(&f.name)), &Occurrence::Required, opts);
+                },
+                None => emit_cpp_encode_field(w, &a.element, item, &Occurrence::Required, opts),
             }
             w.dedent();
             w.line("}");
@@ -776,7 +806,7 @@ fn cpp_encode_call(p: &Primitive, expr: &str) -> String {
     }
 }
 
-fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(def.name());
     w.line(&format!(
         "int decode(nanocbor_value_t *dec, {type_name} &out, const Callbacks &cb, void *ctx) {{"
@@ -910,7 +940,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
                 w.line("while (!nanocbor_at_end(&arr)) {");
                 w.indent();
                 w.line(&format!("{} item{{}};", cpp_typeref(&a.element, opts)));
-                emit_cpp_decode_field(w, &a.element, "item", &[], "item", "&arr", opts);
+                emit_cpp_array_item_decode(w, a, module, "item", opts);
                 w.line("out.items.push_back(item);");
                 w.dedent();
                 w.line("}");
@@ -923,7 +953,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
             w.line("out.count = 0;");
             w.line(&format!("while (!nanocbor_at_end(&arr) && out.count < {cap}) {{"));
             w.indent();
-            emit_cpp_decode_field(w, &a.element, "out.items[out.count]", &[], "item", "&arr", opts);
+            emit_cpp_array_item_decode(w, a, module, "out.items[out.count]", opts);
             w.line("out.count++;");
             w.dedent();
             w.line("}");
@@ -2104,7 +2134,16 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.indent();
             // Element by element, so named elements use their own conversion.
             w.line("nlohmann::json arr = nlohmann::json::array();");
-            w.line(&format!("for (const auto& item : val) arr.push_back({});", cpp_json_to_val(&a.element, "item", module)));
+            let flat = flat_record(a, module).map(|r| r.fields.len());
+            if flat.is_some() {
+                // A repeated group: each record's members, inline (dgtlrift/cddlc#90).
+                w.line(&format!(
+                    "for (const auto& item : val) for (auto& m : {}) arr.push_back(m);",
+                    cpp_json_to_val(&a.element, "item", module)
+                ));
+            } else {
+                w.line(&format!("for (const auto& item : val) arr.push_back({});", cpp_json_to_val(&a.element, "item", module)));
+            }
             w.line("auto s = arr.dump();");
             w.line("return std::vector<uint8_t>(s.begin(), s.end());");
             w.dedent();
@@ -2115,7 +2154,20 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("{ctype} out;"));
-            w.line(&format!("for (const auto& item : j) out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+            if let Some(n) = flat {
+                w.line(&format!(
+                    "if (!j.is_array() || j.size() % {n} != 0) throw std::runtime_error(\"{ctype}: a partial group\");"
+                ));
+                w.line(&format!("for (std::size_t i = 0; i < j.size(); i += {n}) {{"));
+                w.indent();
+                w.line("nlohmann::json item = nlohmann::json::array();");
+                w.line(&format!("for (std::size_t k = 0; k < {n}; k++) item.push_back(j[i + k]);"));
+                w.line(&format!("out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+                w.dedent();
+                w.line("}");
+            } else {
+                w.line(&format!("for (const auto& item : j) out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+            }
             w.line("return out;");
             w.dedent();
             w.line("}");
