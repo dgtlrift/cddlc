@@ -461,6 +461,15 @@ fn emit_c_repeat_check(w: &mut IndentWriter, f: &cddlc_ir::FieldDef, n: &str) {
     }
 }
 
+/// Whether the byte string `val_expr` (a `cbor_slice_t`) equals `b`.
+fn c_bytes_eq(val_expr: &str, b: &[u8]) -> String {
+    if b.is_empty() {
+        return format!("({val_expr}.len == 0)");
+    }
+    let bytes = b.iter().map(|x| format!("{x:#04x}")).collect::<Vec<_>>().join(", ");
+    format!("({val_expr}.len == {n} && memcmp({val_expr}.ptr, (const uint8_t[]){{{bytes}}}, {n}) == 0)", n = b.len())
+}
+
 /// Whether an enum variant is a text literal (`"on"`), not any text (`tstr`).
 fn is_text_literal(v: &cddlc_ir::EnumVariant) -> bool {
     v.constraints.iter().any(|c| matches!(c, Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
@@ -1243,6 +1252,10 @@ fn c_constraint_check(c: &Constraint, val_expr: &str, p: &Primitive) -> Option<S
             "!({val_expr}.len == {n} && memcmp({val_expr}.ptr, {t:?}, {n}) == 0)",
             n = t.len()
         )),
+        // A byte-string literal (RFC 9277's `'BOR'`): compare length and
+        // bytes (dgtlrift/cddlc#142).
+        Constraint::Eq(cddlc_ir::LiteralValue::Bytes(b)) if *p == Primitive::Bstr => Some(c_bytes_eq(val_expr, b)),
+        Constraint::Ne(cddlc_ir::LiteralValue::Bytes(b)) if *p == Primitive::Bstr => Some(format!("!{}", c_bytes_eq(val_expr, b))),
         // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
         Constraint::Bits(bits) => match p {
             Primitive::Uint => Some(format!(
@@ -1506,6 +1519,11 @@ fn emit_c_alias_test(w: &mut IndentWriter, a: &AliasDef, pfx: &str, _opts: &Code
     for c in &a.constraints {
         let set = match c {
             Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => format!("(cbor_str_t){{ {t:?}, {} }}", t.len()),
+            // A byte-string literal (dgtlrift/cddlc#142).
+            Constraint::Eq(cddlc_ir::LiteralValue::Bytes(b)) if !b.is_empty() => {
+                let bytes = b.iter().map(|x| format!("{x:#04x}")).collect::<Vec<_>>().join(", ");
+                format!("(cbor_slice_t){{ (const uint8_t[]){{{bytes}}}, {} }}", b.len())
+            }
             Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => format!("{n}U"),
             Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => format!("{n}"),
             Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 => format!("{}U", *lo),
