@@ -442,6 +442,16 @@ those groups; `--no-interop` skips interop. Each run writes its own directory,
 `summary.txt`. Each group gets its own temporary directory, so nothing two groups write is
 shared, and the Java group runs its Maven builds one at a time.
 
+With `CDDLC_TEST_HOSTS="user@host1 user@host2"`, the groups are shared between this machine and
+those hosts, longest first, to whichever has the least work so far. Over ssh (keys, no password
+prompts), each host keeps a checkout under `${CDDLC_TEST_REMOTE_DIR:-~/cddlc-dist-build}/<branch>`.
+It's cloned from `origin` once, checked out at the branch's pushed commit, and overwritten with
+every file that differs locally: committed, uncommitted or untracked, with locally deleted files
+deleted there too. Its `target/` stays warm between runs. The hosts' logs are copied back into
+the same run directory, and `summary.txt` says where each step ran. A host that can't be reached
+or synced has its groups run locally. A host needs git and the toolchains of the groups it gets.
+`CDDLC_TEST_REMOTE_ENV` sets variables for its run (`CDDLC_PYTHON=/home/me/venv/bin/python`).
+
 To see which languages this machine can test, and how to install the rest, run
 `target/debug/cddlc-toolchains` (built by `cargo build`). A language whose toolchain is missing
 is skipped, and its install command is printed once. The command is for this host's package
