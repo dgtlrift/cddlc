@@ -434,6 +434,14 @@ cargo test -p backend-buildtest --test build_validation test_build_rust -- --ign
 `scripts/interop.sh <lang>` runs the interop vectors for every reference schema through that
 language's harness, as CI does after the build tests.
 
+`scripts/test-all.sh` runs everything: the workspace tests, every language's build tests and
+interop, with the languages in parallel (`-j N` at once, half the CPUs by default; about 25
+minutes on 8 CPUs, against about 40 one at a time). `scripts/test-all.sh -j 2 rust go` runs just
+those groups; `--no-interop` skips interop. Each run writes its own directory,
+`target/test-all/<time>-<pid>/`: a log per step under each group's directory, and
+`summary.txt`. Each group gets its own temporary directory, so nothing two groups write is
+shared, and the Java group runs its Maven builds one at a time.
+
 To see which languages this machine can test, and how to install the rest, run
 `target/debug/cddlc-toolchains` (built by `cargo build`). A language whose toolchain is missing
 is skipped, and its install command is printed once. The command is for this host's package

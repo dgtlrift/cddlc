@@ -13,7 +13,10 @@ fn generate(lang: &str, out: &Path) -> String {
     assert!(ok, "{lang}: generate failed");
     let mut src = String::new();
     for entry in walk(out) {
-        if !entry.to_string_lossy().contains("test") {
+        // The generated tests are skipped, by their path below `out`: the
+        // temp directory's own path may say "test".
+        let rel = entry.strip_prefix(out).unwrap_or(&entry);
+        if !rel.to_string_lossy().contains("test") {
             src.push_str(&std::fs::read_to_string(&entry).unwrap_or_default());
         }
     }
