@@ -1,0 +1,18 @@
+; Reference schema: a map's other entries with integer or choice keys
+; (COSE's header map, RFC 9052 §3). CBOR only: JSON objects have text keys.
+
+; Integer members, then any other entries keyed by an integer or text
+header_map = {
+    ? 1 => int / tstr,
+    ? 4 => bstr,
+    * label => values,
+}
+
+label = int / tstr
+values = int / tstr
+
+; Other entries keyed by integers only
+counters = {
+    name: tstr,
+    * int => uint,
+}

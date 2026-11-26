@@ -14,7 +14,16 @@ enum Expect {
     Ok,
     /// Fails with an error containing this text; the issue tracks the gap.
     Fails(&'static str, u32),
+    /// A map's other entries have integer keys: generates in CBOR in the
+    /// languages that hold them, and is refused, with a reason, in JSON (whose
+    /// objects have text keys, dgtlrift/cddlc#136) and in the others
+    /// (dgtlrift/cddlc#181).
+    IntKeyedOthers,
 }
+
+/// The languages whose CBOR output holds a map's other entries with integer
+/// keys (dgtlrift/cddlc#136, #181).
+const INT_KEYED_OTHERS: &[&str] = &["rust", "c", "cpp", "csharp", "python", "go"];
 
 /// A schema: its files (rules it uses from another RFC come first), and what
 /// it should do.
@@ -26,15 +35,14 @@ struct Case {
 const RECORD: &str = "a record array can't repeat a member yet";
 const MAP_GROUP: &str = "a repeated group in a map";
 const COMPUTED_KEYS: &str = "a map with more than one member with a computed key";
-const OTHER_KEY: &str = "a computed key other than tstr alongside named members";
 
 const CASES: &[Case] = &[
     Case { files: &["rfc/rfc8727.cddl"], expect: Expect::Fails(COMPUTED_KEYS, 136) },
     Case { files: &["rfc/rfc8927.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc8990.cddl"], expect: Expect::Fails(RECORD, 134) },
     Case { files: &["rfc/rfc8990-cleaned.cddl"], expect: Expect::Fails(RECORD, 134) },
-    Case { files: &["rfc/rfc9052.cddl"], expect: Expect::Fails(OTHER_KEY, 136) },
-    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9053.cddl"], expect: Expect::Fails(OTHER_KEY, 136) },
+    Case { files: &["rfc/rfc9052.cddl"], expect: Expect::IntKeyedOthers },
+    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9053.cddl"], expect: Expect::IntKeyedOthers },
     Case { files: &["rfc/rfc9054.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9090.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9115.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
@@ -44,17 +52,17 @@ const CASES: &[Case] = &[
     Case { files: &["rfc/rfc9171.cddl", "rfc/rfc9173.cddl"], expect: Expect::Fails(RECORD, 134) },
     Case { files: &["rfc/rfc9177.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9202.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9203.cddl"], expect: Expect::Fails(OTHER_KEY, 136) },
+    Case { files: &["rfc/rfc9203.cddl"], expect: Expect::IntKeyedOthers },
     Case { files: &["rfc/rfc9237.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9277.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9290.cddl"], expect: Expect::Fails(COMPUTED_KEYS, 136) },
     Case { files: &["rfc/rfc9321.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9338.cddl"], expect: Expect::Fails(OTHER_KEY, 136) },
+    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9338.cddl"], expect: Expect::IntKeyedOthers },
     Case { files: &["rfc/rfc9360.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9393.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
     Case { files: &["rfc/rfc9393-concise-swid-tag.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
     Case { files: &["rfc/rfc9393.cddl", "rfc/rfc9393-sign.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
-    Case { files: &["rfc/rfc9393-sign1.cddl"], expect: Expect::Fails(OTHER_KEY, 136) },
+    Case { files: &["rfc/rfc9393-sign1.cddl"], expect: Expect::IntKeyedOthers },
     Case { files: &["rfc/rfc9393-concise-swid-tag.cddl", "rfc/rfc9393-tags.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
     Case { files: &["rfc/rfc9431.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9526.cddl"], expect: Expect::Ok },
@@ -121,6 +129,23 @@ fn published_schemas() {
                         let out = tmp.path().join(format!("{}-{lang}-{format}", case.files.len()));
                         if let Err(e) = generate(&files, lang, format, &out) {
                             problems.push(format!("{name} ({lang}, {format}): {}", e.trim()));
+                        }
+                        let _ = std::fs::remove_dir_all(&out);
+                    }
+                }
+            }
+            Expect::IntKeyedOthers => {
+                for lang in LANGS {
+                    for format in ["cbor", "json"] {
+                        let out = tmp.path().join(format!("{}-{lang}-{format}", case.files.len()));
+                        let held = format == "cbor" && INT_KEYED_OTHERS.contains(lang);
+                        let reason = if format == "json" { "dgtlrift/cddlc#136" } else { "dgtlrift/cddlc#181" };
+                        match generate(&files, lang, format, &out) {
+                            Ok(()) if held => {}
+                            Ok(()) => problems.push(format!("{name} ({lang}, {format}) now generates: add it to INT_KEYED_OTHERS")),
+                            Err(e) if held => problems.push(format!("{name} ({lang}, {format}): {}", e.trim())),
+                            Err(e) if e.contains(reason) => {}
+                            Err(e) => problems.push(format!("{name} ({lang}, {format}): expected a refusal naming {reason}, got: {}", e.trim())),
                         }
                         let _ = std::fs::remove_dir_all(&out);
                     }

@@ -40,7 +40,24 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("bits",        include_str!("../schemas/bits.cddl")),
     ("repeated-groups", include_str!("../schemas/repeated_groups.cddl")),
     ("int-keys",    include_str!("../schemas/int_keys.cddl")),
+    ("other-keys",  include_str!("../schemas/other_keys.cddl")),
 ];
+
+/// Reference schemas only some backends can generate, and only in CBOR: each
+/// with the backends that can, by file extension. A map's other entries with
+/// integer keys can't be JSON (JSON objects have text keys), and Node, Java,
+/// Lua and Dart don't hold them yet (dgtlrift/cddlc#181).
+const CBOR_ONLY_SCHEMAS: &[(&str, &[&str])] = &[
+    ("other-keys", &["rs", "h", "hpp", "cs", "py", "go"]),
+];
+
+/// Whether a reference schema is built with this backend and format.
+pub fn schema_applies(schema: &str, backend: &dyn Backend, opts: &CodegenOptions) -> bool {
+    match CBOR_ONLY_SCHEMAS.iter().find(|(n, _)| *n == schema) {
+        Some((_, exts)) => !opts.is_json() && exts.contains(&backend.file_extension()),
+        None => true,
+    }
+}
 
 // ── Result types ──────────────────────────────────────────────────────────────
 
@@ -622,6 +639,10 @@ where
     let mut outcomes = Vec::new();
 
     for (schema_name, schema_src) in SCHEMAS {
+        if !schema_applies(schema_name, backend, opts) {
+            eprintln!("  [{schema_name}] not for this backend or format");
+            continue;
+        }
         eprint!("  [{schema_name}] generating ... ");
 
         let files = match generate_schema(schema_name, schema_src, backend, opts) {

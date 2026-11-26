@@ -27,6 +27,7 @@ impl Backend for DartBackend {
         module: &IrModule,
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "Dart", false)?;
         let name     = module.name.as_str();
         let fmt_tag  = if opts.is_json() { "json" } else { "cbor" };
         let pkg_name = format!("{}_{}", dart_pkg(name), fmt_tag);

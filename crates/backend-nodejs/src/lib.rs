@@ -98,6 +98,7 @@ impl Backend for NodeJsBackend {
         module: &IrModule,
         opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "Node", false)?;
         let name = module.name.as_str();
         let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");

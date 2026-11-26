@@ -216,6 +216,7 @@ impl Backend for RustBackend {
         module: &IrModule,
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "Rust", true)?;
         let fmt_tag    = if opts.is_json() { "json" } else { "cbor" };
         let crate_name = format!("{}-{fmt_tag}", module.name);
         let lib_src    = if opts.is_json() { emit_module_json(module, opts) } else { emit_module(module, opts) };
@@ -420,9 +421,48 @@ fn rest_type(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
             TypeRef::Tagged(_, inner) => typeref_to_rust(inner, opts),
             other => typeref_to_rust(other, opts),
         };
-        format!("heapless::LinearMap<heapless::String<{}>, {val}, {cap}>", opts.max_str)
+        let key = match &r.key_ty {
+            TypeRef::Primitive(Primitive::Tstr) => format!("heapless::String<{}>", opts.max_str),
+            other => typeref_to_rust(other, opts),
+        };
+        format!("heapless::LinearMap<{key}, {val}, {cap}>")
     } else {
-        format!("std::collections::BTreeMap<String, {}>", rest_value_heap(&r.val_ty, opts))
+        format!("std::collections::BTreeMap<{}, {}>", rest_key_rust(r, opts), rest_value_heap(&r.val_ty, opts))
+    }
+}
+
+/// The Rust type of a map's other entries' keys: `String`, or an integer or
+/// an enum of integers and text (COSE's `label`, dgtlrift/cddlc#136).
+fn rest_key_rust(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
+    match &r.key_ty {
+        TypeRef::Primitive(Primitive::Tstr) => "String".into(),
+        other => typeref_to_rust(other, opts),
+    }
+}
+
+/// A test key for a map's other entries that no named member has: `"k"`, or
+/// 1000 for integer keys, through an enum's integer variant.
+fn rest_test_key(r: &cddlc_ir::MapRest, module: &IrModule, opts: &CodegenOptions) -> String {
+    let text = || if opts.no_std { no_std_text("\"k\"") } else { "\"k\".to_string()".into() };
+    match &r.key_ty {
+        TypeRef::Primitive(Primitive::Uint) => "1000u64".into(),
+        TypeRef::Primitive(Primitive::Int) => "1000i64".into(),
+        TypeRef::Named(n) => match module.get(n) {
+            Some(TypeDef::Enum(e)) => {
+                let enum_name = to_pascal_case(n);
+                match e.variants.iter().find(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Int | Primitive::Uint)) && literal_eq(&v.constraints).is_none()) {
+                    Some(v) => {
+                        let lit = if matches!(v.ty, TypeRef::Primitive(Primitive::Uint)) { "1000u64" } else { "1000i64" };
+                        format!("{enum_name}::{}({lit})", to_pascal_case(&v.name))
+                    }
+                    None => format!("{enum_name}::default()"),
+                }
+            }
+            Some(TypeDef::Alias(a)) if matches!(a.ty, TypeRef::Primitive(Primitive::Int)) => "1000i64".into(),
+            Some(TypeDef::Alias(a)) if matches!(a.ty, TypeRef::Primitive(Primitive::Uint)) => "1000u64".into(),
+            _ => text(),
+        },
+        _ => text(),
     }
 }
 
@@ -436,17 +476,18 @@ fn rest_value_heap(ty: &TypeRef, opts: &CodegenOptions) -> String {
     }
 }
 
-/// A test value for a map's other entries: one entry under the key `k`.
-fn rest_test_value(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
+/// A test value for a map's other entries: one entry under a key no named
+/// member has.
+fn rest_test_value(r: &cddlc_ir::MapRest, module: &IrModule, opts: &CodegenOptions) -> String {
     let val = primitive_default_expr(&r.val_ty, opts);
+    let key = rest_test_key(r, module, opts);
     if opts.no_std {
         format!(
-            "{{ let mut m = {}::new(); m.insert({}, {val}).expect(\"capacity\"); m }}",
+            "{{ let mut m = {}::new(); m.insert({key}, {val}).expect(\"capacity\"); m }}",
             rest_type(r, opts).split('<').next().unwrap_or_default(),
-            no_std_text("\"k\""),
         )
     } else {
-        format!("{{ let mut m = std::collections::BTreeMap::new(); m.insert(\"k\".to_string(), {val}.into()); m }}")
+        format!("{{ let mut m = std::collections::BTreeMap::new(); m.insert({key}, ({val}).into()); m }}")
     }
 }
 
@@ -582,7 +623,11 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     if let Some(r) = &s.rest {
         w.line(&format!("for (k, v) in self.{}.iter() {{", field_ident(&r.name)));
         w.indent();
-        w.line("e.str(k)?;");
+        if cddlc_codegen::rest_keys_are_text(r, module) {
+            w.line("e.str(k)?;");
+        } else {
+            emit_encode_typeref(w, &r.key_ty, "(*k)", opts, Some(module));
+        }
         if opts.no_std {
             emit_encode_typeref(w, &r.val_ty, "(*v)", opts, Some(module));
         } else {
@@ -783,7 +828,13 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("i += 1;");
     // A map with integer keys (`1 => tstr`) reads each key as text or an
     // integer (dgtlrift/cddlc#176); one with only text keys reads text.
-    let int_keys = cddlc_codegen::has_int_keys(s);
+    // Other entries with integer keys (COSE's `* label => values`) are read
+    // again as their key type from where the key starts (dgtlrift/cddlc#136).
+    let rest_typed = s.rest.as_ref().filter(|r| !cddlc_codegen::rest_keys_are_text(r, module));
+    let int_keys = cddlc_codegen::has_int_keys(s) || rest_typed.is_some();
+    if rest_typed.is_some() {
+        w.line("let key_start = d.clone();");
+    }
     if int_keys {
         w.line("enum CddlcKey<'k> { Text(&'k str), Int(i128) }");
         w.line("let key = match d.datatype()? {");
@@ -822,6 +873,21 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     }
 
     match &s.rest {
+        // Other keys with integer keys: read the key again as its type.
+        Some(r) if rest_typed.is_some() => {
+            w.line("_ => {");
+            w.indent();
+            w.line("let mut kd = key_start;");
+            w.line(&format!("let k = {};", decode_expr_for_in_module(&r.key_ty, opts, Some(module)).replace("(d,", "(&mut kd,").replace("d.", "kd.")));
+            if opts.no_std {
+                w.line(&format!("let val = {};", decode_expr_for_in_module(&r.val_ty, opts, Some(module))));
+                w.line("rest.insert(k, val).map_err(|_| DecodeError::message(\"map larger than its capacity\"))?;");
+            } else {
+                w.line("rest.insert(k, d.decode()?);");
+            }
+            w.dedent();
+            w.line("}");
+        }
         // Other keys are the map's other entries.
         Some(r) if opts.no_std => {
             w.line(if int_keys { "CddlcKey::Text(key) => {" } else { "_ => {" });
@@ -2145,7 +2211,7 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
         w.line(&format!("{fname}: {val},"));
     }
     if let Some(r) = &s.rest {
-        w.line(&format!("{}: {},", field_ident(&r.name), rest_test_value(r, opts)));
+        w.line(&format!("{}: {},", field_ident(&r.name), rest_test_value(r, module, opts)));
     }
     w.dedent();
     w.line("};");

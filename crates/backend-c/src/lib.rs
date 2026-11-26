@@ -29,6 +29,7 @@ impl Backend for CBackend {
         module: &IrModule,
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "C", true)?;
         let name      = module.name.as_str();
         let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
@@ -273,7 +274,9 @@ fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) 
         );
         let rname = to_snake_case(&r.name);
         w.line("/* The map's other entries. */");
-        w.line(&format!("struct {{ cbor_str_t key; {} value; }} {rname}[{cap}];", typeref_to_c(&r.val_ty, opts)));
+        // Text keys, or integers or a choice of them (dgtlrift/cddlc#136).
+        let key = if text_rest(r) { "cbor_str_t".to_owned() } else { typeref_to_c(&r.key_ty, opts) };
+        w.line(&format!("struct {{ {key} key; {} value; }} {rname}[{cap}];", typeref_to_c(&r.val_ty, opts)));
         w.line(&format!("size_t {rname}_count;"));
     }
     w.dedent();
@@ -437,6 +440,17 @@ fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m StructDef> 
     }
 }
 
+/// Whether an enum variant is a text literal (`"on"`), not any text (`tstr`).
+fn is_text_literal(v: &cddlc_ir::EnumVariant) -> bool {
+    v.constraints.iter().any(|c| matches!(c, Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
+}
+
+/// Whether a map's other entries have plain `tstr` keys, held as `cbor_str_t`
+/// (otherwise they hold their key type; dgtlrift/cddlc#136).
+fn text_rest(r: &cddlc_ir::MapRest) -> bool {
+    matches!(r.key_ty, TypeRef::Primitive(Primitive::Tstr))
+}
+
 /// Writes a map member's key: its text, or an integer key as an integer
 /// (dgtlrift/cddlc#176).
 fn c_key_write(key: &cddlc_ir::FieldKey) -> String {
@@ -517,7 +531,11 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 let rname = to_snake_case(&r.name);
                 w.line(&format!("for (size_t i = 0; i < val->{rname}_count; i++) {{"));
                 w.indent();
-                w.line(&format!("nanocbor_put_tstrn(enc, val->{rname}[i].key.ptr, val->{rname}[i].key.len);"));
+                if text_rest(r) {
+                    w.line(&format!("nanocbor_put_tstrn(enc, val->{rname}[i].key.ptr, val->{rname}[i].key.len);"));
+                } else {
+                    emit_c_encode_field(w, &r.key_ty, &format!("val->{rname}[i].key"), &Occurrence::Required, mod_name, opts);
+                }
                 emit_c_encode_field(w, &r.val_ty, &format!("val->{rname}[i].value"), &Occurrence::Required, mod_name, opts);
                 w.dedent();
                 w.line("}");
@@ -535,10 +553,15 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 w.line(&format!("case {vconst}:"));
                 w.indent();
                 match &v.ty {
-                    TypeRef::Primitive(Primitive::Tstr) => {
+                    // A text literal is written as itself; a `tstr` alternative
+                    // holds its text.
+                    TypeRef::Primitive(Primitive::Tstr) if is_text_literal(v) => {
                         let s = cddlc_codegen::enum_variant_text(v);
                         w.line(&format!("nanocbor_put_tstr(enc, {:?});", s));
                     }
+                    TypeRef::Primitive(Primitive::Tstr) => w.line(&format!(
+                        "nanocbor_put_tstrn(enc, val->value.{vname}.ptr, val->value.{vname}.len);"
+                    )),
                     TypeRef::Primitive(Primitive::Uint) =>
                         w.line(&format!("nanocbor_fmt_uint(enc, val->value.{vname});")),
                     TypeRef::Primitive(Primitive::Int) =>
@@ -783,7 +806,13 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.indent();
             // A map with integer keys (`1 => tstr`) reads each key as text or
             // an integer (dgtlrift/cddlc#176).
-            let int_keys = cddlc_codegen::has_int_keys(s);
+            // Other entries with typed keys are read again as their key type
+            // from where the key starts (dgtlrift/cddlc#136).
+            let typed_rest = s.rest.as_ref().is_some_and(|r| !text_rest(r));
+            let int_keys = cddlc_codegen::has_int_keys(s) || typed_rest;
+            if typed_rest {
+                w.line("nanocbor_value_t key_start = map;");
+            }
             w.line("const uint8_t *key_ptr = NULL; size_t key_len = 0;");
             if int_keys {
                 w.line("bool key_is_int = false; int64_t key_int = 0;");
@@ -827,7 +856,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                     r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
                     opts.max_array,
                 );
-                if int_keys {
+                if int_keys && !typed_rest {
                     w.line("if (key_is_int) return -1; /* the other entries have text keys */ else");
                 }
                 w.line("{");
@@ -835,7 +864,12 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 w.line(&format!(
                     "if (out->{rname}_count >= {cap}) {{ if (cb && cb->on_error) cb->on_error(ctx, ({pfx}_field_err_t){{{pfx_upper}_ERR_OVERFLOW, \"{rname}\", 0}}); return -1; }}"
                 ));
-                w.line(&format!("out->{rname}[out->{rname}_count].key = (cbor_str_t){{ (const char*)key_ptr, key_len }};"));
+                if typed_rest {
+                    w.line("nanocbor_value_t kd = key_start;");
+                    emit_c_decode_field(w, &r.key_ty, &format!("out->{rname}[out->{rname}_count].key"), &[], &rname, &pfx, &pfx_upper, "&kd", opts);
+                } else {
+                    w.line(&format!("out->{rname}[out->{rname}_count].key = (cbor_str_t){{ (const char*)key_ptr, key_len }};"));
+                }
                 emit_c_decode_field(w, &r.val_ty, &format!("out->{rname}[out->{rname}_count].value"), &[], &rname, &pfx, &pfx_upper, "&map", opts);
                 w.line(&format!("out->{rname}_count++;"));
                 w.dedent();
@@ -933,7 +967,7 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.line("const uint8_t *s; size_t slen;");
             w.line("if (nanocbor_get_tstr(dec, &s, &slen) < 0) return -1;");
             for v in &e.variants {
-                if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
+                if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v) {
                     let cddl_str = cddlc_codegen::enum_variant_text(v);
                     let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
                     w.line(&format!(
@@ -941,6 +975,14 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                         cddl_str.len(), cddl_str, cddl_str.len()
                     ));
                 }
+            }
+            // A `tstr` alternative takes any other text.
+            if let Some(v) = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v)) {
+                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                w.line(&format!(
+                    "out->value.{} = (cbor_str_t){{ (const char*)s, slen }}; out->tag = {vconst}; return NANOCBOR_OK;",
+                    to_snake_case(&v.name)
+                ));
             }
             w.line("return -1; /* unknown variant */");
             w.dedent();

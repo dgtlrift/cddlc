@@ -249,10 +249,33 @@ fn write_struct(
         }
     }
     if let (1, Some(r)) = (extra, &s.rest) {
-        enc.str("other-key").ok()?;
+        // A key no member has: 1000 when the key can be an integer (`* int`,
+        // `* label` with `label = int / tstr`; dgtlrift/cddlc#136), else text.
+        if rest_key_takes_int(&r.key_ty, module, 0) {
+            enc.u64(1000).ok()?;
+        } else {
+            enc.str("other-key").ok()?;
+        }
         write_sample(enc, &r.val_ty, module, explicit, opts, depth + 1)?;
     }
     Some(field_values)
+}
+
+/// Whether a map's other entries' key type has an integer alternative that
+/// takes any integer (not a literal).
+fn rest_key_takes_int(ty: &TypeRef, module: &IrModule, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match ty {
+        TypeRef::Primitive(cddlc_ir::Primitive::Int | cddlc_ir::Primitive::Uint) => true,
+        TypeRef::Named(n) => match module.get(n) {
+            Some(TypeDef::Alias(a)) => a.constraints.is_empty() && rest_key_takes_int(&a.ty, module, depth + 1),
+            Some(TypeDef::Enum(e)) => e.variants.iter().any(|v| v.constraints.is_empty() && rest_key_takes_int(&v.ty, module, depth + 1)),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// The value of a primitive-typed member: its literal when it is pinned to one

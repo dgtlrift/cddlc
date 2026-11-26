@@ -27,6 +27,7 @@ impl Backend for CSharpBackend {
         module: &IrModule,
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "C#", true)?;
         let name      = module.name.as_str();
         let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
@@ -235,7 +236,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
             w.line("[JsonExtensionData]");
             w.line(&format!("public Dictionary<string, JsonElement> {pname} {{ get; set; }} = new();"));
         } else {
-            w.line(&format!("public Dictionary<string, {}> {pname} {{ get; set; }} = new();", cs_typeref(&r.val_ty, opts)));
+            w.line(&format!("public Dictionary<{}, {}> {pname} {{ get; set; }} = new();", rest_key_cs(r, opts), cs_typeref(&r.val_ty, opts)));
         }
     }
     w.blank();
@@ -274,6 +275,17 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
 /// A record's Encode / Decode (RFC 8610 §3.4): an array of the members' values,
 /// in order. Optional members come last: those present are written up to the
 /// first absent one, and one set after an absent one is an error.
+/// Whether a map's other entries have plain `tstr` keys (otherwise they hold
+/// their key type; dgtlrift/cddlc#136).
+fn text_rest(r: &cddlc_ir::MapRest) -> bool {
+    matches!(r.key_ty, TypeRef::Primitive(Primitive::Tstr))
+}
+
+/// The C# type of a map's other entries' keys.
+fn rest_key_cs(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
+    if text_rest(r) { "string".into() } else { cs_typeref(&r.key_ty, opts) }
+}
+
 /// Writes a map member's key: its text, or an integer key as an integer
 /// (dgtlrift/cddlc#176).
 fn cs_key_write(key: &cddlc_ir::FieldKey) -> String {
@@ -527,13 +539,17 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.line(&format!("foreach (var kv in this.{})", to_pascal_case(&r.name)));
         w.line("{");
         w.indent();
-        if !named.is_empty() {
+        if !named.is_empty() && text_rest(r) {
             w.line(&format!(
                 "if (Array.IndexOf(new[] {{ {} }}, kv.Key) >= 0) throw new CborContentException($\"Other entry {{kv.Key}} is a named member's key\");",
                 named.join(", ")
             ));
         }
-        w.line("writer.WriteTextString(kv.Key);");
+        if text_rest(r) {
+            w.line("writer.WriteTextString(kv.Key);");
+        } else {
+            emit_cs_encode_value(w, &r.key_ty, "kv.Key", &Occurrence::Required, opts);
+        }
         emit_cs_encode_value(w, &r.val_ty, "kv.Value", &Occurrence::Required, opts);
         w.dedent();
         w.line("}");
@@ -573,7 +589,7 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.line(&format!("{ty} {local} = {def};"));
     }
     if let Some(r) = &s.rest {
-        w.line(&format!("var rest = new Dictionary<string, {}>();", cs_typeref(&r.val_ty, opts)));
+        w.line(&format!("var rest = new Dictionary<{}, {}>();", rest_key_cs(r, opts), cs_typeref(&r.val_ty, opts)));
     }
     w.blank();
 
@@ -585,8 +601,16 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("if (length == null && reader.PeekState() == CborReaderState.EndMap) break;");
     // A map with integer keys (`1 => tstr`) reads each key as text or an
     // integer (dgtlrift/cddlc#176).
-    let int_keys = cddlc_codegen::has_int_keys(s);
-    if int_keys {
+    // Other entries with typed keys: the key's encoding is read once, matched
+    // against the members, and decoded as the key type if none has it
+    // (dgtlrift/cddlc#136).
+    let typed_rest = s.rest.as_ref().filter(|r| !text_rest(r));
+    let int_keys = cddlc_codegen::has_int_keys(s) || typed_rest.is_some();
+    if typed_rest.is_some() {
+        w.line("var keyBytes = reader.ReadEncodedValue();");
+        w.line("var keyReader = new CborReader(keyBytes, reader.ConformanceMode);");
+        w.line("object key = keyReader.PeekState() == CborReaderState.TextString ? keyReader.ReadTextString() : keyReader.ReadInt64();");
+    } else if int_keys {
         w.line("object key = reader.PeekState() == CborReaderState.TextString ? reader.ReadTextString() : reader.ReadInt64();");
     } else {
         w.line("var key = reader.ReadTextString();");
@@ -612,6 +636,16 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("default:");
     w.indent();
     match &s.rest {
+        Some(r) if typed_rest.is_some() => {
+            w.line(&format!(
+                "static {} DecodeKey(CborReader reader) => {};",
+                rest_key_cs(r, opts), cs_decode_expr(&r.key_ty, opts)
+            ));
+            w.line(&format!(
+                "rest[DecodeKey(new CborReader(keyBytes, reader.ConformanceMode))] = {};",
+                cs_decode_expr(&r.val_ty, opts)
+            ));
+        }
         Some(r) if int_keys => w.line(&format!(
             "if (key is string textKey) rest[textKey] = {}; else throw new CborContentException($\"{}: unknown member {{key}}\");",
             cs_decode_expr(&r.val_ty, opts), to_pascal_case(&s.name)

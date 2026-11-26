@@ -100,6 +100,12 @@ unavailable=()
 for schema in crates/backend-buildtest/schemas/*.cddl; do
     name="$(basename "$schema" .cddl)"
     out="$work/$name"
+    # A map's other entries with integer keys: only these languages hold them
+    # (dgtlrift/cddlc#181), as the build tests' CBOR_ONLY_SCHEMAS says.
+    if [[ "$name" == other_keys && ! " rust c cpp csharp python go " =~ " $lang " ]]; then
+        echo "== $lang $name: not for this language (dgtlrift/cddlc#181)"
+        continue
+    fi
     "$cddlc" generate "$schema" -l "$lang" --interop --interop-langs "$lang" -o "$out" >/dev/null 2>"$work/generate.log" \
         || { cat "$work/generate.log" >&2; failed+=("$name"); continue; }
     attempt=0
