@@ -37,7 +37,7 @@ go test ./...
 
 | Format | Runtime library |
 |---|---|
-| CBOR (default) | [fxamacker/cbor/v2](https://github.com/fxamacker/cbor) v2.10.0 |
+| CBOR (default) | [fxamacker/cbor/v2](https://github.com/fxamacker/cbor) v2.9.0 (Go 1.20+) |
 | JSON | `encoding/json`; `bstr` values are base64url text without padding |
 
 Requires Go 1.21+.

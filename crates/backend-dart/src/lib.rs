@@ -540,7 +540,7 @@ fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
             named_keys(s)
         ));
     }
-    w.line(&format!("return {class_name}("));
+    w.line(&format!("final v = {class_name}("));
     w.indent();
     for f in &s.fields {
         let fname = dart_field(&f.name);
@@ -566,6 +566,10 @@ fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     }
     w.dedent();
     w.line(");");
+    // A member pinned to a literal (`type: "javascript"`) must hold it, so a
+    // choice of maps tells its alternatives apart (dgtlrift/cddlc#157).
+    emit_dart_literal_checks(w, s, class_name);
+    w.line("return v;");
     w.dedent();
     w.line("}");
 }
@@ -625,7 +629,7 @@ fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
             named_keys(s)
         ));
     }
-    w.line(&format!("return {class_name}("));
+    w.line(&format!("final v = {class_name}("));
     w.indent();
     for f in &s.fields {
         let fname    = dart_field(&f.name);
@@ -651,6 +655,10 @@ fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     }
     w.dedent();
     w.line(");");
+    // A member pinned to a literal (`type: "javascript"`) must hold it, so a
+    // choice of maps tells its alternatives apart (dgtlrift/cddlc#157).
+    emit_dart_literal_checks(w, s, class_name);
+    w.line("return v;");
     w.dedent();
     w.line("}");
 }
@@ -1151,6 +1159,8 @@ fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts
     for f in &s.fields {
         let fname   = dart_field(&f.name);
         let default = match (&f.ty, &f.occurrence) {
+            // A member pinned to a literal holds it (dgtlrift/cddlc#157).
+            (_, Occurrence::Required) if dart_literal(f).is_some() => dart_literal(f).expect("checked"),
             (TypeRef::Named(n), Occurrence::Required) => match module.get(n) {
                 Some(TypeDef::Map(m)) => test_table_for(m, opts),
                 _ => test_default_for(&f.ty, &f.occurrence, opts),
@@ -1234,7 +1244,10 @@ fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &C
         }
         let vname = to_pascal_case(&v.name);
         let args: Vec<String> = st.fields.iter()
-            .map(|f| format!("{}: {}", dart_field(&f.name), test_default_for(&f.ty, &f.occurrence, opts)))
+            .map(|f| format!("{}: {}", dart_field(&f.name), match (&f.occurrence, dart_literal(f)) {
+                (Occurrence::Required, Some(lit)) => lit,
+                _ => test_default_for(&f.ty, &f.occurrence, opts),
+            }))
             .collect();
         w.line(&format!("test('{class_name} {vname} roundtrip', () {{"));
         w.indent();
@@ -1600,6 +1613,30 @@ fn field_key_str(key: &FieldKey) -> String {
 }
 
 /// The string that represents this enum variant's wire value: its CDDL literal.
+/// A member's text or integer literal, as Dart writes it, if it's pinned to one.
+fn dart_literal(f: &cddlc_ir::FieldDef) -> Option<String> {
+    f.constraints.iter().find_map(|c| match c {
+        cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => Some(format!("'{}'", t.replace('\\', "\\\\").replace('\'', "\\'").replace('$', "\\$"))),
+        cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => Some(n.to_string()),
+        cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => Some(n.to_string()),
+        _ => None,
+    })
+}
+
+/// Throws unless each required member pinned to a text or integer literal
+/// holds it (`v` is the decoded value).
+fn emit_dart_literal_checks(w: &mut IndentWriter, s: &StructDef, class_name: &str) {
+    for f in s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Required)) {
+        if let Some(lit) = dart_literal(f) {
+            let fname = dart_field(&f.name);
+            w.line(&format!(
+                "if (v.{fname} != {lit}) throw ArgumentError('{class_name}.{}: must be ' r\"{lit}\");",
+                f.name
+            ));
+        }
+    }
+}
+
 /// Whether a `tstr` variant is a text literal (`"on"`), not any text.
 fn is_text_literal(v: &cddlc_ir::EnumVariant) -> bool {
     v.constraints.iter().any(|c| matches!(c, cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))

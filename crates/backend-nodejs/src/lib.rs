@@ -2166,7 +2166,7 @@ fn ts_literal(v: &LiteralValue, json: bool) -> String {
 /// Whether the `Uint8Array` `expr` holds the bytes `b`.
 fn ts_bytes_eq(expr: &str, b: &[u8]) -> String {
     let bytes = b.iter().map(|x| format!("{x:#04x}")).collect::<Vec<_>>().join(", ");
-    format!("({expr}.length === {n} && [{bytes}].every((x, i) => {expr}[i] === x))", n = b.len())
+    format!("({expr} instanceof Uint8Array && {expr}.length === {n} && [{bytes}].every((x, i) => {expr}[i] === x))", n = b.len())
 }
 
 // ── `true` / `false` fields ───────────────────────────────────────────────────

@@ -20,8 +20,10 @@ use cddlc_ir::{
     MapDef, Primitive, StructDef, TypeDef, TypeRef,
 };
 
-/// The fxamacker/cbor release generated CBOR modules require.
-pub const FXAMACKER_CBOR_VERSION: &str = "v2.10.0";
+/// The fxamacker/cbor release generated CBOR modules require: v2.9.0 needs Go
+/// 1.20, so a distribution's Go builds them (Ubuntu 24.04 has 1.22); v2.10.0
+/// needs 1.24.
+pub const FXAMACKER_CBOR_VERSION: &str = "v2.9.0";
 
 pub struct GoBackend;
 
