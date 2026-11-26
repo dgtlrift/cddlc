@@ -437,3 +437,31 @@ pub fn module_uses_bits(m: &cddlc_ir::IrModule) -> bool {
         TypeDef::Array(_) | TypeDef::Map(_) => false,
     })
 }
+
+
+/// For a record whose optional members aren't all at the end (COSE's
+/// `Sig_structure`, RFC 9052): how many optional members come before each
+/// member. An array of `n` items holds the first `n - required` optional
+/// members, in order (dgtlrift/cddlc#134), so with `k = n - required`, the
+/// optional member with `j` optional members before it is present when
+/// `k > j`, and member `i` is item `i - max(0, before[i] - k)`. `None` for a
+/// record whose optional members, if any, all come last, where reading in
+/// order until the array ends does the same.
+pub fn record_optionals_before(s: &cddlc_ir::StructDef) -> Option<Vec<usize>> {
+    if s.encoding != cddlc_ir::StructEncoding::Array {
+        return None;
+    }
+    let middle = s.fields.windows(2)
+        .any(|w| !w[0].occurrence.is_required() && w[1].occurrence.is_required());
+    if !middle {
+        return None;
+    }
+    let mut before = 0;
+    Some(s.fields.iter().map(|f| {
+        let b = before;
+        if !f.occurrence.is_required() {
+            before += 1;
+        }
+        b
+    }).collect())
+}

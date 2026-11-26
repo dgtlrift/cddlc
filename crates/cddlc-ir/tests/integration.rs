@@ -731,13 +731,15 @@ fn record_arrays_are_array_encoded_structs() {
 }
 
 #[test]
-fn record_optional_members_must_come_last() {
+fn record_optional_members_anywhere_but_no_repeats() {
     assert_eq!(record(&compile("r = [a: uint, ? b: tstr]\n"), "r").0, ["a", "b"]);
-    for src in ["r = [? a: uint, b: tstr]\n", "r = [a: uint, * b: tstr]\n"] {
-        let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
-        let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect(src).to_string();
-        assert!(err.contains("optional members must come last"), "{src}: {err}");
-    }
+    // An optional member before required ones: the array's length decides
+    // (dgtlrift/cddlc#134).
+    assert_eq!(record(&compile("r = [? a: uint, b: tstr]\n"), "r").0, ["a", "b"]);
+    let src = "r = [a: uint, * b: tstr]\n";
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();
+    let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect(src).to_string();
+    assert!(err.contains("can't repeat a member yet"), "{src}: {err}");
 }
 
 // ── Tables (dgtlrift/cddlc#82) ────────────────────────────────────────────────

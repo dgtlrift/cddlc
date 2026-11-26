@@ -183,7 +183,14 @@ impl<'m> Ctx<'m> {
             self.err(path, format!("record '{name}' needs {want} item(s), found {}", items.len()));
             return;
         }
-        for (i, (field, v)) in fields.iter().zip(items).enumerate() {
+        // The array's length says which optional members it holds: the first
+        // `len - required` of them (trailing ones, or COSE's one optional member
+        // before required ones; dgtlrift/cddlc#134).
+        let mut optional_left = items.len() - required;
+        let present = fields.iter().filter(|f| {
+            f.occurrence.is_required() || (optional_left > 0 && { optional_left -= 1; true })
+        });
+        for (i, (field, v)) in present.zip(items).enumerate() {
             path.push(PathSeg::Index(i));
             self.check_typeref(&field.ty, v, path);
             self.check_constraints(&field.constraints, &field.ty, v, path);

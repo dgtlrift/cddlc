@@ -317,14 +317,22 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
     w.line("}");
     w.line(&format!("return {class_name}("));
     w.indent();
+    // One optional member before required ones: present when the list holds
+    // every member; those after it move down one when it's absent
+    // (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
     for (i, f) in s.fields.iter().enumerate() {
         let fname = dart_field(&f.name);
-        let item = format!("a[{i}]");
+        let item = match &before {
+            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("a[a.length >= {x} ? {i} : {i} - ({x} - a.length)]") }
+            _ => format!("a[{i}]"),
+        };
         let conv = if json { json_from_expr(&f.ty, &item, module, opts) } else { cbor_from_expr(&f.ty, &item, module, opts) };
+        let present = match &before { Some(b) => format!("a.length > {}", required + b[i]), None => format!("a.length > {i}") };
         if f.occurrence.is_required() {
             w.line(&format!("{fname}: {conv},"));
         } else {
-            w.line(&format!("{fname}: a.length > {i} ? {conv} : null,"));
+            w.line(&format!("{fname}: {present} ? {conv} : null,"));
         }
     }
     w.dedent();
@@ -344,20 +352,49 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
     w.blank();
     w.line(&format!("{method} {{"));
     w.indent();
-    w.line(&format!("final items = <{list_ty}>["));
-    w.indent();
-    for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
-        let fname = dart_field(&f.name);
-        let v = if json { json_to_expr(&f.ty, &fname, module, opts) } else { cbor_to_expr(&f.ty, &fname, module, opts) };
-        w.line(&format!("{v},"));
+    let value = |f: &cddlc_ir::FieldDef, expr: &str| if json {
+        json_to_expr(&f.ty, expr, module, opts)
+    } else {
+        cbor_to_expr(&f.ty, expr, module, opts)
+    };
+    if before.is_some() {
+        // Optional members before required ones (dgtlrift/cddlc#134): every
+        // member in order, those present; an optional member may be set only
+        // when every optional member before it is.
+        w.line(&format!("final items = <{list_ty}>[];"));
+        w.line("var gap = false;");
+        for f in &s.fields {
+            let fname = dart_field(&f.name);
+            if f.occurrence.is_required() {
+                w.line(&format!("items.add({});", value(f, &fname)));
+            } else {
+                w.line(&format!("if ({fname} != null) {{"));
+                w.indent();
+                w.line(&format!(
+                    "if (gap) throw StateError('{class_name}.{}: set, but an optional member before it isn\\'t');",
+                    f.name
+                ));
+                w.line(&format!("items.add({});", value(f, &format!("{fname}!"))));
+                w.dedent();
+                w.line("} else {");
+                w.line("  gap = true;");
+                w.line("}");
+            }
+        }
+    } else {
+        w.line(&format!("final items = <{list_ty}>["));
+        w.indent();
+        for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
+            w.line(&format!("{},", value(f, &dart_field(&f.name))));
+        }
+        w.dedent();
+        w.line("];");
     }
-    w.dedent();
-    w.line("];");
-    if !optional.is_empty() {
+    if before.is_none() && !optional.is_empty() {
         w.line("var gap = false;");
         for f in &optional {
             let fname = dart_field(&f.name);
-            let v = if json { json_to_expr(&f.ty, &format!("{fname}!"), module, opts) } else { cbor_to_expr(&f.ty, &format!("{fname}!"), module, opts) };
+            let v = value(f, &format!("{fname}!"));
             w.line(&format!("if ({fname} != null) {{"));
             w.indent();
             w.line(&format!(

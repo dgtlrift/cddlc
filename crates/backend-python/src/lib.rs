@@ -578,16 +578,25 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: 
     ));
     w.dedent();
     let mut args = Vec::new();
+    // One optional member before required ones: present when the array holds
+    // every member; those after it move down one when it's absent
+    // (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
     for (i, f) in s.fields.iter().enumerate() {
         let fname = to_snake_case(&f.name);
         let at    = format!("{class_name}.{}", f.name);
         let local = format!("f_{fname}");
-        let conv  = py_from_raw(&f.ty, &format!("raw[{i}]"), &at, opts);
+        let index = match &before {
+            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("{i} if len(raw) >= {x} else {i} - ({x} - len(raw))") }
+            _ => i.to_string(),
+        };
+        let conv  = py_from_raw(&f.ty, &format!("raw[{index}]"), &at, opts);
+        let present = match &before { Some(b) => format!("len(raw) > {}", required + b[i]), None => format!("len(raw) > {i}") };
         if f.occurrence.is_required() {
             w.line(&format!("{local} = {conv}"));
             emit_constraint_checks(w, &f.constraints, &local, &at);
         } else {
-            w.line(&format!("{local} = {conv} if len(raw) > {i} else None"));
+            w.line(&format!("{local} = {conv} if {present} else None"));
             if !f.constraints.is_empty() {
                 w.line(&format!("if {local} is not None:"));
                 w.indent();

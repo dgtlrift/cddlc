@@ -1313,16 +1313,37 @@ fn emit_record_marshal(w: &mut IndentWriter, s: &StructDef, name: &str, opts: &C
     w.line(&format!("    return fmt.Errorf(\"%s: expected {want} items, got %d\", {}, len(items))", go_str(name)));
     w.line("}");
     w.line(&format!("var out {name}"));
+    // One optional member before required ones: present when the array holds
+    // every member; those after it move down one when it's absent
+    // (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
+    if before.is_some() {
+        // How far back a member sits when absent optional members come before it.
+        w.line("shift := func(x int) int {");
+        w.line("    if len(items) >= x {");
+        w.line("        return 0");
+        w.line("    }");
+        w.line("    return x - len(items)");
+        w.line("}");
+    }
     for (i, f) in s.fields.iter().enumerate() {
         let field = format!("out.{}", go_field_name(&f.name));
         let at = format!("{name}.{}", f.name);
+        let item = match &before {
+            Some(b) if b[i] > 0 => format!("items[{i}-shift({})]", required + b[i]),
+            _ => format!("items[{i}]"),
+        };
         if f.occurrence.is_required() {
-            emit_decode(w, &f.ty, &format!("items[{i}]"), &field, &at);
+            emit_decode(w, &f.ty, &item, &field, &at);
         } else {
-            w.line(&format!("if len(items) > {i} {{"));
+            if let Some(b) = &before {
+                w.line(&format!("if len(items) > {} {{", required + b[i]));
+            } else {
+                w.line(&format!("if len(items) > {i} {{"));
+            }
             w.indent();
             w.line(&format!("var x {}", go_type(&f.ty)));
-            emit_decode(w, &f.ty, &format!("items[{i}]"), "x", &at);
+            emit_decode(w, &f.ty, &item, "x", &at);
             w.line(&format!("{field} = &x"));
             w.dedent();
             w.line("}");
