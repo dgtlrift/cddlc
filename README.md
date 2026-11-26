@@ -469,6 +469,20 @@ ssh-add ~/.ssh/id_ed25519        # only if the key has a passphrase: load it in 
 ssh -o BatchMode=yes me@build1 true && echo ok   # must print ok, with no prompt
 ```
 
+To keep the same keys on every machine, [chezmoi](https://www.chezmoi.io) synchronizes dotfiles
+through a git repository. It stores public keys as they are and private keys encrypted, with age
+or gpg, so the repository never holds a private key in clear:
+
+```bash
+chezmoi init                                 # once, on the first machine
+chezmoi add ~/.ssh/id_ed25519.pub ~/.ssh/config
+chezmoi add --encrypt ~/.ssh/id_ed25519      # encrypted (set encryption = "age" or "gpg" in chezmoi.toml)
+chezmoi cd && git push                       # to your (private) dotfiles repository
+chezmoi init --apply <your-dotfiles-repo>    # on each build host
+```
+
+If a host's login check fails, `test-all.sh` says so and recommends the same.
+
 **What runs where.**
 - **Sharing:** the groups go to this machine and the hosts, longest first, each to whichever has
   the least work so far.

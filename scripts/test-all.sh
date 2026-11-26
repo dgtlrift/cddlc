@@ -41,6 +41,9 @@
 # in the host's ~/.ssh/authorized_keys, loaded in ssh-agent if it has a
 # passphrase): it runs with BatchMode, so `ssh -o BatchMode=yes user@host true`
 # must succeed. A host that doesn't is skipped, and its groups run here.
+# To keep keys the same on every machine, chezmoi (https://www.chezmoi.io)
+# syncs dotfiles: public keys as they are, private keys encrypted
+# (`chezmoi add --encrypt ~/.ssh/id_ed25519`, with age or gpg).
 #
 # The groups are shared between this machine and the hosts, longest first, to
 # whichever has the least work so far. Each host's checkout is cloned from
@@ -238,6 +241,7 @@ run_remote() {
     # BatchMode: a host that would ask for a password or passphrase fails here.
     if ! ssh "${ssh_opts[@]}" "$host" true >>"$log" 2>&1; then
         echo "test-all: $host: can't log in without a password (ssh -o BatchMode=yes $host true), running ${groups[*]} here (see $log)"
+        echo "test-all:   set up a key: ssh-copy-id $host; to keep keys the same on every machine, chezmoi (https://www.chezmoi.io) syncs dotfiles, private keys encrypted (chezmoi add --encrypt ~/.ssh/id_ed25519)"
         printf '%s\n' "${groups[@]}" >>"$fallback"
         return 0
     fi
