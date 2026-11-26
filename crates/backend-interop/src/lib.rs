@@ -825,6 +825,12 @@ fn emit_c_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -
     w.line("#include <assert.h>");
     w.line("#include <string.h>");
     w.line("#include <stdio.h>");
+    w.line("#include <stdlib.h>");
+    w.blank();
+    // A recursive member's memory (dgtlrift/cddlc#156).
+    w.line("static void *interop_alloc(void *ctx, size_t size) { (void)ctx; return calloc(1, size); }");
+    w.line("static void interop_release(void *ctx, void *ptr) { (void)ctx; free(ptr); }");
+    w.line(&format!("static const {}_callbacks_t interop_cb = {{ .alloc = interop_alloc, .release = interop_release }};", to_snake_case(schema)));
     w.blank();
 
     // Emit hex arrays
@@ -846,7 +852,7 @@ fn emit_c_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) -
         w.line(&format!("{c_name}_t decoded = {{0}};"));
         w.line("nanocbor_value_t dec;");
         w.line(&format!("nanocbor_decoder_init(&dec, vec_{i}, vec_{i}_len);"));
-        w.line(&format!("assert({pfx}_{c_name}_decode(&dec, &decoded, NULL, NULL) == 0);"));
+        w.line(&format!("assert({pfx}_{c_name}_decode(&dec, &decoded, &interop_cb, NULL) == 0);"));
         w.blank();
 
         // A plain C alias is a bare typedef with no `value` member; its vector

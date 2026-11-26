@@ -1,0 +1,12 @@
+; Reference schema: types that hold themselves, directly or through another
+; (dgtlrift/cddlc#156). C holds them through pointers.
+
+; Optional members of the type itself
+tree = { value: int, ? left: tree, ? right: tree }
+
+; A choice and a record that hold each other
+expr = int / binop
+binop = [op: tstr, lhs: expr, rhs: expr]
+
+; A chain through an optional member
+chain = { head: int, ? tail: chain }

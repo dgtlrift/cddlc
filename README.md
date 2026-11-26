@@ -552,7 +552,13 @@ and the test fails when one starts working, so the list stays current.
   `cddlc_runtime` (`ErrorCode`, `FieldError`) and `cddlc_bits` (`BitsCheck`). They're
   re-exported at the crate root unless a rule takes the name, as WebDriver BiDi's
   `ErrorCode` does.
-- **C / C++**: recursive types don't compile yet (#156).
+- **C**: a member or alternative that holds its own type again (`tree = { ? left: tree }`,
+  `binop = [op, lhs: expr, rhs: expr]` with `expr = int / binop`) is a pointer. Decoding gets its
+  memory from the caller's `alloc` callback, and fails with `ERR_ALLOC` without one.
+  `<module>_<type>_release()` gives it back through the `release` callback. In JSON, decoding uses
+  `calloc`, and `_release` uses `free`. A repeated member, or a map's other entries, that holds its
+  own type again isn't supported yet (#156).
+- **C++, Go**: recursive types don't compile yet (#156, #221).
 
 ### Schema language gaps
 

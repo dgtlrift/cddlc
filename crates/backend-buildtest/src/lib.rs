@@ -46,20 +46,25 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("alias-members", include_str!("../schemas/alias_members.cddl")),
     ("record-repeats", include_str!("../schemas/record_repeats.cddl")),
     ("choice-shapes", include_str!("../schemas/choice_shapes.cddl")),
+    ("recursive",   include_str!("../schemas/recursive.cddl")),
 ];
 
-/// Reference schemas only some backends can generate, and only in CBOR: each
-/// with the backends that can, by file extension. A map's other entries with
-/// integer keys can't be JSON (JSON objects have text keys), and Node, Java,
-/// Lua and Dart don't hold them yet (dgtlrift/cddlc#181).
-const CBOR_ONLY_SCHEMAS: &[(&str, &[&str])] = &[
-    ("other-keys", &["rs", "h", "hpp", "cs", "py", "go"]),
+/// Reference schemas only some backends can generate yet: each with the
+/// backends that can (by file extension), and whether it's CBOR only.
+/// - A map's other entries with integer keys can't be JSON (JSON objects
+///   have text keys), and Node, Java, Lua and Dart don't hold them yet
+///   (dgtlrift/cddlc#181).
+/// - Recursive types: C++ (dgtlrift/cddlc#156) and Go (dgtlrift/cddlc#221)
+///   don't hold them yet.
+const LIMITED_SCHEMAS: &[(&str, &[&str], bool)] = &[
+    ("other-keys", &["rs", "h", "hpp", "cs", "py", "go"], true),
+    ("recursive", &["rs", "h", "cs", "py", "java", "ts", "lua", "dart"], false),
 ];
 
 /// Whether a reference schema is built with this backend and format.
 pub fn schema_applies(schema: &str, backend: &dyn Backend, opts: &CodegenOptions) -> bool {
-    match CBOR_ONLY_SCHEMAS.iter().find(|(n, _)| *n == schema) {
-        Some((_, exts)) => !opts.is_json() && exts.contains(&backend.file_extension()),
+    match LIMITED_SCHEMAS.iter().find(|(n, _, _)| *n == schema) {
+        Some((_, exts, cbor_only)) => !(*cbor_only && opts.is_json()) && exts.contains(&backend.file_extension()),
         None => true,
     }
 }

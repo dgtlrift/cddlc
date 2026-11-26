@@ -741,3 +741,98 @@ const RESERVED_CSHARP_TYPES: &[&str] = &["Read", "Write", "CanConvert", "HandleN
 pub fn csharp_reserved_renames(module: &cddlc_ir::IrModule) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
     reserved_renames(module, RESERVED_CSHARP_TYPES, crate::to_pascal_case)
 }
+
+// ── Recursion in languages that hold values inline (C, C++) ──────────────────
+
+/// The named types `ty` holds inline: itself, under any tag, and each named
+/// alternative of a choice.
+fn inline_refs(ty: &cddlc_ir::TypeRef) -> Vec<&str> {
+    use cddlc_ir::TypeRef;
+    match ty {
+        TypeRef::Named(n) => vec![n.as_str()],
+        TypeRef::Tagged(_, inner) => inline_refs(inner),
+        TypeRef::Choice(cs) => cs.iter().flat_map(inline_refs).collect(),
+        TypeRef::Primitive(_) => vec![],
+    }
+}
+
+/// The types `name` holds inline in C: every member's (a repeated member is
+/// an array of them in place), its other entries' keys and values, each
+/// variant's, an array's items, a table's keys and values, an alias's type.
+fn inline_edges<'m>(name: &str, module: &'m cddlc_ir::IrModule) -> Vec<&'m str> {
+    use cddlc_ir::TypeDef;
+    match module.get(name) {
+        Some(TypeDef::Struct(s)) => s.fields.iter().flat_map(|f| inline_refs(&f.ty))
+            .chain(s.rest.iter().flat_map(|r| inline_refs(&r.key_ty).into_iter().chain(inline_refs(&r.val_ty))))
+            .collect(),
+        Some(TypeDef::Enum(e)) => e.variants.iter().flat_map(|v| inline_refs(&v.ty)).collect(),
+        Some(TypeDef::Array(a)) => inline_refs(&a.element),
+        Some(TypeDef::Map(m)) => inline_refs(&m.key_ty).into_iter().chain(inline_refs(&m.val_ty)).collect(),
+        Some(TypeDef::Alias(a)) => inline_refs(&a.ty),
+        None => vec![],
+    }
+}
+
+/// Whether a member or variant of `from` holding `ty` must be held through a
+/// pointer in a language that holds values inline (C, C++): `ty` holds `from`
+/// again, inline, so the type would contain itself (dgtlrift/cddlc#156).
+/// Every cycle passes through a struct or an enum, so pointers at their
+/// members and variants are enough.
+pub fn is_indirect(from: &str, ty: &cddlc_ir::TypeRef, module: &cddlc_ir::IrModule) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack: Vec<&str> = inline_refs(ty);
+    while let Some(n) = stack.pop() {
+        if n == from {
+            return true;
+        }
+        if seen.insert(n) {
+            stack.extend(inline_edges(n, module));
+        }
+    }
+    false
+}
+
+/// The module's types in an order where each comes after every type it holds
+/// inline, except through a pointer ([`is_indirect`]): the order C and C++
+/// declare them in.
+pub fn inline_decl_order(module: &cddlc_ir::IrModule) -> Vec<smol_str::SmolStr> {
+    use cddlc_ir::TypeDef;
+    fn visit(
+        n: &str,
+        module: &cddlc_ir::IrModule,
+        done: &mut std::collections::HashSet<smol_str::SmolStr>,
+        busy: &mut std::collections::HashSet<smol_str::SmolStr>,
+        out: &mut Vec<smol_str::SmolStr>,
+    ) {
+        if done.contains(n) || busy.contains(n) || module.get(n).is_none() {
+            return;
+        }
+        busy.insert(n.into());
+        // The types `n` holds by value, not through a pointer.
+        let direct: Vec<&str> = match module.get(n) {
+            Some(TypeDef::Struct(s)) => s.fields.iter()
+                .filter(|f| !is_indirect(n, &f.ty, module))
+                .flat_map(|f| inline_refs(&f.ty))
+                .chain(s.rest.iter().flat_map(|r| inline_refs(&r.key_ty).into_iter().chain(inline_refs(&r.val_ty))))
+                .collect(),
+            Some(TypeDef::Enum(e)) => e.variants.iter()
+                .filter(|v| !is_indirect(n, &v.ty, module))
+                .flat_map(|v| inline_refs(&v.ty))
+                .collect(),
+            _ => inline_edges(n, module),
+        };
+        for d in direct {
+            visit(d, module, done, busy, out);
+        }
+        busy.remove(n);
+        done.insert(n.into());
+        out.push(n.into());
+    }
+    let mut done = std::collections::HashSet::new();
+    let mut busy = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for n in module.types.keys() {
+        visit(n, module, &mut done, &mut busy, &mut out);
+    }
+    out
+}

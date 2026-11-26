@@ -44,6 +44,38 @@ already defines (`mode_t`, `time_t`, `size_t`, `pid_t`, the `<stdint.h>` types,
 `cbor_str_t`, ...) is named `<module>_<rule>_t` instead, so `mode` in `fs.cddl` is
 `fs_mode_t` (dgtlrift/cddlc#154).
 
+## Recursive types
+
+A member or alternative that holds its own type again, directly or through other types, is a
+pointer. Examples are `tree = { value: int, ? left: tree }`, and `binop = [op: tstr, lhs: expr,
+rhs: expr]` with `expr = int / binop`. Without the pointer, a struct would contain itself.
+
+- **Declaration:** types something points at are declared ahead
+  (`typedef struct tree_s tree_t;`), and every type follows the types it holds by value.
+- **Decoding:** a pointer member gets its memory from the callbacks' `alloc`
+  (`void *(*alloc)(void *ctx, size_t size)`). Any allocator works: heap, pool or arena. Without
+  `alloc`, decoding such a member fails with `<MODULE>_ERR_ALLOC`, so the fixed-capacity build
+  stays heap-free unless the caller chooses otherwise.
+- **Releasing:** `<module>_<type>_release(val, cb, ctx)` gives the memory back through
+  `cb->release`, recursively, for every type that may hold a pointer. After a failed decode, it
+  releases whatever was decoded so far.
+- **Encoding:** encoding reads through the pointers. A required pointer member that's NULL is an
+  error (`-1`), not a crash.
+- **JSON:** decoding uses `calloc`, as cJSON does, and `_release(val)` uses `free`.
+
+```c
+static void *my_alloc(void *ctx, size_t n) { (void)ctx; return calloc(1, n); }
+static void my_release(void *ctx, void *p) { (void)ctx; free(p); }
+const rec_callbacks_t cb = { .alloc = my_alloc, .release = my_release };
+
+tree_t t = {0};
+if (rec_tree_decode(&dec, &t, &cb, NULL) == 0) { /* use t.left->value ... */ }
+rec_tree_release(&t, &cb, NULL);
+```
+
+A repeated member, or a map's other entries, that holds its own type again isn't supported yet:
+C holds those as arrays in place.
+
 ## What is generated per IR type
 
 ### Structs
