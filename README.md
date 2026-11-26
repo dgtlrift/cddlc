@@ -442,6 +442,69 @@ those groups; `--no-interop` skips interop. Each run writes its own directory,
 `summary.txt`. Each group gets its own temporary directory, so nothing two groups write is
 shared, and the Java group runs its Maven builds one at a time.
 
+#### Running the tests on other machines
+
+By default `scripts/test-all.sh` runs everything on this machine (localhost). It uses other
+machines only when `CDDLC_TEST_HOSTS` is set:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `CDDLC_TEST_HOSTS` | Hosts to share the language groups with, as `user@hostname`, separated by spaces or commas | unset: this machine only, and the other two are ignored |
+| `CDDLC_TEST_REMOTE_DIR` | Where each host keeps its checkout: `<dir>/<branch>/repo`, and each run's logs in `<dir>/<branch>/out/<run>` | `~/cddlc-dist-build` (on the host) |
+| `CDDLC_TEST_REMOTE_ENV` | Variables for the host's run, e.g. `"CDDLC_PYTHON=/home/me/venv/bin/python"` | none |
+
+```bash
+CDDLC_TEST_HOSTS="me@build1 me@build2" scripts/test-all.sh
+CDDLC_TEST_HOSTS="me@build1" CDDLC_TEST_REMOTE_DIR=/srv/cddlc scripts/test-all.sh rust java
+```
+
+**ssh must log in without a password.** The script runs ssh in batch mode, so it never prompts.
+A host that would ask for a password or passphrase is skipped, and its groups run locally. To set
+up a host once:
+
+```bash
+ssh-keygen -t ed25519            # if you don't have a key yet (~/.ssh/id_ed25519)
+ssh-copy-id me@build1            # adds it to the host's ~/.ssh/authorized_keys
+ssh-add ~/.ssh/id_ed25519        # only if the key has a passphrase: load it in ssh-agent
+ssh -o BatchMode=yes me@build1 true && echo ok   # must print ok, with no prompt
+```
+
+To keep the same keys on every machine, [chezmoi](https://www.chezmoi.io) synchronizes dotfiles
+through a git repository. It stores public keys as they are and private keys encrypted, with age
+or gpg, so the repository never holds a private key in clear:
+
+```bash
+chezmoi init                                 # once, on the first machine
+chezmoi add ~/.ssh/id_ed25519.pub ~/.ssh/config
+chezmoi add --encrypt ~/.ssh/id_ed25519      # encrypted (set encryption = "age" or "gpg" in chezmoi.toml)
+chezmoi cd && git push                       # to your (private) dotfiles repository
+chezmoi init --apply <your-dotfiles-repo>    # on each build host
+```
+
+If a host's login check fails, `test-all.sh` says so and recommends the same.
+
+**What runs where.**
+- **Sharing:** the groups go to this machine and the hosts, longest first, each to whichever has
+  the least work so far.
+- **Checkout:** each host's checkout is cloned from `origin` once, then checked out at the
+  branch's pushed commit (its upstream, or its merge base with `origin/main`).
+- **Local changes:** every file that differs locally (committed, uncommitted or untracked) is
+  copied over, and files deleted locally are deleted there.
+- **Warm builds:** the host's `target/` is kept between runs.
+- **Locking:** a lock keeps two runs out of one checkout.
+- **Results:** each host runs its share with its own `scripts/test-all.sh`. Its progress lines
+  show here, prefixed with its name, and its logs are copied back into this run's directory.
+  `summary.txt` says where each step ran.
+- **Fallback:** a host that can't be reached or synced has its groups run locally instead.
+
+**A host needs:**
+- git, with read access to `origin`. `git@github.com:…` needs the host's own GitHub SSH key, or
+  agent forwarding.
+- the toolchains of the groups it gets. On the host, `target/debug/cddlc-toolchains --check <lang>`
+  checks one and prints its install command.
+
+`CDDLC_REQUIRE_TOOLS`, `CDDLC_REQUIRE_REGISTRIES` and `CDDLC_NETWORK_RETRIES` are passed on to it.
+
 To see which languages this machine can test, and how to install the rest, run
 `target/debug/cddlc-toolchains` (built by `cargo build`). A language whose toolchain is missing
 is skipped, and its install command is printed once. The command is for this host's package
