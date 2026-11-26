@@ -438,6 +438,27 @@ pub fn module_uses_bits(m: &cddlc_ir::IrModule) -> bool {
     })
 }
 
+/// Whether any type in the module holds `any` (dgtlrift/cddlc#178), so a
+/// backend emits its runtime type for the encoded data item.
+pub fn module_uses_any(m: &cddlc_ir::IrModule) -> bool {
+    use cddlc_ir::{Primitive, TypeDef, TypeRef};
+    fn has(t: &TypeRef) -> bool {
+        match t {
+            TypeRef::Primitive(p) => *p == Primitive::Any,
+            TypeRef::Tagged(_, inner) => has(inner),
+            TypeRef::Choice(cs) => cs.iter().any(has),
+            TypeRef::Named(_) => false,
+        }
+    }
+    m.types.values().any(|t| match t {
+        TypeDef::Struct(s) => s.fields.iter().any(|f| has(&f.ty))
+            || s.rest.as_ref().is_some_and(|r| has(&r.key_ty) || has(&r.val_ty)),
+        TypeDef::Enum(e) => e.variants.iter().any(|v| has(&v.ty)),
+        TypeDef::Alias(a) => has(&a.ty),
+        TypeDef::Array(a) => has(&a.element),
+        TypeDef::Map(mp) => has(&mp.key_ty) || has(&mp.val_ty),
+    })
+}
 
 /// For a record whose optional members aren't all at the end (COSE's
 /// `Sig_structure`, RFC 9052): how many optional members come before each
@@ -723,6 +744,8 @@ const RESERVED_RUST_TYPES: &[&str] = &[
     "Extend", "From", "Into", "TryFrom", "TryInto", "ToString", "ToOwned", "AsRef", "AsMut",
     "Encode", "Decode", "Encoder", "Decoder", "EncodeError", "DecodeError", "Write",
     "Serialize", "Deserialize", "Serializer", "Deserializer", "Engine",
+    // The runtime's type for `any` (dgtlrift/cddlc#178).
+    "AnyItem",
 ];
 
 /// The rules to rename so their Rust types don't clash with one in

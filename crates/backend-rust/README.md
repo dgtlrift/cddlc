@@ -92,6 +92,15 @@ pub type Readings = heapless::Vec<f32, 16>; // --alloc stack / --no-std
 pub type DeviceId = String;               // with .size constraint → assertion in helpers
 ```
 
+### `any`
+
+A member of type `any` is any data item. In CBOR it's the generated
+`AnyItem`, which holds the item's encoding (`heapless::Vec` with `--no-std`):
+decoding keeps the item's bytes, encoding writes them back unchanged, and
+`as_bytes()` gives them to decode further. Its default is `null`. A choice's
+`any` alternative takes any item the others don't. In JSON, `any` is a
+`serde_json::Value` (dgtlrift/cddlc#178).
+
 ## Allocation strategies
 
 ```mermaid

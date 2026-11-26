@@ -1,0 +1,17 @@
+; `any`: a data item of any type, held as its encoding (dgtlrift/cddlc#178)
+
+; A COSE-like header: values of any type, and other entries of any type
+header = {
+  alg: int,
+  ? extra: any,
+  * tstr => any
+}
+
+; An array of items of any type
+items = [* any]
+
+; A record with an item of any type
+envelope = [kind: tstr, payload: any]
+
+; A choice whose `any` alternative takes what the others don't
+value = int / tstr / any
