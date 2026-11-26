@@ -66,7 +66,13 @@ pub fn generate(
     ];
 
     if langs.rust   { files.push(GeneratedFile { path: format!("{dir}/rust/interop_test.rs"),   content: emit_rust_harness(&vectors, name, opts) }); }
-    if langs.c      { files.push(GeneratedFile { path: format!("{dir}/c/test_interop.c"),        content: emit_c_harness(&vectors, name, opts) }); }
+    if langs.c {
+        // C renames a rule named like a C library type (`mode` → `<module>-mode`,
+        // dgtlrift/cddlc#154); its harness uses the same names.
+        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::c_reserved_renames(module));
+        let c_vectors = collect_vectors(&renamed, opts);
+        files.push(GeneratedFile { path: format!("{dir}/c/test_interop.c"), content: emit_c_harness(&c_vectors, name, opts) });
+    }
     if langs.cpp    { files.push(GeneratedFile { path: format!("{dir}/cpp/test_interop.cpp"),    content: emit_cpp_harness(&vectors, name, opts) }); }
     if langs.csharp { files.push(GeneratedFile { path: format!("{dir}/csharp/InteropTests.cs"),  content: emit_csharp_harness(&vectors, name, opts) }); }
     if langs.nodejs { files.push(GeneratedFile { path: format!("{dir}/nodejs/interop.test.ts"),  content: emit_nodejs_harness(&vectors, name, opts) }); }

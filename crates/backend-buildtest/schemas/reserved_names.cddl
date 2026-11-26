@@ -1,0 +1,16 @@
+; Reference schema: rules named like the C library's types (mode_t, time_t,
+; size_t, pid_t) or the runtime's (cbor_str_t) (dgtlrift/cddlc#154)
+
+file = {
+    mode:  mode,
+    time:  time,
+    size:  size,
+    owner: pid,
+    label: cbor-str,
+}
+
+mode = uint
+time = { sec: int, nsec: uint }
+size = [* uint]
+pid = int / tstr
+cbor-str = tstr

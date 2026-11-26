@@ -594,3 +594,93 @@ pub fn check_rest_keys(
     }
     Ok(())
 }
+
+/// The module with types renamed (`from` → `to`), at their definitions and
+/// everywhere they're used: for a backend whose name for a rule would clash
+/// with one its target already has (C's `mode_t`, dgtlrift/cddlc#154).
+pub fn rename_types(
+    module:  &cddlc_ir::IrModule,
+    renames: &std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr>,
+) -> cddlc_ir::IrModule {
+    use cddlc_ir::{TypeDef, TypeRef};
+    fn fix(ty: &mut TypeRef, renames: &std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr>) {
+        match ty {
+            TypeRef::Named(n) => if let Some(to) = renames.get(n) { *n = to.clone() },
+            TypeRef::Tagged(_, inner) => fix(inner, renames),
+            TypeRef::Choice(cs) => cs.iter_mut().for_each(|c| fix(c, renames)),
+            TypeRef::Primitive(_) => {}
+        }
+    }
+    if renames.is_empty() {
+        return module.clone();
+    }
+    let mut out = module.clone();
+    out.types.clear();
+    for (name, def) in &module.types {
+        let mut def = def.clone();
+        let new = renames.get(name).cloned().unwrap_or_else(|| name.clone());
+        match &mut def {
+            TypeDef::Struct(s) => {
+                s.name = new.clone();
+                s.fields.iter_mut().for_each(|f| fix(&mut f.ty, renames));
+                if let Some(r) = s.rest.as_mut() {
+                    fix(&mut r.key_ty, renames);
+                    fix(&mut r.val_ty, renames);
+                }
+            }
+            TypeDef::Enum(e) => {
+                e.name = new.clone();
+                e.variants.iter_mut().for_each(|v| fix(&mut v.ty, renames));
+            }
+            TypeDef::Array(a) => { a.name = new.clone(); fix(&mut a.element, renames); }
+            TypeDef::Map(m) => { m.name = new.clone(); fix(&mut m.key_ty, renames); fix(&mut m.val_ty, renames); }
+            TypeDef::Alias(a) => { a.name = new.clone(); fix(&mut a.ty, renames); }
+        }
+        out.types.insert(new.clone(), def);
+        if let Some(src) = module.sources.types.get(name) {
+            out.sources.types.insert(new, src.clone());
+        }
+    }
+    out.sources.fields = module.sources.fields.iter()
+        .map(|((t, f), src)| ((renames.get(t).cloned().unwrap_or_else(|| t.clone()), f.clone()), src.clone()))
+        .collect();
+    if let Some(to) = renames.get(&module.root) {
+        out.root = to.clone();
+    }
+    out
+}
+
+/// The C library's and the runtime's `<name>_t` types, which a rule's type
+/// can't be named after: POSIX (`<sys/types.h>`, `<time.h>`, `<signal.h>`,
+/// `<pthread.h>`), ISO C (`<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<wchar.h>`)
+/// and nanocbor / the generated runtime.
+const RESERVED_C_TYPES: &[&str] = &[
+    "blkcnt", "blksize", "clock", "clockid", "dev", "fsblkcnt", "fsfilcnt", "gid", "id", "ino",
+    "key", "mode", "nlink", "off", "pid", "size", "ssize", "suseconds", "time", "timer", "uid",
+    "useconds", "sigset", "sig_atomic", "pthread", "pthread_attr", "pthread_mutex",
+    "pthread_cond", "pthread_key", "pthread_once", "ptrdiff", "wchar", "wint", "wctype",
+    "max_align", "fpos", "mbstate", "locale", "intmax", "uintmax", "intptr", "uintptr",
+    "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
+    "int_least8", "int_least16", "int_least32", "int_least64",
+    "uint_least8", "uint_least16", "uint_least32", "uint_least64",
+    "int_fast8", "int_fast16", "int_fast32", "int_fast64",
+    "uint_fast8", "uint_fast16", "uint_fast32", "uint_fast64",
+    "cbor_str", "cbor_slice", "cbor_bytes", "cbor_any", "json_bytes",
+    "nanocbor_value", "nanocbor_encoder",
+];
+
+/// The rules to rename so their C types don't clash with one in
+/// [`RESERVED_C_TYPES`]: each to `<module>-<rule>`.
+pub fn c_reserved_renames(module: &cddlc_ir::IrModule) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
+    let mut out = std::collections::HashMap::new();
+    for name in module.types.keys() {
+        if RESERVED_C_TYPES.contains(&crate::to_snake_case(name).as_str()) {
+            let mut to: smol_str::SmolStr = format!("{}-{name}", module.name).into();
+            while module.types.contains_key(&to) {
+                to = format!("{to}-type").into();
+            }
+            out.insert(name.clone(), to);
+        }
+    }
+    out
+}
