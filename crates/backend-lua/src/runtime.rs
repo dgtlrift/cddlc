@@ -90,9 +90,13 @@ function R.as_map(item, at)
   local m = {}
   for _, p in ipairs(item.v) do
     local key = p[1]
-    if key.k ~= "text" then fail(at, "map keys must be text") end
-    if m[key.v] ~= nil then fail(at, "duplicate key \"" .. key.v .. "\"") end
-    m[key.v] = p[2]
+    -- Keys are read as text: an integer key as its decimal text (dgtlrift/cddlc#176).
+    local kv
+    if key.k == "text" then kv = key.v
+    elseif key.k == "uint" or key.k == "nint" then kv = string.format("%d", key.v)
+    else fail(at, "map keys must be text or integers") end
+    if m[kv] ~= nil then fail(at, "duplicate key \"" .. kv .. "\"") end
+    m[kv] = p[2]
   end
   return m
 end
@@ -219,8 +223,13 @@ local function enc(item, out)
   elseif k == "map" then
     out[#out + 1] = head(5, #item.v)
     for _, p in ipairs(item.v) do
-      out[#out + 1] = head(3, #p[1])
-      out[#out + 1] = p[1]
+      -- A key is text, or an integer key as an item (dgtlrift/cddlc#176).
+      if type(p[1]) == "table" then
+        enc(p[1], out)
+      else
+        out[#out + 1] = head(3, #p[1])
+        out[#out + 1] = p[1]
+      end
       enc(p[2], out)
     end
   elseif k == "tag" then

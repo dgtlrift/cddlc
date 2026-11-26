@@ -198,7 +198,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         if f.deprecated { w.line("[Obsolete]"); }
         if opts.is_json() && !record {
             // JsonPropertyName attribute
-            w.line(&format!("[JsonPropertyName({:?})]", f.name.as_str()));
+            w.line(&format!("[JsonPropertyName({:?})]", cddlc_codegen::field_key_json(&f.key)));
             // Skip null for optional fields
             if matches!(f.occurrence, Occurrence::Optional) {
                 w.line("[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]");
@@ -274,6 +274,17 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
 /// A record's Encode / Decode (RFC 8610 §3.4): an array of the members' values,
 /// in order. Optional members come last: those present are written up to the
 /// first absent one, and one set after an absent one is an error.
+/// Writes a map member's key: its text, or an integer key as an integer
+/// (dgtlrift/cddlc#176).
+fn cs_key_write(key: &cddlc_ir::FieldKey) -> String {
+    match key {
+        cddlc_ir::FieldKey::Text(t) => format!("writer.WriteTextString({:?});", t.as_str()),
+        cddlc_ir::FieldKey::Uint(n) => format!("writer.WriteUInt64({n}UL);"),
+        cddlc_ir::FieldKey::Int(n) if *n >= 0 => format!("writer.WriteUInt64({n}UL);"),
+        cddlc_ir::FieldKey::Int(n) => format!("writer.WriteInt64({n}L);"),
+    }
+}
+
 fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: &CodegenOptions) {
     let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
     let required = s.fields.len() - optional.len();
@@ -483,7 +494,7 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     // dCBOR: sort fields by key
     let fields: Vec<_> = if opts.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
         fs
     } else {
         s.fields.iter().collect()
@@ -500,17 +511,19 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             w.line(&format!("if ({expr} is not null)"));
             w.line("{");
             w.indent();
-            w.line(&format!("writer.WriteTextString({:?});", f.name.as_str()));
+            w.line(&cs_key_write(&f.key));
             emit_cs_encode_typeref(w, &f.ty, &cs_present_expr(&f.ty, &expr, opts), opts);
             w.dedent();
             w.line("}");
         } else {
-            w.line(&format!("writer.WriteTextString({:?});", f.name.as_str()));
+            w.line(&cs_key_write(&f.key));
             emit_cs_encode_value(w, &f.ty, &expr, &f.occurrence, opts);
         }
     }
     if let Some(r) = &s.rest {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter()
+            .filter_map(|f| match &f.key { cddlc_ir::FieldKey::Text(t) => Some(format!("{:?}", t.as_str())), _ => None })
+            .collect();
         w.line(&format!("foreach (var kv in this.{})", to_pascal_case(&r.name)));
         w.line("{");
         w.indent();
@@ -570,15 +583,25 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("{");
     w.indent();
     w.line("if (length == null && reader.PeekState() == CborReaderState.EndMap) break;");
-    w.line("var key = reader.ReadTextString();");
+    // A map with integer keys (`1 => tstr`) reads each key as text or an
+    // integer (dgtlrift/cddlc#176).
+    let int_keys = cddlc_codegen::has_int_keys(s);
+    if int_keys {
+        w.line("object key = reader.PeekState() == CborReaderState.TextString ? reader.ReadTextString() : reader.ReadInt64();");
+    } else {
+        w.line("var key = reader.ReadTextString();");
+    }
     w.line("switch (key)");
     w.line("{");
     w.indent();
 
     for f in &s.fields {
         let local  = to_snake_case(&f.name);
-        let fkey   = f.name.as_str();
-        w.line(&format!("case {:?}:", fkey));
+        match &f.key {
+            cddlc_ir::FieldKey::Text(t) => w.line(&format!("case {:?}:", t.as_str())),
+            cddlc_ir::FieldKey::Int(n) => w.line(&format!("case {n}L:")),
+            cddlc_ir::FieldKey::Uint(n) => w.line(&format!("case {}L:", (*n).min(i64::MAX as u64))),
+        }
         w.indent();
         emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &f.occurrence, opts);
         w.line("break;");
@@ -589,6 +612,10 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("default:");
     w.indent();
     match &s.rest {
+        Some(r) if int_keys => w.line(&format!(
+            "if (key is string textKey) rest[textKey] = {}; else throw new CborContentException($\"{}: unknown member {{key}}\");",
+            cs_decode_expr(&r.val_ty, opts), to_pascal_case(&s.name)
+        )),
         Some(r) => w.line(&format!("rest[key] = {};", cs_decode_expr(&r.val_ty, opts))),
         // A map has only the members its schema gives it (dgtlrift/cddlc#102).
         None => w.line(&format!("throw new CborContentException($\"{}: unknown member {{key}}\");", to_pascal_case(&s.name))),

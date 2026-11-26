@@ -16,7 +16,7 @@ use cddlc_codegen::{
     IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, IrModule, LiteralValue, Occurrence,
+    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, FieldKey, IrModule, LiteralValue, Occurrence,
     MapDef, Primitive, StructDef, TypeDef, TypeRef,
 };
 
@@ -43,6 +43,19 @@ impl Backend for GoBackend {
     }
 }
 
+
+/// A map member's key in the generated code: its text; an integer key as a
+/// `uint64` / `int64` (as fxamacker/cbor decodes it), or in JSON as its
+/// decimal text (dgtlrift/cddlc#176).
+fn go_key(key: &FieldKey, opts: &CodegenOptions) -> String {
+    match key {
+        FieldKey::Text(t) => go_str(t),
+        _ if opts.is_json() => go_str(&cddlc_codegen::field_key_json(key)),
+        FieldKey::Uint(n) => format!("uint64({n})"),
+        FieldKey::Int(n) if *n >= 0 => format!("uint64({n})"),
+        FieldKey::Int(n) => format!("int64({n})"),
+    }
+}
 
 /// Exported names the generated package's runtime defines (`type Null
 /// struct{}`, the CDDL nil). A rule whose type would take one gets a trailing
@@ -186,18 +199,18 @@ func mismatch(at, want string, r []byte) error {
 
 // mapEncoder collects a map's members in schema order.
 type mapEncoder struct {
-	keys []string
+	keys []mapKey
 	vals [][]byte
 	err  error
 }
 
-func (e *mapEncoder) put(key string) func([]byte, error) {
+func (e *mapEncoder) put(key mapKey) func([]byte, error) {
 	return func(b []byte, err error) {
 		if e.err != nil {
 			return
 		}
 		if err != nil {
-			e.err = fmt.Errorf("%s: %w", key, err)
+			e.err = fmt.Errorf("%v: %w", key, err)
 			return
 		}
 		e.keys = append(e.keys, key)
@@ -277,11 +290,11 @@ func decodeFlat(r []byte, n int, at string) ([][]byte, error) {
 	return out, nil
 }
 
-func decodeMap(r []byte, at string) (map[string]raw, error) {
+func decodeMap(r []byte, at string) (map[mapKey]raw, error) {
 	if kindOf(r) != kindMap {
 		return nil, mismatch(at, "a map", r)
 	}
-	var m map[string]raw
+	var m map[mapKey]raw
 	if err := unmarshal(r, &m); err != nil {
 		return nil, fmt.Errorf("%s: %w", at, err)
 	}
@@ -387,6 +400,19 @@ func isNull(r []byte) bool { return kindOf(r) == kindNull }"#;
 /// schema order; tags are kept raw.
 const CBOR_HELPERS: &str = r#"type raw = cbor.RawMessage
 
+// mapKey is a map member's key: text, or an integer key as uint64 / int64
+// (dgtlrift/cddlc#176).
+type mapKey = any
+
+// keyText is a key of a map's other entries, which is text.
+func keyText(k mapKey, at string) (string, error) {
+	s, ok := k.(string)
+	if !ok {
+		return "", fmt.Errorf("%s: unknown member %v", at, k)
+	}
+	return s, nil
+}
+
 var encMode = func() cbor.EncMode {
 	m, err := cbor.EncOptions{NilContainers: cbor.NilContainerAsEmpty}.EncMode()
 	if err != nil {
@@ -427,7 +453,7 @@ func head(major byte, n uint64) []byte {
 	return b
 }
 
-func encodeMap(keys []string, vals [][]byte) ([]byte, error) {
+func encodeMap(keys []mapKey, vals [][]byte) ([]byte, error) {
 	out := head(5, uint64(len(keys)))
 	for i, k := range keys {
 		kb, err := marshal(k)
@@ -526,11 +552,18 @@ func kindOf(r []byte) rawKind {
 /// JSON has no tags.
 const JSON_HELPERS: &str = r#"type raw = json.RawMessage
 
+// mapKey is a map member's key; a JSON object's keys are text, an integer
+// key as its decimal text (dgtlrift/cddlc#176).
+type mapKey = string
+
+// keyText is a key of a map's other entries.
+func keyText(k mapKey, at string) (string, error) { return k, nil }
+
 func marshal(v any) ([]byte, error) { return json.Marshal(v) }
 
 func unmarshal(r []byte, v any) error { return json.Unmarshal(r, v) }
 
-func encodeMap(keys []string, vals [][]byte) ([]byte, error) {
+func encodeMap(keys []mapKey, vals [][]byte) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteByte('{')
 	for i, k := range keys {
@@ -1052,7 +1085,7 @@ fn has_checks(ty: &TypeRef, constraints: &[Constraint]) -> bool {
 fn struct_fields<'a>(s: &'a StructDef, opts: &CodegenOptions) -> Vec<&'a cddlc_ir::FieldDef> {
     let mut fs: Vec<_> = s.fields.iter().collect();
     if opts.dcbor {
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
     }
     fs
 }
@@ -1114,7 +1147,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     w.line("var e mapEncoder");
     for f in struct_fields(s, opts) {
         let field = format!("v.{}", go_field_name(&f.name));
-        let key = go_str(&f.name);
+        let key = go_key(&f.key, opts);
         match &f.occurrence {
             Occurrence::Optional => {
                 w.line(&format!("if {field} != nil {{"));
@@ -1128,7 +1161,10 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     // The other entries after the named members, in key order.
     if let Some(r) = &s.rest {
         let field = format!("v.{}", go_field_name(&r.name));
-        let named: Vec<String> = s.fields.iter().map(|f| go_str(&f.name)).collect();
+        // The other entries have text keys: only text named keys can clash.
+        let named: Vec<String> = s.fields.iter()
+            .filter_map(|f| match &f.key { FieldKey::Text(t) => Some(go_str(t)), _ => None })
+            .collect();
         w.line(&format!("for _, k := range sortedKeys({field}) {{"));
         w.indent();
         if !named.is_empty() {
@@ -1159,7 +1195,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     // A map has only the members its schema gives it (RFC 8610 §3.5;
     // dgtlrift/cddlc#102), unless it has other entries.
     if s.rest.is_none() {
-        let named: Vec<String> = s.fields.iter().map(|f| go_str(&f.name)).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| go_key(&f.key, opts)).collect();
         w.line("for k := range m {");
         w.indent();
         if !named.is_empty() {
@@ -1168,15 +1204,16 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
             w.line("    continue");
             w.line("}");
         }
-        w.line(&format!("return fmt.Errorf(\"%s: unknown member %q\", {}, k)", go_str(&name)));
+        w.line(&format!("return fmt.Errorf(\"%s: unknown member %v\", {}, k)", go_str(&name)));
         w.dedent();
         w.line("}");
     }
     w.line(&format!("var out {name}"));
     for f in &s.fields {
         let field = format!("out.{}", go_field_name(&f.name));
-        let key = go_str(&f.name);
-        let at = format!("{name}.{}", f.name);
+        let key = go_key(&f.key, opts);
+        let key_text = go_str(&cddlc_codegen::field_key_json(&f.key));
+        let at = format!("{name}.{}", cddlc_codegen::field_key_json(&f.key));
         match &f.occurrence {
             Occurrence::Optional => {
                 let is_null = matches!(base_primitive(&f.ty), Some(Primitive::Null | Primitive::Undefined));
@@ -1216,7 +1253,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
                 w.indent();
                 w.line(&format!("r, ok := m[{key}]"));
                 w.line("if !ok {");
-                w.line(&format!("    return fmt.Errorf(\"%s: missing member %q\", {}, {key})", go_str(&name)));
+                w.line(&format!("    return fmt.Errorf(\"%s: missing member %q\", {}, {key_text})", go_str(&name)));
                 w.line("}");
                 emit_decode(w, &f.ty, "r", &field, &at);
                 w.dedent();
@@ -1226,7 +1263,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     }
     if let Some(r) = &s.rest {
         let field = format!("out.{}", go_field_name(&r.name));
-        let named: Vec<String> = s.fields.iter().map(|f| go_str(&f.name)).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| go_key(&f.key, opts)).collect();
         w.line("for k, r := range m {");
         w.indent();
         if !named.is_empty() {
@@ -1240,7 +1277,11 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
         w.line(&format!("if {field} == nil {{"));
         w.line(&format!("    {field} = map[string]{}{{}}", go_type(&r.val_ty)));
         w.line("}");
-        w.line(&format!("{field}[k] = x"));
+        w.line(&format!("ks, err := keyText(k, {})", go_str(&name)));
+        w.line("if err != nil {");
+        w.line("    return err");
+        w.line("}");
+        w.line(&format!("{field}[ks] = x"));
         w.dedent();
         w.line("}");
     }

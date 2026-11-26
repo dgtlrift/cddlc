@@ -465,3 +465,50 @@ pub fn record_optionals_before(s: &cddlc_ir::StructDef) -> Option<Vec<usize>> {
         b
     }).collect())
 }
+
+
+/// A map member's key in JSON: its text, or an integer key as decimal text
+/// (`1 => tstr` is `"1"`), as JSON objects have only text keys
+/// (dgtlrift/cddlc#176).
+pub fn field_key_json(key: &cddlc_ir::FieldKey) -> String {
+    match key {
+        cddlc_ir::FieldKey::Text(t) => t.to_string(),
+        cddlc_ir::FieldKey::Int(n) => n.to_string(),
+        cddlc_ir::FieldKey::Uint(n) => n.to_string(),
+    }
+}
+
+/// Whether a map has a member whose key isn't text (`1 => tstr`), so its
+/// decoder must read integer keys too (dgtlrift/cddlc#176).
+pub fn has_int_keys(s: &cddlc_ir::StructDef) -> bool {
+    s.encoding == cddlc_ir::StructEncoding::Map
+        && s.fields.iter().any(|f| !matches!(f.key, cddlc_ir::FieldKey::Text(_)))
+}
+
+
+/// A map key's canonical CBOR encoding (RFC 8949 §4.2.1).
+fn key_bytes(key: &cddlc_ir::FieldKey) -> Vec<u8> {
+    let head = |major: u8, n: u64| -> Vec<u8> {
+        let m = major << 5;
+        match n {
+            0..=23 => vec![m | n as u8],
+            24..=0xff => vec![m | 24, n as u8],
+            0x100..=0xffff => { let mut v = vec![m | 25]; v.extend((n as u16).to_be_bytes()); v }
+            0x1_0000..=0xffff_ffff => { let mut v = vec![m | 26]; v.extend((n as u32).to_be_bytes()); v }
+            _ => { let mut v = vec![m | 27]; v.extend(n.to_be_bytes()); v }
+        }
+    };
+    match key {
+        cddlc_ir::FieldKey::Uint(n) => head(0, *n),
+        cddlc_ir::FieldKey::Int(n) if *n >= 0 => head(0, *n as u64),
+        cddlc_ir::FieldKey::Int(n) => head(1, (-1 - *n) as u64),
+        cddlc_ir::FieldKey::Text(t) => { let mut v = head(3, t.len() as u64); v.extend(t.as_bytes()); v }
+    }
+}
+
+/// The order of a map's members in deterministic CBOR (dCBOR): by their keys'
+/// encoded bytes, so integer keys come first and `"b"` before `"aa"`
+/// (dgtlrift/cddlc#176).
+pub fn dcbor_key_order(a: &cddlc_ir::FieldDef, b: &cddlc_ir::FieldDef) -> std::cmp::Ordering {
+    key_bytes(&a.key).cmp(&key_bytes(&b.key))
+}

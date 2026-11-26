@@ -358,6 +358,17 @@ fn emit_constraint_checks(w: &mut IndentWriter, constraints: &[Constraint], expr
 
 // ── Struct ────────────────────────────────────────────────────────────────────
 
+/// A map member's key as a Python value: its text, or an integer key as an
+/// integer (as decimal text in JSON, whose object keys are text;
+/// dgtlrift/cddlc#176).
+fn py_key(key: &cddlc_ir::FieldKey, opts: &CodegenOptions) -> String {
+    match key {
+        cddlc_ir::FieldKey::Text(t) => format!("{:?}", t.as_str()),
+        _ if opts.is_json() => format!("{:?}", cddlc_codegen::field_key_json(key)),
+        _ => cddlc_codegen::field_key_json(key),
+    }
+}
+
 fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, s.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
     if s.deprecated { w.line("# @deprecated"); }
@@ -404,30 +415,30 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     // _to_raw
     let fields: Vec<_> = if opts.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
         fs
     } else {
         s.fields.iter().collect()
     };
     w.line("def _to_raw(self) -> Any:");
     w.indent();
-    w.line("m: dict[str, Any] = {}");
+    w.line("m: dict[Any, Any] = {}");
     for f in &fields {
         let fname = to_snake_case(&f.name);
-        let key   = f.name.as_str();
+        let key   = py_key(&f.key, opts);
         match &f.occurrence {
             Occurrence::Optional => {
                 w.line(&format!("if self.{fname} is not None:"));
                 w.indent();
-                w.line(&format!("m[{key:?}] = {}", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
+                w.line(&format!("m[{key}] = {}", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
                 w.dedent();
             }
             Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
             | Occurrence::Bounded { .. } => {
-                w.line(&format!("m[{key:?}] = [{} for item in self.{fname}]", py_to_raw(&f.ty, "item", opts)));
+                w.line(&format!("m[{key}] = [{} for item in self.{fname}]", py_to_raw(&f.ty, "item", opts)));
             }
             Occurrence::Required => {
-                w.line(&format!("m[{key:?}] = {}", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
+                w.line(&format!("m[{key}] = {}", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
             }
         }
     }
@@ -458,7 +469,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     // A map has only the members its schema gives it (RFC 8610 §3.5;
     // dgtlrift/cddlc#102), unless it has other entries.
     if s.rest.is_none() {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| py_key(&f.key, opts)).collect();
         w.line(&format!(
             "unknown = set(raw) - {{{}}}",
             if named.is_empty() { "None".into() } else { named.join(", ") }
@@ -471,13 +482,13 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     let mut args = Vec::new();
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
-        let key   = f.name.as_str();
-        let at    = format!("{class_name}.{key}");
+        let key   = py_key(&f.key, opts);
+        let at    = format!("{class_name}.{}", cddlc_codegen::field_key_json(&f.key));
         let local = format!("f_{fname}");
         match &f.occurrence {
             Occurrence::Optional => {
-                let conv = py_from_raw(&f.ty, &format!("raw[{key:?}]"), &at, opts);
-                w.line(&format!("{local} = {conv} if raw.get({key:?}) is not None else None"));
+                let conv = py_from_raw(&f.ty, &format!("raw[{key}]"), &at, opts);
+                w.line(&format!("{local} = {conv} if raw.get({key}) is not None else None"));
                 if !f.constraints.is_empty() {
                     w.line(&format!("if {local} is not None:"));
                     w.indent();
@@ -488,14 +499,14 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
             Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
             | Occurrence::Bounded { .. } => {
                 let conv = py_from_raw(&f.ty, "item", &at, opts);
-                w.line(&format!("{local} = [{conv} for item in raw.get({key:?}, [])]"));
+                w.line(&format!("{local} = [{conv} for item in raw.get({key}, [])]"));
             }
             Occurrence::Required => {
-                w.line(&format!("if {key:?} not in raw:"));
+                w.line(&format!("if {key} not in raw:"));
                 w.indent();
-                w.line(&format!("raise ValueError(\"{class_name}: missing field '{key}'\")"));
+                w.line(&format!("raise ValueError(\"{class_name}: missing field '{}'\")", cddlc_codegen::field_key_json(&f.key)));
                 w.dedent();
-                let conv = py_from_raw(&f.ty, &format!("raw[{key:?}]"), &at, opts);
+                let conv = py_from_raw(&f.ty, &format!("raw[{key}]"), &at, opts);
                 w.line(&format!("{local} = {conv}"));
                 emit_constraint_checks(w, &f.constraints, &local, &at);
             }
@@ -504,7 +515,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     }
     if let Some(r) = &s.rest {
         let rname = to_snake_case(&r.name);
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| py_key(&f.key, opts)).collect();
         let key = py_from_raw(&r.key_ty, "key", &format!("{class_name} key"), opts);
         let val = py_from_raw(&r.val_ty, "value", &format!("{class_name} value"), opts);
         w.line(&format!(

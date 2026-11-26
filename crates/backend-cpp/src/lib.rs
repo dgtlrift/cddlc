@@ -572,6 +572,17 @@ fn emit_cpp_array_item_decode(w: &mut IndentWriter, a: &ArrayDef, module: &IrMod
     }
 }
 
+/// Writes a map member's key: its text, or an integer key as an integer
+/// (dgtlrift/cddlc#176).
+fn cpp_key_write(key: &cddlc_ir::FieldKey) -> String {
+    match key {
+        cddlc_ir::FieldKey::Text(t) => format!("nanocbor_put_tstr(enc, {:?});", t.as_str()),
+        cddlc_ir::FieldKey::Uint(n) => format!("nanocbor_fmt_uint(enc, {n}ULL);"),
+        cddlc_ir::FieldKey::Int(n) if *n >= 0 => format!("nanocbor_fmt_uint(enc, {n}ULL);"),
+        cddlc_ir::FieldKey::Int(n) => format!("nanocbor_fmt_int(enc, {n}LL);"),
+    }
+}
+
 fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(def.name());
     w.line(&format!("int encode(nanocbor_encoder_t *enc, const {type_name} &val) {{"));
@@ -584,7 +595,7 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             }
             let fields: Vec<_> = if opts.dcbor {
                 let mut fs: Vec<_> = s.fields.iter().collect();
-                fs.sort_by(|a, b| a.name.cmp(&b.name));
+                fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
                 fs
             } else {
                 s.fields.iter().collect()
@@ -626,12 +637,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (val.{fname}.has_value()) {{"));
                     w.indent();
-                    if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
+                    if !record { w.line(&cpp_key_write(&f.key)); }
                     emit_cpp_encode_field(w, &f.ty, &format!("(*val.{fname})"), &f.occurrence, opts);
                     w.dedent();
                     w.line("}");
                 } else {
-                    if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
+                    if !record { w.line(&cpp_key_write(&f.key)); }
                     emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}"), &f.occurrence, opts);
                 }
             }
@@ -871,13 +882,32 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             }
             w.line("while (!nanocbor_at_end(&map)) {");
             w.indent();
-            w.line("const uint8_t *key_ptr; size_t key_len;");
-            w.line("if (nanocbor_get_tstr(&map, &key_ptr, &key_len) < 0) return -1;");
+            // A map with integer keys (`1 => tstr`) reads each key as text or
+            // an integer (dgtlrift/cddlc#176).
+            let int_keys = cddlc_codegen::has_int_keys(s);
+            w.line("const uint8_t *key_ptr = nullptr; size_t key_len = 0;");
+            if int_keys {
+                w.line("bool key_is_int = false; int64_t key_int = 0;");
+                w.line("if (nanocbor_get_type(&map) == NANOCBOR_TYPE_TSTR) {");
+                w.line("    if (nanocbor_get_tstr(&map, &key_ptr, &key_len) < 0) return -1;");
+                w.line("} else {");
+                w.line("    if (nanocbor_get_int64(&map, &key_int) < 0) return -1;");
+                w.line("    key_is_int = true;");
+                w.line("}");
+            } else {
+                w.line("if (nanocbor_get_tstr(&map, &key_ptr, &key_len) < 0) return -1;");
+            }
             w.line("std::string_view key(reinterpret_cast<const char*>(key_ptr), key_len);");
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
                 let fkey  = f.name.as_str();
-                w.line(&format!("if (key == {:?}) {{", fkey));
+                let cond = match &f.key {
+                    cddlc_ir::FieldKey::Text(t) if int_keys => format!("!key_is_int && key == {:?}", t.as_str()),
+                    cddlc_ir::FieldKey::Text(t) => format!("key == {:?}", t.as_str()),
+                    cddlc_ir::FieldKey::Int(n) => format!("key_is_int && key_int == {n}LL"),
+                    cddlc_ir::FieldKey::Uint(n) => format!("key_is_int && key_int == {}LL", (*n).min(i64::MAX as u64)),
+                };
+                w.line(&format!("if ({cond}) {{"));
                 w.indent();
                 if matches!(f.occurrence, Occurrence::Optional) {
                     // Decode into the inner type, then set the optional: nanocbor
@@ -901,6 +931,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 // Other keys are the map's other entries (dgtlrift/cddlc#82).
                 Some(r) => {
                     let rname = to_snake_case(&r.name);
+                    if int_keys {
+                        w.line("if (key_is_int) return -1; // the other entries have text keys");
+                    }
                     w.line(&format!("std::pair<std::string_view, {}> e{{key, {{}}}};", cpp_typeref(&r.val_ty, opts)));
                     emit_cpp_decode_field(w, &r.val_ty, "e.second", &[], &r.name, "&map", opts);
                     if is_heap(opts) {
@@ -2058,7 +2091,8 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.line("nlohmann::json j = nlohmann::json::object();");
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
-                let key   = f.name.as_str();
+                let key_text = cddlc_codegen::field_key_json(&f.key);
+                let key   = key_text.as_str();
                 let _val  = cpp_json_to_val(&f.ty, &fname, module);
                 match &f.occurrence {
                     Occurrence::Optional => {
@@ -2070,7 +2104,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                 }
             }
             if let Some(r) = &s.rest {
-                let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+                let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key))).collect();
                 w.line(&format!("for (const auto& [key, value] : this->{}) {{", to_snake_case(&r.name)));
                 w.indent();
                 if !named.is_empty() {
@@ -2095,7 +2129,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.line(&format!("{ctype} out{{}};"));
             // A map has only the members its schema gives it (dgtlrift/cddlc#102).
             if s.rest.is_none() {
-                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", f.name.as_str())).collect();
+                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", cddlc_codegen::field_key_json(&f.key))).collect();
                 w.line(&format!(
                     "for (const auto& [key, value] : j.items()) if (!({})) throw std::invalid_argument(\"{ctype}: unknown member \" + key);",
                     if named.is_empty() { "false".into() } else { named.join(" || ") }
@@ -2103,7 +2137,8 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             }
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
-                let key   = f.name.as_str();
+                let key_text = cddlc_codegen::field_key_json(&f.key);
+                let key   = key_text.as_str();
                 match &f.occurrence {
                     Occurrence::Optional => {
                         w.line(&format!("if (j.contains({key:?})) out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j[{key:?}]"), opts, module)));
@@ -2115,7 +2150,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             }
             // Keys no member has are the map's other entries.
             if let Some(r) = &s.rest {
-                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", f.name.as_str())).collect();
+                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", cddlc_codegen::field_key_json(&f.key))).collect();
                 w.line("for (const auto& [key, value] : j.items()) {");
                 w.indent();
                 if !named.is_empty() {

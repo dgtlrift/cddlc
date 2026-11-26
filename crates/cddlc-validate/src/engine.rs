@@ -665,6 +665,10 @@ fn field_key_matches(field_key: &FieldKey, entry_key: &Value) -> bool {
         (FieldKey::Int(n), Value::Uint(k)) => *n >= 0 && (*n as u64) == *k,
         (FieldKey::Uint(n), Value::Uint(k)) => n == k,
         (FieldKey::Uint(n), Value::Int(k)) => *k >= 0 && (*k as u64) == *n,
+        // A JSON object's keys are text: an integer key as its decimal text
+        // (dgtlrift/cddlc#176).
+        (FieldKey::Int(n), Value::Text(k)) => k.as_str() == n.to_string(),
+        (FieldKey::Uint(n), Value::Text(k)) => k.as_str() == n.to_string(),
         _ => false,
     }
 }

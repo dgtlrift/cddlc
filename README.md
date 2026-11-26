@@ -362,6 +362,10 @@ In CBOR, Rust, Python, Go, C, C++ and C# tables take integer or text keys. JSON 
 have text keys, and the TypeScript, Java and Lua value models read a map's keys as text, so
 there tables need `tstr` keys.
 
+A map member with an integer key (`? 1 => int`, as in COSE headers and CWT claims) is written
+with that integer key in CBOR, in every backend. In JSON, where object keys are text, the key is
+its decimal text (`"1"`), and `cddlc validate` accepts it that way.
+
 A map with named members and other entries gets one more member, `extra` (or `extra_entries`
 when a member is already called `extra`), holding the other entries: a map from text key to
 value. Decoding puts every key that no named member has there; encoding writes them after the

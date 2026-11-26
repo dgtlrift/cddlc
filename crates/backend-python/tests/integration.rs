@@ -186,7 +186,7 @@ fn test_struct_encode_uses_cbor2_dumps() {
 #[test]
 fn test_struct_encode_builds_map() {
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("m: dict[str, Any] = {}"));
+    assert!(g.source.contains("m: dict[Any, Any] = {}"));
     assert!(g.source.contains("\"id\""));
 }
 

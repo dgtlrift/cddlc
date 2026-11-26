@@ -16,7 +16,7 @@ use std::collections::HashSet;
 
 use cddlc_ir::{
     AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
-    FieldDef, IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    FieldDef, FieldKey, IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 /// Rust keywords (strict, reserved and edition-2024) that cannot be plain identifiers.
@@ -70,6 +70,17 @@ fn is_boxed(from: &str, ty: &TypeRef, module: &IrModule) -> bool {
         }
     }
     false
+}
+
+/// Writes a map member's key: its text, or an integer key as an integer
+/// (dgtlrift/cddlc#176).
+fn key_write(key: &FieldKey) -> String {
+    match key {
+        FieldKey::Text(t) => format!("e.str({:?})?;", t.as_str()),
+        FieldKey::Uint(n) => format!("e.u64({n})?;"),
+        FieldKey::Int(n) if *n >= 0 => format!("e.u64({n})?;"),
+        FieldKey::Int(n) => format!("e.i64({n})?;"),
+    }
 }
 
 /// Whether any member or variant in the module is a `Box`.
@@ -543,7 +554,7 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     // Emit fields — sorted if dCBOR
     let fields: Vec<_> = if opts.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
         fs
     } else {
         s.fields.iter().collect()
@@ -555,7 +566,7 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             // Only emit key+value when the option is Some
             w.line(&format!("if let Some(ref v) = {} {{", field_access));
             w.indent();
-            w.line(&format!("e.str({:?})?;", f.name.as_str()));
+            w.line(&key_write(&f.key));
             // Use (*v) to deref the `&T` produced by `Some(ref v)`.
             // Primitive encode calls (e.u64, e.f64, …) take T by value;
             // method calls on named types need explicit deref: (*v).encode().
@@ -563,7 +574,7 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             w.dedent();
             w.line("}");
         } else {
-            w.line(&format!("e.str({:?})?;", f.name.as_str()));
+            w.line(&key_write(&f.key));
             emit_encode_value(w, &f.ty, &field_access, &f.occurrence, opts, Some(module));
         }
     }
@@ -770,13 +781,30 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.indent();
     w.line("match len { Some(n) if i >= n => break, None if d.datatype()? == minicbor::data::Type::Break => { d.skip()?; break }, _ => {} }");
     w.line("i += 1;");
-    w.line("let key = d.str()?;");
+    // A map with integer keys (`1 => tstr`) reads each key as text or an
+    // integer (dgtlrift/cddlc#176); one with only text keys reads text.
+    let int_keys = cddlc_codegen::has_int_keys(s);
+    if int_keys {
+        w.line("enum CddlcKey<'k> { Text(&'k str), Int(i128) }");
+        w.line("let key = match d.datatype()? {");
+        w.line("    minicbor::data::Type::String => CddlcKey::Text(d.str()?),");
+        w.line("    _ => CddlcKey::Int(i128::from(d.int()?)),");
+        w.line("};");
+    } else {
+        w.line("let key = d.str()?;");
+    }
     w.line("match key {");
     w.indent();
 
     for f in &s.fields {
         let local = field_local(&f.name);
-        w.line(&format!("{:?} => {{", f.name.as_str()));
+        let pattern = match (&f.key, int_keys) {
+            (FieldKey::Text(t), false) => format!("{:?}", t.as_str()),
+            (FieldKey::Text(t), true) => format!("CddlcKey::Text({:?})", t.as_str()),
+            (FieldKey::Uint(n), _) => format!("CddlcKey::Int({n})"),
+            (FieldKey::Int(n), _) => format!("CddlcKey::Int({n})"),
+        };
+        w.line(&format!("{pattern} => {{"));
         w.indent();
         let decode_expr = decode_expr_for_in_module(&f.ty, opts, Some(module));
         w.line(&format!("let val = {};", decode_expr));
@@ -796,12 +824,19 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     match &s.rest {
         // Other keys are the map's other entries.
         Some(r) if opts.no_std => {
-            w.line("_ => {");
+            w.line(if int_keys { "CddlcKey::Text(key) => {" } else { "_ => {" });
             w.indent();
             w.line(&format!("let val = {};", decode_expr_for_in_module(&r.val_ty, opts, Some(module))));
             w.line("rest.insert(cddlc_text(key)?, val).map_err(|_| DecodeError::message(\"map larger than its capacity\"))?;");
             w.dedent();
             w.line("}");
+            if int_keys {
+                w.line(&format!("_ => {{ return Err(DecodeError::message(\"{}: unknown member\")); }}", s.name));
+            }
+        }
+        Some(_) if int_keys => {
+            w.line("CddlcKey::Text(key) => { rest.insert(key.to_string(), d.decode()?); }");
+            w.line(&format!("_ => {{ return Err(DecodeError::message(\"{}: unknown member\")); }}", s.name));
         }
         Some(_) => w.line("_ => { rest.insert(key.to_string(), d.decode()?); }"),
         // A map has only the members its schema gives it (RFC 8610 §3.5;
@@ -2828,7 +2863,7 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
     for f in &s.fields {
         emit_doc(w, f.doc.as_deref());
         let fname = field_ident(&f.name);
-        let attrs = serde_field_attrs_json(&f.name, &fname, &f.ty, &f.occurrence, module);
+        let attrs = serde_field_attrs_json(&cddlc_codegen::field_key_json(&f.key), &fname, &f.ty, &f.occurrence, module);
         if !attrs.is_empty() && !record { w.line(&attrs); }
         let ty_str = match field_literal(f) {
             Some(lit) => {
