@@ -106,9 +106,8 @@ for schema in crates/backend-buildtest/schemas/*.cddl; do
         echo "== $lang $name: not for this language (dgtlrift/cddlc#181)"
         continue
     fi
-    # Recursive types: C++ (dgtlrift/cddlc#156) and Go (dgtlrift/cddlc#221)
-    # don't hold them yet.
-    if [[ "$name" == recursive && " cpp go " =~ " $lang " ]]; then
+    # Recursive types: C++ doesn't hold them yet (dgtlrift/cddlc#156).
+    if [[ "$name" == recursive && " cpp " =~ " $lang " ]]; then
         echo "== $lang $name: not for this language yet (dgtlrift/cddlc#156)"
         continue
     fi

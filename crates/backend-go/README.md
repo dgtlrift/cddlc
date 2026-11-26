@@ -85,6 +85,24 @@ func NewLevelOff() Level
 it. Text, `nil` and integer-literal variants carry no value. Decoding picks the
 variant from the value's type, matching literals first.
 
+### Recursive types
+
+A required member or variant that holds its own type again by value is a
+pointer, since a Go type can't contain itself:
+
+```go
+type Binop struct {
+	Op  string
+	Lhs *Expr // expr = int / binop; binop = [op: tstr, lhs: expr, rhs: expr]
+	Rhs *Expr
+}
+```
+
+An optional member is a pointer already, and a slice or map holds its values
+elsewhere, so neither adds one. `Validate` (and so encoding) fails on a nil
+required pointer, decoding allocates the value, and `NewExprBinop(x)` takes the
+value and stores its address.
+
 ### Arrays and aliases
 
 ```go
