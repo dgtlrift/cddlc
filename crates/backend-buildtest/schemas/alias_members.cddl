@@ -1,0 +1,13 @@
+; Reference schema: members, other entries and array items whose type is a
+; plain alias of a primitive (dgtlrift/cddlc#179)
+
+holder = {
+    blob:  blob,
+    name:  name,
+    ? opt: blob,
+    list:  [* blob],
+    * tstr => blob,
+}
+
+blob = bstr
+name = tstr

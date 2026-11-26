@@ -479,7 +479,13 @@ fn rest_value_heap(ty: &TypeRef, opts: &CodegenOptions) -> String {
 /// A test value for a map's other entries: one entry under a key no named
 /// member has.
 fn rest_test_value(r: &cddlc_ir::MapRest, module: &IrModule, opts: &CodegenOptions) -> String {
-    let val = primitive_default_expr(&r.val_ty, opts);
+    // A plain alias of a byte string is a `ByteVec` outside `--no-std`, which
+    // has no `Default` (dgtlrift/cddlc#179).
+    let val = match plain_alias(&r.val_ty, Some(module)) {
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if !opts.no_std && !matches!(r.val_ty, TypeRef::Primitive(_)) =>
+            "minicbor::bytes::ByteVec::from(Vec::<u8>::new())".to_owned(),
+        resolved => primitive_default_expr(resolved, opts),
+    };
     let key = rest_test_key(r, module, opts);
     if opts.no_std {
         format!(
@@ -878,7 +884,7 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     for f in &s.fields {
         let var_ty = match &f.occurrence {
             Occurrence::Optional if is_boxed(&s.name, &f.ty, module) => format!("Box<{}>", typeref_to_rust(&f.ty, opts)),
-            Occurrence::Optional => typeref_to_rust(&f.ty, opts),
+            Occurrence::Optional => typeref_to_rust(member_alias(&f.ty, module, opts), opts),
             _ => member_type(&s.name, f, opts, module),
         };
         w.line(&format!("let mut {}: Option<{}> = None;", field_local(&f.name), var_ty));
@@ -1926,7 +1932,7 @@ fn emit_encode_value(
 }
 
 fn emit_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: Option<&IrModule>) {
-    match ty {
+    match plain_alias(ty, module) {
         TypeRef::Primitive(p) => {
             let enc = encode_call_for_primitive(p, expr);
             w.line(&format!("{enc}?;"));
@@ -1983,7 +1989,7 @@ fn decode_expr_for(ty: &TypeRef, opts: &CodegenOptions) -> String {
 }
 
 fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option<&IrModule>) -> String {
-    match ty {
+    match plain_alias(ty, module) {
         TypeRef::Primitive(p) => {
             let fn_name = decode_fn_for_primitive(p);
             match p {
@@ -2088,7 +2094,36 @@ fn member_type(struct_name: &str, f: &FieldDef, opts: &CodegenOptions, module: &
             _ => {}
         }
     }
-    field_type_str(&f.ty, &f.occurrence, opts)
+    // A member of a plain alias of a primitive holds the primitive: the
+    // alias of a bstr is a `ByteVec` (for arrays of it), which has no
+    // `Default` (dgtlrift/cddlc#179).
+    field_type_str(member_alias(&f.ty, module, opts), &f.occurrence, opts)
+}
+
+/// A member's type as declared: its own, unless it's a plain alias of a byte
+/// string outside `--no-std`, a `ByteVec` (for arrays of it) that a member
+/// can't hold, as it has no `Default` (dgtlrift/cddlc#179).
+fn member_alias<'a>(ty: &'a TypeRef, module: &'a IrModule, opts: &CodegenOptions) -> &'a TypeRef {
+    match plain_alias(ty, Some(module)) {
+        p @ TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if !opts.no_std && !opts.is_json() => p,
+        _ => ty,
+    }
+}
+
+/// The primitive a plain alias names (`v = bstr`: no constraints, no tag),
+/// through aliases of aliases; `ty` itself otherwise. Its members are encoded
+/// and decoded as that primitive (dgtlrift/cddlc#179).
+fn plain_alias<'a>(ty: &'a TypeRef, module: Option<&'a IrModule>) -> &'a TypeRef {
+    let mut ty = ty;
+    for _ in 0..8 {
+        let TypeRef::Named(n) = ty else { break };
+        match module.and_then(|m| m.get(n)) {
+            Some(TypeDef::Alias(a)) if a.constraints.is_empty() && a.tagged.is_none()
+                && matches!(a.ty, TypeRef::Primitive(_) | TypeRef::Named(_)) => ty = &a.ty,
+            _ => break,
+        }
+    }
+    ty
 }
 
 fn field_type_str(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
@@ -2260,7 +2295,7 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
                 if let Some(v) = tstr_test_value_for(n, module, opts) {
                     v
                 } else {
-                    default_value_expr(&f.ty, &f.occurrence, opts)
+                    default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts)
                 }
             }
             (Occurrence::Required, TypeRef::Tagged(_, inner)) => {
@@ -2268,13 +2303,13 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
                     if let Some(v) = tstr_test_value_for(n, module, opts) {
                         v
                     } else {
-                        default_value_expr(&f.ty, &f.occurrence, opts)
+                        default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts)
                     }
                 } else {
-                    default_value_expr(&f.ty, &f.occurrence, opts)
+                    default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts)
                 }
             }
-            _ => default_value_expr(&f.ty, &f.occurrence, opts),
+            _ => default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts),
         };
         let val = if f.occurrence.is_required() && is_boxed(&s.name, &f.ty, module) {
             format!("Box::new({val})")
@@ -3705,9 +3740,9 @@ fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &Codege
         let val = if field_literal(f).is_some() {
             "Default::default()".to_owned()
         } else if f.occurrence.is_required() && is_boxed(&s.name, &f.ty, module) {
-            format!("Box::new({})", default_value_expr(&f.ty, &f.occurrence, opts))
+            format!("Box::new({})", default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts))
         } else {
-            default_value_expr(&f.ty, &f.occurrence, opts)
+            default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts)
         };
         w.line(&format!("{fname}: {val},"));
     }
