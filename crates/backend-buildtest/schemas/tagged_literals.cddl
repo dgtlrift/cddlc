@@ -1,0 +1,10 @@
+; Reference schema: tagged types pinned to a literal (dgtlrift/cddlc#142)
+
+; RFC 9277's CBOR-labeled JSON header: a byte string literal under two tags
+td-json-header = #6.55801(#6.1668547250('BOR'))
+
+; A text literal under a tag
+greeting = #6.7("hello")
+
+; An integer literal under a tag
+answer = #6.9(42)

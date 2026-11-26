@@ -2116,6 +2116,10 @@ fn ts_constraint_check(c: &Constraint, expr: &str, json: bool) -> Option<String>
                 (None, None) => None,
             }
         }
+        // A byte-string literal: the same bytes, as `===` compares the arrays'
+        // identity (dgtlrift/cddlc#142).
+        Constraint::Eq(LiteralValue::Bytes(b)) => Some(ts_bytes_eq(expr, b)),
+        Constraint::Ne(LiteralValue::Bytes(b)) => Some(format!("!{}", ts_bytes_eq(expr, b))),
         Constraint::Eq(v) => Some(format!("{expr} === {}", ts_literal(v, json))),
         Constraint::Ne(v) => Some(format!("{expr} !== {}", ts_literal(v, json))),
         Constraint::Regexp { hook: Some(h), .. } => Some(format!("{h}({expr})")),
@@ -2152,8 +2156,17 @@ fn ts_literal(v: &LiteralValue, json: bool) -> String {
         LiteralValue::Int(n) => format!("{n}{suffix}"),
         LiteralValue::Float(f) => format!("{f}"),
         LiteralValue::Text(s) => format!("{s:?}"),
-        LiteralValue::Bytes(_) => "new Uint8Array()".into(),
+        LiteralValue::Bytes(b) => format!(
+            "new Uint8Array([{}])",
+            b.iter().map(|x| format!("{x:#04x}")).collect::<Vec<_>>().join(", ")
+        ),
     }
+}
+
+/// Whether the `Uint8Array` `expr` holds the bytes `b`.
+fn ts_bytes_eq(expr: &str, b: &[u8]) -> String {
+    let bytes = b.iter().map(|x| format!("{x:#04x}")).collect::<Vec<_>>().join(", ");
+    format!("({expr}.length === {n} && [{bytes}].every((x, i) => {expr}[i] === x))", n = b.len())
 }
 
 // ── `true` / `false` fields ───────────────────────────────────────────────────
