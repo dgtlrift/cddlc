@@ -486,7 +486,8 @@ fn test_rust_harness_uses_crate_api() {
 fn test_c_harness_uses_c_names() {
     let h = c("device-info = { id: uint }\nlink-mode = \"free-space\" / \"other\"");
     assert!(h.contains("device_info_t decoded = {0};"), "{h}");
-    assert!(h.contains("assert(test_device_info_decode(&dec, &decoded, NULL, NULL) == 0);"), "{h}");
+    // The harness passes an allocator, for recursive types (dgtlrift/cddlc#156).
+    assert!(h.contains("assert(test_device_info_decode(&dec, &decoded, &interop_cb, NULL) == 0);"), "{h}");
     assert!(h.contains("assert(decoded.tag == LINK_MODE_FREESPACE);"), "{h}");
 }
 

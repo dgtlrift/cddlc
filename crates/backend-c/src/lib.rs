@@ -30,6 +30,9 @@ impl Backend for CBackend {
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "C", true)?;
+        if let Some(msg) = unsupported_recursion(module) {
+            return Err(CodegenError::new(msg));
+        }
         // A rule whose `<rule>_t` the C library or the runtime already has
         // (`mode_t`, `time_t`, `cbor_str_t`) is `<module>_<rule>_t`
         // (dgtlrift/cddlc#154).
@@ -202,6 +205,8 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line(&format!("{}_ERR_UNKNOWN_FIELD,", to_screaming_snake(name)));
     w.line(&format!("{}_ERR_TAG,", to_screaming_snake(name)));
     w.line(&format!("{}_ERR_VALIDATION,", to_screaming_snake(name)));
+    // A recursive member's memory couldn't be had (dgtlrift/cddlc#156).
+    w.line(&format!("{}_ERR_ALLOC,", to_screaming_snake(name)));
     w.dedent();
     w.line(&format!("}} {}_err_t;", to_snake_case(name)));
     w.blank();
@@ -225,13 +230,29 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
         to_snake_case(name)
     ));
     w.line("void (*on_unknown_field)(void *ctx, cbor_str_t key);");
+    // A recursive member (`tree = { ? left: tree }`) is a pointer: decoding
+    // gets its memory here, and `<type>_release` gives it back
+    // (dgtlrift/cddlc#156). Without `alloc`, decoding one fails.
+    w.line("void *(*alloc)(void *ctx, size_t size);");
+    w.line("void (*release)(void *ctx, void *ptr);");
     w.dedent();
     w.line(&format!("}} {}_callbacks_t;", to_snake_case(name)));
     w.blank();
 
     // ── Type declarations ─────────────────────────────────────────────────────
-    for (_, def) in &module.types {
-        emit_type_decl_h(&mut w, def, name, opts);
+    // Types something points at are declared ahead (dgtlrift/cddlc#156).
+    let targets = ptr_targets(module);
+    for t in &targets {
+        w.line(&format!("typedef struct {t}_s {t}_t;"));
+    }
+    if !targets.is_empty() { w.blank(); }
+    for tname in cddlc_codegen::inline_decl_order(module) {
+        let Some(def) = module.get(&tname) else { continue };
+        let mut sub = IndentWriter::new(4);
+        emit_type_decl_h(&mut sub, def, module, opts);
+        for line in declare_tagged(sub.finish(), &to_snake_case(&tname), &targets).lines() {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
         w.blank();
     }
 
@@ -239,6 +260,12 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("/* Encode/decode function declarations */");
     for (_, def) in &module.types {
         emit_fn_decls(&mut w, def, name, opts);
+        // What a recursive type's pointers point at is given back by its
+        // `_release` (dgtlrift/cddlc#156).
+        if needs_release(def.name(), module) {
+            let (p, t) = (to_snake_case(name), to_snake_case(def.name()));
+            w.line(&format!("void {p}_{t}_release({t}_t *val, const {p}_callbacks_t *cb, void *ctx);"));
+        }
     }
     w.blank();
 
@@ -246,24 +273,29 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_type_decl_h(w: &mut IndentWriter, def: &TypeDef, _mod_name: &str, opts: &CodegenOptions) {
+fn emit_type_decl_h(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
-        TypeDef::Struct(s) => emit_struct_decl(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum_decl(w, e, opts),
+        TypeDef::Struct(s) => emit_struct_decl(w, s, module, opts),
+        TypeDef::Enum(e)   => emit_enum_decl(w, e, module, opts),
         TypeDef::Array(a)  => emit_array_decl(w, a, opts),
         TypeDef::Alias(a)  => emit_alias_decl(w, a, opts),
         TypeDef::Map(m)    => emit_map_decl(w, m, opts),
     }
 }
 
-fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts: &CodegenOptions) {
     emit_c_doc(w, s.doc.as_deref());
     let type_name = to_snake_case(&s.name);
     w.line(&format!("typedef struct {{"));
     w.indent();
     for f in &s.fields {
         emit_c_doc(w, f.doc.as_deref());
-        let ty_str = c_field_type(&f.ty, &f.occurrence, opts);
+        // A member that holds this type again is a pointer (dgtlrift/cddlc#156).
+        let ty_str = if indirect(&s.name, &f.ty, module) {
+            format!("{} *", ptr_type(&f.ty, module))
+        } else {
+            c_field_type(&f.ty, &f.occurrence, opts)
+        };
         let fname  = to_snake_case(&f.name);
         if ty_str.contains("{name}") {
             w.line(&format!("{};", ty_str.replace("{name}", &fname)));
@@ -292,7 +324,7 @@ fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) 
     w.line(&format!("}} {type_name}_t;"));
 }
 
-fn emit_enum_decl(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions) {
+fn emit_enum_decl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, _opts: &CodegenOptions) {
     emit_c_doc(w, e.doc.as_deref());
     let type_name = to_snake_case(&e.name);
 
@@ -323,6 +355,11 @@ fn emit_enum_decl(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions) {
             TypeRef::Primitive(Primitive::Null) => {}
             TypeRef::Primitive(p) => {
                 w.line(&format!("{} {};", primitive_to_c(p), vname));
+            }
+            // An alternative that holds this type again is a pointer
+            // (dgtlrift/cddlc#156).
+            TypeRef::Named(_) if indirect(&e.name, &v.ty, module) => {
+                w.line(&format!("{} *{};", ptr_type(&v.ty, module), vname));
             }
             TypeRef::Named(n) => {
                 w.line(&format!("{}_t {};", to_snake_case(n), vname));
@@ -432,6 +469,8 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
         emit_encode_fn(&mut w, def, module, name, opts);
         w.blank();
         emit_decode_fn(&mut w, def, module, name, opts);
+        w.blank();
+        emit_release_fn(&mut w, def, module, &to_snake_case(name), false);
     }
 
     w.finish()
@@ -473,6 +512,287 @@ fn c_bytes_eq(val_expr: &str, b: &[u8]) -> String {
 /// Whether an enum variant is a text literal (`"on"`), not any text (`tstr`).
 fn is_text_literal(v: &cddlc_ir::EnumVariant) -> bool {
     v.constraints.iter().any(|c| matches!(c, Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
+}
+
+// ── Recursion (dgtlrift/cddlc#156) ───────────────────────────────────────────
+
+/// Whether a member or variant of `from` holding `ty` is a pointer: `ty`
+/// holds `from` again, inline.
+fn indirect(from: &str, ty: &TypeRef, module: &IrModule) -> bool {
+    cddlc_codegen::is_indirect(from, ty, module)
+}
+
+/// The named type `ty` holds, under any tag. A choice that isn't of
+/// primitives is held as its first alternative (see `typeref_to_c`).
+fn named_of(ty: &TypeRef) -> Option<&str> {
+    match ty {
+        TypeRef::Named(n) => Some(n.as_str()),
+        TypeRef::Tagged(_, inner) => named_of(inner),
+        TypeRef::Choice(cs) if prim_choice_c(cs).is_none() => cs.first().and_then(named_of),
+        _ => None,
+    }
+}
+
+/// The type an alias chain ends at.
+fn resolve_named<'a>(n: &'a str, module: &'a IrModule) -> &'a str {
+    let mut n = n;
+    for _ in 0..16 {
+        match module.get(n) {
+            Some(TypeDef::Alias(a)) => match &a.ty {
+                TypeRef::Named(t) => n = t.as_str(),
+                _ => break,
+            },
+            _ => break,
+        }
+    }
+    n
+}
+
+/// The C type a pointer member or variant points at: the type its alias
+/// chain ends at, declared ahead (`typedef struct <t>_s <t>_t;`).
+fn ptr_type(ty: &TypeRef, module: &IrModule) -> String {
+    let n = named_of(ty).map(|n| resolve_named(n, module)).unwrap_or("void");
+    format!("{}_t", to_snake_case(n))
+}
+
+/// The types something points at: declared ahead, so a pointer to one comes
+/// before its definition.
+fn ptr_targets(module: &IrModule) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for (name, def) in &module.types {
+        let tys: Vec<&TypeRef> = match def {
+            TypeDef::Struct(s) => s.fields.iter()
+                .filter(|f| matches!(f.occurrence, Occurrence::Required | Occurrence::Optional))
+                .map(|f| &f.ty).collect(),
+            TypeDef::Enum(e) => e.variants.iter().map(|v| &v.ty).collect(),
+            _ => vec![],
+        };
+        for ty in tys {
+            if indirect(name, ty, module) {
+                if let Some(n) = named_of(ty) {
+                    out.insert(to_snake_case(resolve_named(n, module)));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether a type holds a pointer, itself or in what it holds inline: it has
+/// a `<t>_release` that gives the pointed-at memory back.
+fn needs_release(name: &str, module: &IrModule) -> bool {
+    fn go(name: &str, module: &IrModule, seen: &mut std::collections::HashSet<String>) -> bool {
+        if !seen.insert(name.to_owned()) {
+            return false;
+        }
+        let refs = |ty: &TypeRef| -> Vec<String> { named_of(ty).map(|n| vec![n.to_owned()]).unwrap_or_default() };
+        match module.get(name) {
+            Some(TypeDef::Struct(s)) => {
+                s.fields.iter().any(|f| indirect(name, &f.ty, module))
+                    || s.fields.iter().flat_map(|f| refs(&f.ty)).any(|n| go(&n, module, seen))
+                    || s.rest.iter().flat_map(|r| refs(&r.val_ty)).any(|n| go(&n, module, seen))
+            }
+            Some(TypeDef::Enum(e)) => {
+                e.variants.iter().any(|v| indirect(name, &v.ty, module))
+                    || e.variants.iter().flat_map(|v| refs(&v.ty)).any(|n| go(&n, module, seen))
+            }
+            Some(TypeDef::Array(a)) => refs(&a.element).iter().any(|n| go(n, module, seen)),
+            Some(TypeDef::Map(m)) => refs(&m.val_ty).iter().any(|n| go(n, module, seen)),
+            Some(TypeDef::Alias(a)) => refs(&a.ty).iter().any(|n| go(n, module, seen)),
+            None => false,
+        }
+    }
+    go(name, module, &mut std::collections::HashSet::new())
+}
+
+/// A recursive member C can't hold yet: through a repeated member or other
+/// entries (an array of them in place), or of a type that isn't named.
+fn unsupported_recursion(module: &IrModule) -> Option<String> {
+    for (name, def) in &module.types {
+        match def {
+            TypeDef::Struct(s) => {
+                for f in &s.fields {
+                    if !indirect(name, &f.ty, module) {
+                        continue;
+                    }
+                    if f.occurrence.is_repeated() {
+                        return Some(format!("'{name}.{}': C can't hold a repeated member that holds '{name}' again yet; use an array type for it (dgtlrift/cddlc#156)", f.name));
+                    }
+                    if named_of(&f.ty).is_none() {
+                        return Some(format!("'{name}.{}': C can't hold a recursive member of an inline choice yet (dgtlrift/cddlc#156)", f.name));
+                    }
+                }
+                if let Some(r) = &s.rest {
+                    if indirect(name, &r.val_ty, module) {
+                        return Some(format!("'{name}': C can't hold other entries whose value holds '{name}' again yet (dgtlrift/cddlc#156)"));
+                    }
+                }
+            }
+            TypeDef::Enum(e) => {
+                for v in &e.variants {
+                    if indirect(name, &v.ty, module) && named_of(&v.ty).is_none() {
+                        return Some(format!("'{name}': C can't hold a recursive alternative that isn't a named type yet (dgtlrift/cddlc#156)"));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A type's declaration, tagged when something points at it: `struct <t>_s {
+/// ... };`, its `typedef` declared ahead.
+fn declare_tagged(decl: String, snake: &str, targets: &std::collections::BTreeSet<String>) -> String {
+    if !targets.contains(snake) {
+        return decl;
+    }
+    let open = "typedef struct {";
+    let close = format!("}} {snake}_t;");
+    match (decl.rfind(open), decl.rfind(&close)) {
+        (Some(o), Some(c)) if o < c => format!(
+            "{}struct {snake}_s {{{}}};{}",
+            &decl[..o], &decl[o + open.len()..c], &decl[c + close.len()..]
+        ),
+        _ => decl,
+    }
+}
+
+/// `<t>_release`, for a type that holds a pointer: gives back the memory its
+/// pointer members point at, and theirs, through `cb->release` (or `free` in
+/// JSON, where decoding used `calloc`), and empties them (dgtlrift/cddlc#156).
+fn emit_release_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, pfx: &str, json: bool) {
+    let name = def.name();
+    if !needs_release(name, module) {
+        return;
+    }
+    let t = to_snake_case(name);
+    let sig = if json {
+        format!("void {pfx}_{t}_release({t}_t *val)")
+    } else {
+        format!("void {pfx}_{t}_release({t}_t *val, const {pfx}_callbacks_t *cb, void *ctx)")
+    };
+    let args = if json { "" } else { ", cb, ctx" };
+    let free_ptr = |p: &str| if json { format!("free({p});") } else { format!("if (cb && cb->release) cb->release(ctx, {p});") };
+    // Releases what `expr` (a value of `ty`) holds, through a pointer or not.
+    let release = |w: &mut IndentWriter, ty: &TypeRef, expr: &str, ptr: bool| {
+        let Some(n) = named_of(ty) else { return };
+        let target = if ptr { resolve_named(n, module) } else { n };
+        let inner = needs_release(target, module);
+        if ptr {
+            w.line(&format!("if ({expr}) {{"));
+            w.indent();
+            if inner {
+                w.line(&format!("{pfx}_{}_release({expr}{args});", to_snake_case(target)));
+            }
+            w.line(&free_ptr(expr));
+            w.line(&format!("{expr} = NULL;"));
+            w.dedent();
+            w.line("}");
+        } else if inner {
+            w.line(&format!("{pfx}_{}_release(&{expr}{args});", to_snake_case(target)));
+        }
+    };
+    w.line(&format!("{sig} {{"));
+    w.indent();
+    if !json { w.line("(void)cb; (void)ctx;"); }
+    w.line("if (!val) return;");
+    match def {
+        TypeDef::Struct(st) => {
+            for f in &st.fields {
+                let fname = to_snake_case(&f.name);
+                if indirect(&st.name, &f.ty, module) {
+                    release(w, &f.ty, &format!("val->{fname}"), true);
+                } else if f.occurrence.is_repeated() {
+                    if named_of(&f.ty).is_some_and(|n| needs_release(n, module)) {
+                        w.line(&format!("for (size_t i = 0; i < val->{fname}_count; i++) {{"));
+                        w.indent();
+                        release(w, &f.ty, &format!("val->{fname}[i]"), false);
+                        w.dedent();
+                        w.line("}");
+                    }
+                } else if matches!(f.occurrence, Occurrence::Optional) {
+                    if named_of(&f.ty).is_some_and(|n| needs_release(n, module)) {
+                        w.line(&format!("if (val->{fname}_present) {{"));
+                        w.indent();
+                        release(w, &f.ty, &format!("val->{fname}"), false);
+                        w.dedent();
+                        w.line("}");
+                    }
+                } else {
+                    release(w, &f.ty, &format!("val->{fname}"), false);
+                }
+            }
+            if let Some(r) = &st.rest {
+                if named_of(&r.val_ty).is_some_and(|n| needs_release(n, module)) {
+                    let rname = to_snake_case(&r.name);
+                    w.line(&format!("for (size_t i = 0; i < val->{rname}_count; i++) {{"));
+                    w.indent();
+                    release(w, &r.val_ty, &format!("val->{rname}[i].value"), false);
+                    w.dedent();
+                    w.line("}");
+                }
+            }
+        }
+        TypeDef::Enum(e) => {
+            w.line("switch (val->tag) {");
+            for v in &e.variants {
+                if named_of(&v.ty).is_none() { continue; }
+                let vname = to_snake_case(&v.name);
+                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                w.line(&format!("case {vconst}:"));
+                w.indent();
+                release(w, &v.ty, &format!("val->value.{vname}"), indirect(&e.name, &v.ty, module));
+                w.line("break;");
+                w.dedent();
+            }
+            w.line("default: break;");
+            w.line("}");
+        }
+        TypeDef::Array(a) => {
+            w.line("for (size_t i = 0; i < val->count; i++) {");
+            w.indent();
+            release(w, &a.element, "val->items[i]", false);
+            w.dedent();
+            w.line("}");
+        }
+        TypeDef::Map(m) => {
+            w.line("for (size_t i = 0; i < val->count; i++) {");
+            w.indent();
+            release(w, &m.val_ty, "val->entries[i].value", false);
+            w.dedent();
+            w.line("}");
+        }
+        TypeDef::Alias(a) => {
+            if a.tagged.is_some() || !a.constraints.is_empty() {
+                release(w, &a.ty, "val->value", false);
+            } else if let Some(n) = named_of(&a.ty) {
+                w.line(&format!("{pfx}_{}_release(val{args});", to_snake_case(n)));
+            }
+        }
+    }
+    w.dedent();
+    w.line("}");
+    w.blank();
+}
+
+/// Where a member decodes to: the member, or for a pointer member, memory
+/// from the caller's `alloc`, which it then points at (dgtlrift/cddlc#156).
+fn c_decode_dest(w: &mut IndentWriter, s: &StructDef, f: &cddlc_ir::FieldDef, module: &IrModule, pfx: &str, pfx_upper: &str) -> String {
+    let fname = to_snake_case(&f.name);
+    if !indirect(&s.name, &f.ty, module) {
+        return format!("out->{fname}");
+    }
+    let ptr = ptr_type(&f.ty, module);
+    w.line(&format!(
+        "out->{fname} = (cb && cb->alloc) ? ({ptr} *)cb->alloc(ctx, sizeof *out->{fname}) : NULL;"
+    ));
+    w.line(&format!(
+        "if (!out->{fname}) {{ if (cb && cb->on_error) cb->on_error(ctx, ({pfx}_field_err_t){{{pfx_upper}_ERR_ALLOC, {:?}, 0}}); return -1; }}",
+        f.name.as_str()
+    ));
+    w.line(&format!("memset(out->{fname}, 0, sizeof *out->{fname});"));
+    format!("(*out->{fname})")
 }
 
 /// Whether a map's other entries have plain `tstr` keys, held as `cbor_str_t`
@@ -554,11 +874,17 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             }
             for f in &fields {
                 let fname = to_snake_case(&f.name);
+                // A pointer member is encoded through it (dgtlrift/cddlc#156).
+                let fexpr = if indirect(&s.name, &f.ty, module) { format!("(*val->{fname})") } else { format!("val->{fname}") };
+                // A required pointer member must point at a value.
+                if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
+                    w.line(&format!("if (!val->{fname}) return -1; /* '{}' is required */", f.name));
+                }
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (val->{fname}_present) {{"));
                     w.indent();
                     if !record { w.line(&c_key_write(&f.key)); }
-                    emit_c_encode_field(w, &f.ty, &format!("val->{fname}"), &f.occurrence, mod_name, opts);
+                    emit_c_encode_field(w, &f.ty, &fexpr, &f.occurrence, mod_name, opts);
                     w.dedent();
                     w.line("}");
                 } else if record && f.occurrence.is_repeated() {
@@ -569,7 +895,7 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                     w.line("}");
                 } else {
                     if !record { w.line(&c_key_write(&f.key)); }
-                    emit_c_encode_field(w, &f.ty, &format!("val->{fname}"), &f.occurrence, mod_name, opts);
+                    emit_c_encode_field(w, &f.ty, &fexpr, &f.occurrence, mod_name, opts);
                 }
             }
             if let Some(r) = &s.rest {
@@ -618,7 +944,13 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                     TypeRef::Named(n) => {
                         let np = to_snake_case(mod_name);
                         let tn = to_snake_case(n);
-                        w.line(&format!("{np}_{tn}_encode(enc, &val->value.{vname});"));
+                        // A pointer alternative is encoded through it
+                        // (dgtlrift/cddlc#156).
+                        if indirect(&e.name, &v.ty, module) {
+                            w.line(&format!("{np}_{tn}_encode(enc, val->value.{vname});"));
+                        } else {
+                            w.line(&format!("{np}_{tn}_encode(enc, &val->value.{vname});"));
+                        }
                     }
                     _ => w.line("nanocbor_fmt_null(enc);"),
                 }
@@ -827,7 +1159,8 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                             w.line("if (!nanocbor_at_end(&arr)) {");
                         }
                         w.indent();
-                        emit_c_decode_field(w, &f.ty, &format!("out->{fname}"), &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
+                        let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
+                        emit_c_decode_field(w, &f.ty, &dest, &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
                         w.line(&format!("out->{fname}_present = true;"));
                         w.dedent();
                         w.line("}");
@@ -841,7 +1174,8 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                         w.line("return -1;");
                         w.dedent();
                         w.line("}");
-                        emit_c_decode_field(w, &f.ty, &format!("out->{fname}"), &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
+                        let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
+                        emit_c_decode_field(w, &f.ty, &dest, &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
                     }
                 }
                 w.line("if (!nanocbor_at_end(&arr)) return -1; /* too many items */");
@@ -901,7 +1235,8 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 };
                 w.line(&format!("if ({cond}) {{"));
                 w.indent();
-                emit_c_decode_field(w, &f.ty, &format!("out->{fname}"), &f.constraints, &fname, &pfx, &pfx_upper, "&map", opts);
+                let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
+                emit_c_decode_field(w, &f.ty, &dest, &f.constraints, &fname, &pfx, &pfx_upper, "&map", opts);
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("out->{fname}_present = true;"));
                 }
@@ -994,10 +1329,34 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 w.line("{");
                 w.indent();
                 w.line("nanocbor_value_t probe = *dec;");
-                w.line(&format!(
-                    "if ({pfx}_{}_decode(&probe, &out->value.{vname}, NULL, NULL) == 0) {{ *dec = probe; out->tag = {vconst}; return NANOCBOR_OK; }}",
-                    to_snake_case(n)
-                ));
+                if indirect(&e.name, &v.ty, module) {
+                    // A pointer alternative: memory from the caller, tried
+                    // quietly, and given back if it isn't this one
+                    // (dgtlrift/cddlc#156).
+                    let ptr = ptr_type(&v.ty, module);
+                    let rel = if needs_release(resolve_named(n, module), module) {
+                        format!("{pfx}_{}_release(p, cb, ctx); ", to_snake_case(resolve_named(n, module)))
+                    } else {
+                        String::new()
+                    };
+                    w.line(&format!("{ptr} *p = (cb && cb->alloc) ? ({ptr} *)cb->alloc(ctx, sizeof *p) : NULL;"));
+                    w.line("if (p) {");
+                    w.indent();
+                    w.line("memset(p, 0, sizeof *p);");
+                    w.line(&format!("{pfx}_callbacks_t quiet = *cb; quiet.on_error = NULL; quiet.on_unknown_field = NULL;"));
+                    w.line(&format!(
+                        "if ({pfx}_{}_decode(&probe, p, &quiet, ctx) == 0) {{ *dec = probe; out->value.{vname} = p; out->tag = {vconst}; return NANOCBOR_OK; }}",
+                        to_snake_case(n)
+                    ));
+                    w.line(&format!("{rel}if (cb->release) cb->release(ctx, p);"));
+                    w.dedent();
+                    w.line("}");
+                } else {
+                    w.line(&format!(
+                        "if ({pfx}_{}_decode(&probe, &out->value.{vname}, NULL, NULL) == 0) {{ *dec = probe; out->tag = {vconst}; return NANOCBOR_OK; }}",
+                        to_snake_case(n)
+                    ));
+                }
                 w.dedent();
                 w.line("}");
             }
@@ -1339,7 +1698,14 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("#include <string.h>");
     w.line("#include <stdio.h>");
     w.blank();
+    w.line("#include <stdlib.h>");
     w.line("static uint8_t buf[1024];");
+    w.blank();
+    // A recursive member's memory, from the heap here; any allocator (a pool,
+    // an arena) works (dgtlrift/cddlc#156).
+    w.line("static void *test_alloc(void *ctx, size_t size) { (void)ctx; return calloc(1, size); }");
+    w.line("static void test_release(void *ctx, void *ptr) { (void)ctx; free(ptr); }");
+    w.line(&format!("static const {pfx}_callbacks_t test_cb = {{ .alloc = test_alloc, .release = test_release }};"));
     w.blank();
 
     for (_, def) in &module.types {
@@ -1410,6 +1776,14 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
         if matches!(f.occurrence, Occurrence::Optional) { continue; }
         // A choice's zeroed union is its first alternative's zero.
         if is_prim_choice_c(&f.ty) { continue; }
+        // A required pointer member points at a zero value of its type
+        // (dgtlrift/cddlc#156); an optional one stays absent.
+        if indirect(&s.name, &f.ty, module) {
+            let fname = to_snake_case(&f.name);
+            w.line(&format!("static {} _{fname}_target;", ptr_type(&f.ty, module)));
+            w.line(&format!("original.{fname} = &_{fname}_target;"));
+            continue;
+        }
         // A repeated member gets as many items as it needs, each like the
         // first (dgtlrift/cddlc#134); one that may be empty stays empty.
         if f.occurrence.is_repeated() && cddlc_codegen::repeat_bounds(&f.occurrence).0 == 0 { continue; }
@@ -1474,7 +1848,7 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, NULL, NULL) == 0);"));
+    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
     w.blank();
 
     // Assert equality for scalar fields
@@ -1495,6 +1869,9 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
         }
     }
 
+    if needs_release(&s.name, module) {
+        w.line(&format!("{pfx}_{type_name}_release(&decoded, &test_cb, NULL);"));
+    }
     w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
     w.dedent();
     w.line("}");
@@ -1546,7 +1923,7 @@ fn emit_c_alias_test(w: &mut IndentWriter, a: &AliasDef, pfx: &str, _opts: &Code
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, NULL, NULL) == 0);"));
+    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
     w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
     w.dedent();
     w.line("}");
@@ -1565,7 +1942,7 @@ fn emit_c_array_test(w: &mut IndentWriter, a: &ArrayDef, pfx: &str, _opts: &Code
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, NULL, NULL) == 0);"));
+    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
     w.line("assert(decoded.count == original.count);");
     w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
     w.dedent();
@@ -1592,7 +1969,7 @@ fn emit_c_map_test(w: &mut IndentWriter, m: &MapDef, pfx: &str, opts: &CodegenOp
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, NULL, NULL) == 0);"));
+    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
     w.line("assert(decoded.count == original.count);");
     if one {
         w.line("assert(decoded.entries[0].key.len == 1 && memcmp(decoded.entries[0].key.ptr, \"k\", 1) == 0);");
@@ -1610,8 +1987,14 @@ fn emit_c_enum_test(w: &mut IndentWriter, e: &EnumDef, pfx: &str, module: &IrMod
     if let Some(v) = e.variants.first() {
         let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
         w.line(&format!("{type_name}_t original = {{ .tag = {vconst} }};"));
+        // A pointer alternative points at a zero value of its type
+        // (dgtlrift/cddlc#156).
+        if indirect(&e.name, &v.ty, module) {
+            w.line(&format!("static {} _target;", ptr_type(&v.ty, module)));
+            w.line(&format!("original.value.{} = &_target;", to_snake_case(&v.name)));
+        }
         // A map variant's members pinned to a literal (`type: "start"`) hold it.
-        if let TypeRef::Named(n) = &v.ty {
+        if let (TypeRef::Named(n), false) = (&v.ty, indirect(&e.name, &v.ty, module)) {
             if let Some(TypeDef::Struct(st)) = module.get(n) {
                 let vname = to_snake_case(&v.name);
                 for f in st.fields.iter().filter(|f| f.occurrence.is_required()) {
@@ -1634,8 +2017,11 @@ fn emit_c_enum_test(w: &mut IndentWriter, e: &EnumDef, pfx: &str, module: &IrMod
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, NULL, NULL) == 0);"));
+    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
     w.line("assert(decoded.tag == original.tag);");
+    if needs_release(&e.name, module) {
+        w.line(&format!("{pfx}_{type_name}_release(&decoded, &test_cb, NULL);"));
+    }
     w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
     w.dedent();
     w.line("}");
@@ -1811,14 +2197,19 @@ fn c_field_type_json(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> S
     }
 }
 
-fn emit_struct_decl_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_decl_json(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts: &CodegenOptions) {
     emit_c_doc(w, s.doc.as_deref());
     let type_name = to_snake_case(&s.name);
     w.line("typedef struct {");
     w.indent();
     for f in &s.fields {
         emit_c_doc(w, f.doc.as_deref());
-        let ty_str = c_field_type_json(&f.ty, &f.occurrence, opts);
+        // A member that holds this type again is a pointer (dgtlrift/cddlc#156).
+        let ty_str = if indirect(&s.name, &f.ty, module) {
+            format!("{} *", ptr_type(&f.ty, module))
+        } else {
+            c_field_type_json(&f.ty, &f.occurrence, opts)
+        };
         let fname  = to_snake_case(&f.name);
         if ty_str.contains("{name}") {
             w.line(&format!("{};", ty_str.replace("{name}", &fname)));
@@ -1844,7 +2235,7 @@ fn emit_struct_decl_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOpti
     w.line(&format!("}} {type_name}_t;"));
 }
 
-fn emit_enum_decl_json(w: &mut IndentWriter, e: &EnumDef) {
+fn emit_enum_decl_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule) {
     emit_c_doc(w, e.doc.as_deref());
     let type_name = to_snake_case(&e.name);
 
@@ -1870,6 +2261,7 @@ fn emit_enum_decl_json(w: &mut IndentWriter, e: &EnumDef) {
             TypeRef::Primitive(Primitive::Tstr)                  => { w.line(&format!("json_str_t {vname};")); }
             TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => { w.line(&format!("json_bytes_t {vname};")); }
             TypeRef::Primitive(p)                                => { w.line(&format!("{} {vname};", primitive_to_c(p))); }
+            TypeRef::Named(_) if indirect(&e.name, &v.ty, module) => { w.line(&format!("{} *{vname};", ptr_type(&v.ty, module))); }
             TypeRef::Named(n)                                    => { w.line(&format!("{}_t {vname};", to_snake_case(n))); }
             _ => {}
         }
@@ -1924,10 +2316,10 @@ fn emit_alias_decl_json(w: &mut IndentWriter, a: &AliasDef) {
     }
 }
 
-fn emit_type_decl_h_json(w: &mut IndentWriter, def: &TypeDef, _mod_name: &str, opts: &CodegenOptions) {
+fn emit_type_decl_h_json(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
-        TypeDef::Struct(s) => emit_struct_decl_json(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum_decl_json(w, e),
+        TypeDef::Struct(s) => emit_struct_decl_json(w, s, module, opts),
+        TypeDef::Enum(e)   => emit_enum_decl_json(w, e, module),
         TypeDef::Array(a)  => emit_array_decl_json(w, a, opts),
         TypeDef::Alias(a)  => emit_alias_decl_json(w, a),
         TypeDef::Map(m)    => emit_map_decl_json(w, m, opts),
@@ -1966,14 +2358,31 @@ fn emit_header_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("typedef struct { uint8_t data[512]; size_t len; } json_bytes_t;");
     w.blank();
 
-    for (_, def) in &module.types {
-        emit_type_decl_h_json(&mut w, def, &mod_name, opts);
+    // Types something points at are declared ahead (dgtlrift/cddlc#156).
+    let targets = ptr_targets(module);
+    for t in &targets {
+        w.line(&format!("typedef struct {t}_s {t}_t;"));
+    }
+    if !targets.is_empty() { w.blank(); }
+    for tname in cddlc_codegen::inline_decl_order(module) {
+        let Some(def) = module.get(&tname) else { continue };
+        let mut sub = IndentWriter::new(4);
+        emit_type_decl_h_json(&mut sub, def, module, opts);
+        for line in declare_tagged(sub.finish(), &to_snake_case(&tname), &targets).lines() {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
         w.blank();
     }
 
     // Function declarations
     for (_, def) in &module.types {
         emit_json_fn_decls(&mut w, def, &mod_name, opts);
+        // What a recursive type's pointers point at is freed by its
+        // `_release` (dgtlrift/cddlc#156).
+        if needs_release(def.name(), module) {
+            let t = to_snake_case(def.name());
+            w.line(&format!("void {mod_name}_{t}_release({t}_t *val);"));
+        }
         w.blank();
     }
 
@@ -2085,6 +2494,7 @@ fn emit_source_json(module: &IrModule, opts: &CodegenOptions) -> String {
     for (_, def) in &module.types {
         emit_json_type_impl(&mut w, def, module, &mod_name, opts);
         w.blank();
+        emit_release_fn(&mut w, def, module, &mod_name, true);
     }
 
     w.finish()
@@ -2092,8 +2502,8 @@ fn emit_source_json(module: &IrModule, opts: &CodegenOptions) -> String {
 
 fn emit_json_type_impl(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     match def {
-        TypeDef::Struct(s) => emit_json_struct_impl(w, s, mod_name, opts),
-        TypeDef::Enum(e)   => emit_json_enum_impl(w, e, mod_name, opts),
+        TypeDef::Struct(s) => emit_json_struct_impl(w, s, module, mod_name, opts),
+        TypeDef::Enum(e)   => emit_json_enum_impl(w, e, module, mod_name, opts),
         TypeDef::Array(a)  => emit_json_array_impl(w, a, flat_record(a, module).map(|r| r.fields.len()), mod_name, opts),
         TypeDef::Alias(a)  => emit_json_alias_impl(w, a, mod_name, opts),
         TypeDef::Map(m)    => emit_json_map_impl(w, m, mod_name, opts),
@@ -2120,13 +2530,13 @@ fn json_value_expr(ty: &TypeRef, expr: &str, mod_name: &str) -> String {
     }
 }
 
-fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     let snake = to_snake_case(&s.name);
     let ctype = format!("{}_t", to_snake_case(&s.name));
     let pfx   = format!("{mod_name}_{snake}");
 
     if s.encoding == cddlc_ir::StructEncoding::Array {
-        emit_json_record_impl(w, s, mod_name, &pfx, &ctype, opts);
+        emit_json_record_impl(w, s, module, mod_name, &pfx, &ctype, opts);
         emit_json_encode_decode(w, &pfx, &ctype);
         return;
     }
@@ -2140,8 +2550,12 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
         let fname    = to_snake_case(&f.name);
         let key_text = cddlc_codegen::field_key_json(&f.key);
         let key      = key_text.as_str();
-        let access   = format!("obj->{fname}");
+        let access   = json_access(&s.name, f, module);
         let val_expr = json_value_expr(&f.ty, &access, mod_name);
+        // A required pointer member must point at a value (dgtlrift/cddlc#156).
+        if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
+            w.line(&format!("if (!obj->{fname}) {{ cJSON_Delete(j); return NULL; }}"));
+        }
         match &f.occurrence {
             Occurrence::Optional => {
                 let present_field = format!("{fname}_present");
@@ -2185,14 +2599,14 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
                 let present_field = format!("{fname}_present");
                 w.line(&format!("if (_{fname}) {{"));
                 w.indent();
-                json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
+                json_decode_member(w, &s.name, f, &format!("_{fname}"), module, mod_name, opts);
                 w.line(&format!("out->{present_field} = true;"));
                 w.dedent();
                 w.line("}");
             }
             _ => {
                 w.line(&format!("if (!_{fname}) return false;"));
-                json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
+                json_decode_member(w, &s.name, f, &format!("_{fname}"), module, mod_name, opts);
             }
         }
     }
@@ -2228,9 +2642,9 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
 /// A record's to_json / from_json (RFC 8610 §3.4): a JSON array of the members'
 /// values, in order. Optional members come last: one present after an absent
 /// one can't be written, so to_json returns NULL.
-fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
+fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
     if let Some(ri) = cddlc_codegen::record_repeated(s) {
-        emit_json_record_repeated(w, s, ri, mod_name, pfx, ctype, opts);
+        emit_json_record_repeated(w, s, ri, module, mod_name, pfx, ctype, opts);
         return;
     }
     let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
@@ -2246,7 +2660,11 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
     w.line("if (!j) return NULL;");
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
-        let val_expr = json_value_expr(&f.ty, &format!("obj->{fname}"), mod_name);
+        let val_expr = json_value_expr(&f.ty, &json_access(&s.name, f, module), mod_name);
+        // A required pointer member must point at a value (dgtlrift/cddlc#156).
+        if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
+            w.line(&format!("if (!obj->{fname}) {{ cJSON_Delete(j); return NULL; }}"));
+        }
         if matches!(f.occurrence, Occurrence::Optional) {
             w.line(&format!("if (obj->{fname}_present) cJSON_AddItemToArray(j, {val_expr});"));
         } else {
@@ -2283,13 +2701,13 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
             }
             w.indent();
             w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {i});"));
-            json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
+            json_decode_member(w, &s.name, f, &format!("_{fname}"), module, mod_name, opts);
             w.line(&format!("out->{fname}_present = true;"));
             w.dedent();
             w.line("}");
         } else {
             w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {});", index(i)));
-            json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
+            json_decode_member(w, &s.name, f, &format!("_{fname}"), module, mod_name, opts);
         }
     }
     w.line("return true;");
@@ -2301,7 +2719,7 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
 /// A record with a repeated member (`[primary, * extension, payload]`): its
 /// items go inline, where it stands, and the array's length says how many
 /// there are (dgtlrift/cddlc#134).
-fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
+fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, module: &IrModule, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
     let rf = &s.fields[ri];
     let rname = to_snake_case(&rf.name);
     let fixed = s.fields.len() - 1;
@@ -2322,7 +2740,7 @@ fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, mod
             let val_expr = json_value_expr(&f.ty, &format!("obj->{fname}[i]"), mod_name);
             w.line(&format!("for (size_t i = 0; i < obj->{fname}_count; i++) cJSON_AddItemToArray(j, {val_expr});"));
         } else {
-            let val_expr = json_value_expr(&f.ty, &format!("obj->{fname}"), mod_name);
+            let val_expr = json_value_expr(&f.ty, &json_access(&s.name, f, module), mod_name);
             w.line(&format!("cJSON_AddItemToArray(j, {val_expr});"));
         }
     }
@@ -2353,13 +2771,35 @@ fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, mod
         } else {
             let index = if i < ri { i.to_string() } else { format!("{} + reps", i - 1) };
             w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {index});"));
-            json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
+            json_decode_member(w, &s.name, f, &format!("_{fname}"), module, mod_name, opts);
         }
     }
     w.line("return true;");
     w.dedent();
     w.line("}");
     w.blank();
+}
+
+/// A member as `to_json` reads it: through its pointer for a pointer member
+/// (dgtlrift/cddlc#156).
+fn json_access(owner: &str, f: &cddlc_ir::FieldDef, module: &IrModule) -> String {
+    let fname = to_snake_case(&f.name);
+    if indirect(owner, &f.ty, module) { format!("(*obj->{fname})") } else { format!("obj->{fname}") }
+}
+
+/// Reads a member from the JSON value `src`. A pointer member gets its memory
+/// from the heap (cJSON's own values are on it too), freed by `_release`
+/// (dgtlrift/cddlc#156).
+fn json_decode_member(w: &mut IndentWriter, owner: &str, f: &cddlc_ir::FieldDef, src: &str, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
+    let fname = to_snake_case(&f.name);
+    if !indirect(owner, &f.ty, module) {
+        json_decode_field(w, &f.ty, &fname, src, mod_name, opts);
+        return;
+    }
+    let n = named_of(&f.ty).unwrap_or_default();
+    w.line(&format!("out->{fname} = calloc(1, sizeof *out->{fname});"));
+    w.line(&format!("if (!out->{fname}) return false;"));
+    w.line(&format!("if (!{mod_name}_{}_from_json({src}, out->{fname})) return false;", to_snake_case(n)));
 }
 
 /// `expr` as a C identifier fragment: `items[out->count]` → `items_out_count_`.
@@ -2399,7 +2839,7 @@ fn json_decode_field(w: &mut IndentWriter, ty: &TypeRef, dest: &str, src: &str, 
     }
 }
 
-fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     let snake = to_snake_case(&e.name);
     let ctype = format!("{}_t", to_snake_case(&e.name));
     let pfx   = format!("{mod_name}_{snake}");
@@ -2425,6 +2865,9 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
             TypeRef::Primitive(Primitive::Bool) =>
                 w.line(&format!("return cJSON_CreateBool(obj->value.{vsnake});")),
             // A variant of a named type (dgtlrift/cddlc#102).
+            // A pointer alternative is read through it (dgtlrift/cddlc#156).
+            TypeRef::Named(n) if indirect(&e.name, &v.ty, module) =>
+                w.line(&format!("return {mod_name}_{}_to_json(obj->value.{vsnake});", to_snake_case(&n))),
             TypeRef::Named(n) =>
                 w.line(&format!("return {mod_name}_{}_to_json(&obj->value.{vsnake});", to_snake_case(&n))),
             _ => w.line("return cJSON_CreateNull();"),
@@ -2444,6 +2887,25 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, mod_name: &str, opts: 
         let TypeRef::Named(n) = &v.ty else { continue };
         let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
         let vsnake = to_snake_case(&v.name);
+        if indirect(&e.name, &v.ty, module) {
+            // A pointer alternative: memory from the heap, freed if it isn't
+            // this one (dgtlrift/cddlc#156).
+            let ptr = ptr_type(&v.ty, module);
+            let target = resolve_named(n, module);
+            let rel = if needs_release(target, module) { format!("{mod_name}_{}_release(p); ", to_snake_case(target)) } else { String::new() };
+            w.line("if (cJSON_IsObject(j) || cJSON_IsArray(j)) {");
+            w.indent();
+            w.line(&format!("{ptr} *p = ({ptr} *)calloc(1, sizeof *p);"));
+            w.line("if (!p) return false;");
+            w.line(&format!(
+                "if ({mod_name}_{}_from_json(j, p)) {{ out->value.{vsnake} = p; out->tag = {vconst}; return true; }}",
+                to_snake_case(&n)
+            ));
+            w.line(&format!("{rel}free(p);"));
+            w.dedent();
+            w.line("}");
+            continue;
+        }
         w.line(&format!(
             "if ((cJSON_IsObject(j) || cJSON_IsArray(j)) && {mod_name}_{}_from_json(j, &out->value.{vsnake})) {{ out->tag = {vconst}; return true; }}",
             to_snake_case(&n)
@@ -2719,7 +3181,7 @@ fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
 
     for (_, def) in &module.types {
-        emit_json_type_test(&mut w, def, &mod_name, opts);
+        emit_json_type_test(&mut w, def, module, &mod_name, opts);
     }
 
     w.blank();
@@ -2744,7 +3206,7 @@ fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => {
             let snake = to_snake_case(&s.name);
@@ -2753,6 +3215,13 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));
+            // A required pointer member points at a zero value of its type
+            // (dgtlrift/cddlc#156).
+            for f in s.fields.iter().filter(|f| f.occurrence.is_required() && indirect(&s.name, &f.ty, module)) {
+                let fname = to_snake_case(&f.name);
+                w.line(&format!("static {} _{fname}_target;", ptr_type(&f.ty, module)));
+                w.line(&format!("original.{fname} = &_{fname}_target;"));
+            }
             // A repeated member gets as many (zeroed) items as it needs
             // (dgtlrift/cddlc#134).
             for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
@@ -2766,6 +3235,9 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.line(&format!("{ctype} decoded = {{0}};"));
             w.line(&format!("assert({pfx}_decode(encoded, &decoded));"));
             w.line("free(encoded);");
+            if needs_release(&s.name, module) {
+                w.line(&format!("{pfx}_release(&decoded);"));
+            }
             w.dedent();
             w.line("}");
             w.blank();
@@ -2777,11 +3249,20 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));
+            // A first alternative that's a pointer points at a zero value of
+            // its type (dgtlrift/cddlc#156).
+            if let Some(v) = e.variants.first().filter(|v| indirect(&e.name, &v.ty, module)) {
+                w.line(&format!("static {} _target;", ptr_type(&v.ty, module)));
+                w.line(&format!("original.value.{} = &_target;", to_snake_case(&v.name)));
+            }
             w.line(&format!("char* encoded = {pfx}_encode(&original);"));
             w.line("assert(encoded != NULL);");
             w.line(&format!("{ctype} decoded = {{0}};"));
             w.line(&format!("assert({pfx}_decode(encoded, &decoded));"));
             w.line("free(encoded);");
+            if needs_release(&e.name, module) {
+                w.line(&format!("{pfx}_release(&decoded);"));
+            }
             w.dedent();
             w.line("}");
             w.blank();
@@ -2825,13 +3306,20 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));
-            w.line("strcpy(original.entries[0].key, \"k\");");
-            w.line("original.count = 1;");
+            // A value that holds a pointer has no valid zero value: the
+            // table stays empty (dgtlrift/cddlc#156).
+            let one = named_of(&m.val_ty).is_none_or(|n| !needs_release(n, module));
+            if one {
+                w.line("strcpy(original.entries[0].key, \"k\");");
+                w.line("original.count = 1;");
+            }
             w.line(&format!("char* encoded = {pfx}_encode(&original);"));
             w.line("assert(encoded != NULL);");
             w.line(&format!("{ctype} decoded = {{0}};"));
             w.line(&format!("assert({pfx}_decode(encoded, &decoded));"));
-            w.line("assert(decoded.count == 1 && strcmp(decoded.entries[0].key, \"k\") == 0);");
+            if one {
+                w.line("assert(decoded.count == 1 && strcmp(decoded.entries[0].key, \"k\") == 0);");
+            }
             w.line("free(encoded);");
             w.dedent();
             w.line("}");
