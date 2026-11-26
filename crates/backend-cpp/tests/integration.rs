@@ -305,7 +305,8 @@ fn test_enum_variants_of_every_type() {
     assert!(h.contains("using Variant = std::variant<std::monostate, bool, double, int64_t, Sensor>;"), "{h}");
     assert!(h.contains("static E make_Off() { return E{Kind::Off, Variant{}}; }"), "{h}");
     assert!(h.contains("static E make_Variant7() {"), "{h}");
-    assert!(h.contains("static E make_Bool(bool v) { return E{Kind::Bool, Variant(std::in_place_type<bool>, v)}; }"), "{h}");
+    // The payload is moved in (a `Box` is, for a recursive variant; dgtlrift/cddlc#156).
+    assert!(h.contains("static E make_Bool(bool v) { return E{Kind::Bool, Variant(std::in_place_type<bool>, std::move(v))}; }"), "{h}");
 
     let src = &g.source;
     assert!(src.contains("nanocbor_fmt_bool(enc, std::get<bool>(val.value));"), "{src}");
@@ -409,9 +410,9 @@ fn test_optional_member_decodes_through_inner_value() {
     let src = &g.source;
     assert!(src.contains("uint64_t _v{};"), "{src}");
     assert!(src.contains("bool _v{};"), "{src}");
-    assert!(src.contains("out.count = _v;"), "{src}");
-    assert!(src.contains("out.on = _v;"), "{src}");
-    assert!(src.contains("out.gone = _v;"), "{src}");
+    assert!(src.contains("out.count = std::move(_v);"), "{src}");
+    assert!(src.contains("out.on = std::move(_v);"), "{src}");
+    assert!(src.contains("out.gone = std::move(_v);"), "{src}");
     assert!(!src.contains("&out.count"), "{src}");
     assert!(!src.contains("&out.on"), "{src}");
 }
