@@ -43,8 +43,16 @@ fn the_first_optional_members_are_present() {
 }
 
 #[test]
-fn a_repeated_member_is_not_supported_yet() {
-    let parsed = cddlc_parser::parse_cddl("bundle = [a: uint, * b: tstr, c: uint]", PathBuf::from("t.cddl")).unwrap();
-    let err = cddlc_ir::lower(&parsed.value, 16, 64).err().expect("unsupported").to_string();
-    assert!(err.contains("can't repeat a member yet"), "{err}");
+fn a_repeated_member_holds_the_items_the_others_leave() {
+    // RFC 9171's bundle: a repeated member in the middle, its items inline.
+    let m = lower("bundle = [a: uint, * b: tstr, c: uint]\npath = [n: tstr, + s: tstr]\nfew = [i: uint, 1*3 t: uint, n: tstr]");
+    assert!(check(&m, "bundle", r#"[1, 2]"#));
+    assert!(check(&m, "bundle", r#"[1, "x", "y", 2]"#));
+    assert!(!check(&m, "bundle", r#"[1, "x", "y"]"#));
+    assert!(!check(&m, "bundle", r#"[1]"#));
+    assert!(check(&m, "path", r#"["a", "b"]"#));
+    assert!(!check(&m, "path", r#"["a"]"#));
+    assert!(check(&m, "few", r#"[1, 2, 3, "n"]"#));
+    assert!(!check(&m, "few", r#"[1, "n"]"#));
+    assert!(!check(&m, "few", r#"[1, 2, 3, 4, 5, "n"]"#));
 }

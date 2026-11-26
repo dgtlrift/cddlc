@@ -658,6 +658,10 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
 /// values, in order. Optional members come last: those present are written up
 /// to the first absent one, and one set after an absent one is an error.
 fn emit_record_raw(w: &mut IndentWriter, _cx: &Cx, s: &StructDef, t: &str) {
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        emit_record_raw_repeated(w, s, ri, t);
+        return;
+    }
     w.line(&format!("--- A {t} as an array item, its members in order."));
     w.line(&format!("function M.{t}.to_raw(v)"));
     w.indent();
@@ -722,6 +726,73 @@ fn emit_record_raw(w: &mut IndentWriter, _cx: &Cx, s: &StructDef, t: &str) {
             w.line(&format!("if #a > {} then {m} = {} end", required + b[i], from_raw(&f.ty, &item, &at)));
         } else {
             w.line(&format!("if {item} ~= nil then {m} = {} end", from_raw(&f.ty, &item, &at)));
+        }
+    }
+    w.line(&format!("M.{t}.validate(v)"));
+    w.line("return v");
+    w.dedent();
+    w.line("end");
+}
+
+/// Fails unless a repeated member's item count, `n`, is within its bounds
+/// (dgtlrift/cddlc#134).
+fn emit_lua_repeat_check(w: &mut IndentWriter, t: &str, f: &cddlc_ir::FieldDef, n: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    let at = lua_str(&format!("{t}.{}", f.name));
+    if min > 0 {
+        w.line(&format!("if {n} < {min} then R.fail({at}, \"needs at least {min} items, got \" .. {n}) end"));
+    }
+    if let Some(max) = max {
+        w.line(&format!("if {n} > {max} then R.fail({at}, \"has more than {max} items, got \" .. {n}) end"));
+    }
+}
+
+/// A record with a repeated member (`[primary, * extension, payload]`): the
+/// member's items go inline, and the array's length says how many there are
+/// (dgtlrift/cddlc#134).
+fn emit_record_raw_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, t: &str) {
+    let rf = &s.fields[ri];
+    let fixed = s.fields.len() - 1;
+    w.line(&format!("--- A {t} as an array item, its members in order."));
+    w.line(&format!("function M.{t}.to_raw(v)"));
+    w.indent();
+    w.line(&format!("M.{t}.validate(v)"));
+    emit_lua_repeat_check(w, t, rf, &format!("#v.{}", lua_member_name(&rf.name)));
+    w.line("local a = {}");
+    for f in &s.fields {
+        let m = format!("v.{}", lua_member_name(&f.name));
+        if f.occurrence.is_repeated() {
+            w.line(&format!("for _, x in ipairs({m}) do a[#a + 1] = {} end", to_raw(&f.ty, "x")));
+        } else {
+            w.line(&format!("a[#a + 1] = {}", to_raw(&f.ty, &m)));
+        }
+    }
+    match s.tagged {
+        Some(tag) => w.line(&format!("return R.tag({}, R.array(a))", lua_int(tag.0 as i128))),
+        None => w.line("return R.array(a)"),
+    }
+    w.dedent();
+    w.line("end");
+    w.blank();
+
+    w.line(&format!("--- Reads a {t} from an array item, checking each member's type and constraints."));
+    w.line(&format!("function M.{t}.from_raw(raw)"));
+    w.indent();
+    let raw = match s.tagged { Some(tag) => format!("R.untag(raw, {}, {})", lua_int(tag.0 as i128), lua_str(t)), None => "raw".into() };
+    w.line(&format!("local a = R.as_array({raw}, {})", lua_str(t)));
+    w.line(&format!("if #a < {fixed} then R.fail({}, \"expected at least {fixed} items, got \" .. #a) end", lua_str(t)));
+    w.line(&format!("local reps = #a - {fixed}"));
+    emit_lua_repeat_check(w, t, rf, "reps");
+    w.line(&format!("local v = setmetatable({{}}, M.{t})"));
+    for (i, f) in s.fields.iter().enumerate() {
+        let m = format!("v.{}", lua_member_name(&f.name));
+        let at = format!("{t}.{}", f.name);
+        if f.occurrence.is_repeated() {
+            w.line(&format!("{m} = {{}}"));
+            w.line(&format!("for k = 1, reps do {m}[k] = {} end", from_raw(&f.ty, &format!("a[{i} + k]"), &at)));
+        } else {
+            let item = if i < ri { format!("a[{}]", i + 1) } else { format!("a[{i} + reps]") };
+            w.line(&format!("{m} = {}", from_raw(&f.ty, &item, &at)));
         }
     }
     w.line(&format!("M.{t}.validate(v)"));
@@ -1247,8 +1318,16 @@ fn lua_variant_value(cx: &Cx, e: &EnumDef, v: &EnumVariant, depth: usize) -> Str
 fn lua_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], explicit: bool, depth: usize) -> String {
     match occ {
         Occurrence::Optional if !explicit => return "nil".into(),
-        Occurrence::ZeroOrMore { .. } | Occurrence::Bounded { .. } => return "{}".into(),
-        Occurrence::OneOrMore { .. } => return format!("{{ {} }}", lua_value(cx, ty, &Occurrence::Required, constraints, explicit, depth)),
+        // As many items as the member needs (`+`: one, `2*3`: two).
+        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. } | Occurrence::Bounded { .. } => {
+            let min = cddlc_codegen::repeat_bounds(occ).0;
+            if min == 0 {
+                return "{}".into();
+            }
+            let item = lua_value(cx, ty, &Occurrence::Required, constraints, explicit, depth);
+            let items: Vec<String> = (0..min).map(|_| item.clone()).collect();
+            return format!("{{ {} }}", items.join(", "));
+        }
         _ => {}
     }
     if let Some(p) = base_primitive(ty) {

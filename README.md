@@ -346,6 +346,7 @@ with `* tstr => any`.
 | Enums (string/int/mixed) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Arrays / typed lists | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Record arrays (`[a: uint, b: tstr]`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Records with a repeated member (`[a: uint, * b: tstr, c: bstr]`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Repeated groups in arrays (`[* (a: uint, b: tstr)]`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Tables (`{ * tstr => V }`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Maps with other entries (`{ id: uint, * tstr => V }`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -501,8 +502,12 @@ and the test fails when one starts working, so the list stays current.
   (`[context, body_protected, ? sign_protected, external_aad, payload]`). The array's length
   says which are present: with R required members, an array of N items holds the first N − R
   optional members, in order. An optional member can be set only if every optional member
-  before it is set. A record can't repeat a member yet (`[primary, * extension, payload]`,
-  #134).
+  before it is set.
+- **A repeated member of a record** (`[primary, * extension, payload]`, RFC 9171's `bundle`)
+  holds its items inline, where it stands, as a list. Every other member must be required,
+  so the array's length says how many items it has; its bounds (`+`, `n*m`) are checked when
+  encoding and decoding. A repeated member beside an optional or another repeated one
+  (`[type, ? initiator, * option]`, RFC 8990) is rejected as unsupported (#134).
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
 - **Maps with named members and other entries** need text or integer keys (or a choice of
   them) for the other entries; other key types there (`{ a: uint, * bstr => any }`), and

@@ -177,6 +177,27 @@ impl<'m> Ctx<'m> {
             self.err(path, format!("expected an array for record '{name}', found {}", kind_name(value)));
             return;
         };
+        // One repeated member, every other one required: it holds the items
+        // the others leave, inline (`[primary, * extension, payload]`;
+        // dgtlrift/cddlc#134).
+        if let Some(ri) = fields.iter().position(|f| f.occurrence.is_repeated()) {
+            let fixed = fields.len() - 1;
+            if items.len() < fixed {
+                self.err(path, format!("record '{name}' needs at least {fixed} item(s), found {}", items.len()));
+                return;
+            }
+            let reps = items.len() - fixed;
+            let rf = &fields[ri];
+            check_cardinality(&rf.occurrence, reps, &format!("{name}.{}", rf.name), self, path);
+            for (i, v) in items.iter().enumerate() {
+                let field = if i < ri { &fields[i] } else if i < ri + reps { rf } else { &fields[i - reps + 1] };
+                path.push(PathSeg::Index(i));
+                self.check_typeref(&field.ty, v, path);
+                self.check_constraints(&field.constraints, &field.ty, v, path);
+                path.pop();
+            }
+            return;
+        }
         let required = fields.iter().filter(|f| f.occurrence.is_required()).count();
         if items.len() < required || items.len() > fields.len() {
             let want = if required == fields.len() { format!("{required}") } else { format!("{required} to {}", fields.len()) };

@@ -466,6 +466,33 @@ pub fn record_optionals_before(s: &cddlc_ir::StructDef) -> Option<Vec<usize>> {
     }).collect())
 }
 
+/// A record's repeated member (`[primary, * extension, payload]`), if it has
+/// one: its index. Every other member is required, so an array of `n` items
+/// holds `n - (members - 1)` of its items, inline, where it stands
+/// (dgtlrift/cddlc#134).
+pub fn record_repeated(s: &cddlc_ir::StructDef) -> Option<usize> {
+    if s.encoding != cddlc_ir::StructEncoding::Array {
+        return None;
+    }
+    s.fields.iter().position(|f| f.occurrence.is_repeated())
+}
+
+/// How many items a repeated member may have: at least `min`, and at most
+/// `max` when it's bounded (`*`: 0.., `+`: 1.., `n*m`: n..=m).
+pub fn repeat_bounds(occ: &cddlc_ir::Occurrence) -> (u64, Option<u64>) {
+    match occ {
+        cddlc_ir::Occurrence::OneOrMore { .. } => (1, None),
+        cddlc_ir::Occurrence::Bounded { min, max, .. } => (u64::from(*min), max.map(u64::from)),
+        _ => (0, None),
+    }
+}
+
+/// Whether a struct's default value (every list empty) encodes: not when a
+/// repeated member needs items (`+ step: tstr`), as the encoder refuses it.
+pub fn default_is_encodable(s: &cddlc_ir::StructDef) -> bool {
+    s.fields.iter().all(|f| repeat_bounds(&f.occurrence).0 == 0)
+}
+
 
 /// A map member's key in JSON: its text, or an integer key as decimal text
 /// (`1 => tstr` is `"1"`), as JSON objects have only text keys

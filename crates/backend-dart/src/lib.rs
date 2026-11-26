@@ -290,7 +290,108 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
 /// A record's encode / decode (RFC 8610 §3.4): a list of the members' values, in
 /// order. Optional members come last: those present are written up to the
 /// first absent one, and one set after an absent one is an error.
+/// Throws (`exc`) unless a repeated member's item count, `n`, is within its
+/// bounds (dgtlrift/cddlc#134).
+fn emit_dart_repeat_check(w: &mut IndentWriter, class_name: &str, f: &cddlc_ir::FieldDef, n: &str, exc: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    if min > 0 {
+        w.line(&format!("if ({n} < {min}) throw {exc}('{class_name}.{}: needs at least {min} items, got ${n}');", f.name));
+    }
+    if let Some(max) = max {
+        w.line(&format!("if ({n} > {max}) throw {exc}('{class_name}.{}: has more than {max} items, got ${n}');", f.name));
+    }
+}
+
+/// A record with a repeated member (`[primary, * extension, payload]`): the
+/// member's items go inline, and the list's length says how many there are
+/// (dgtlrift/cddlc#134).
+fn emit_record_codec_repeated(w: &mut IndentWriter, module: &IrModule, s: &StructDef, ri: usize, class_name: &str, opts: &CodegenOptions) {
+    let json = opts.is_json();
+    let rf = &s.fields[ri];
+    let fixed = s.fields.len() - 1;
+
+    // Decode
+    if json {
+        w.line(&format!("static {class_name} decode(String s) => {class_name}.fromJson(jsonDecode(s));"));
+        w.blank();
+        w.line(&format!("factory {class_name}.fromJson(dynamic raw) {{"));
+        w.indent();
+        w.line(&format!("if (raw is! List) throw FormatException('{class_name}: expected an array');"));
+        w.line("final a = raw;");
+    } else {
+        w.line(&format!("static {class_name} decode(Uint8List bytes) => {class_name}._fromCborList(cbor.decode(bytes) as CborList);"));
+        w.blank();
+        w.line(&format!("factory {class_name}._fromCborList(CborList a) {{"));
+        w.indent();
+        if let Some(tag) = s.tagged {
+            w.line(&format!("_untag({}, a, '{class_name}');", tag.0));
+        }
+    }
+    w.line(&format!("if (a.length < {fixed}) {{"));
+    w.line(&format!("  throw FormatException('{class_name}: expected at least {fixed} items, got ${{a.length}}');"));
+    w.line("}");
+    w.line(&format!("final reps = a.length - {fixed};"));
+    emit_dart_repeat_check(w, class_name, rf, "reps", "FormatException");
+    w.line(&format!("return {class_name}("));
+    w.indent();
+    let from = |f: &cddlc_ir::FieldDef, item: &str| if json { json_from_expr(&f.ty, item, module, opts) } else { cbor_from_expr(&f.ty, item, module, opts) };
+    for (i, f) in s.fields.iter().enumerate() {
+        let fname = dart_field(&f.name);
+        if f.occurrence.is_repeated() {
+            w.line(&format!("{fname}: [for (var k = 0; k < reps; k++) {}],", from(f, &format!("a[{i} + k]"))));
+        } else {
+            let item = if i < ri { format!("a[{i}]") } else { format!("a[{} + reps]", i - 1) };
+            w.line(&format!("{fname}: {},", from(f, &item)));
+        }
+    }
+    w.dedent();
+    w.line(");");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    // Encode
+    let (list_ty, method) = if json { ("dynamic", "List<dynamic> toJson()") } else { ("CborValue", "CborValue _toCborValue([List<int> tags = const []])") };
+    if json {
+        w.line("String encode() => jsonEncode(toJson());");
+    } else {
+        w.line("Uint8List encode() => Uint8List.fromList(cbor.encode(_toCborValue()));");
+    }
+    w.blank();
+    w.line(&format!("{method} {{"));
+    w.indent();
+    emit_dart_repeat_check(w, class_name, rf, &format!("{}.length", dart_field(&rf.name)), "StateError");
+    let to = |f: &cddlc_ir::FieldDef, expr: &str| if json { json_to_expr(&f.ty, expr, module, opts) } else { cbor_to_expr(&f.ty, expr, module, opts) };
+    w.line(&format!("final items = <{list_ty}>["));
+    w.indent();
+    for f in &s.fields {
+        let fname = dart_field(&f.name);
+        if f.occurrence.is_repeated() {
+            w.line(&format!("for (final x in {fname}) {},", to(f, "x")));
+        } else {
+            w.line(&format!("{},", to(f, &fname)));
+        }
+    }
+    w.dedent();
+    w.line("];");
+    if json {
+        w.line("return items;");
+    } else {
+        let tags = match s.tagged {
+            Some(tag) => add_tag("tags", tag.0),
+            None      => "tags".to_owned(),
+        };
+        w.line(&format!("return CborList(items, tags: {tags});"));
+    }
+    w.dedent();
+    w.line("}");
+}
+
 fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        emit_record_codec_repeated(w, module, s, ri, class_name, opts);
+        return;
+    }
     let json = opts.is_json();
     let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
     let total = s.fields.len();
@@ -1416,8 +1517,11 @@ fn test_default_for(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> St
     if matches!(occ, Occurrence::Optional) {
         return "null".to_owned();
     }
+    // As many items as the member needs (`+`: one; dgtlrift/cddlc#134).
     if occ.is_repeated() {
-        return "[]".to_owned();
+        let item = test_default_for(ty, &Occurrence::Required, opts);
+        let items: Vec<String> = (0..cddlc_codegen::repeat_bounds(occ).0).map(|_| item.clone()).collect();
+        return format!("[{}]", items.join(", "));
     }
     match ty {
         TypeRef::Primitive(p) => match p {

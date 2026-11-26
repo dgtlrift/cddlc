@@ -9,7 +9,7 @@
 
 use cddlc_codegen::{
     capacity_value, constraint_to_rust_check,
-    primitive_to_rust, to_pascal_case, to_snake_case, AllocStrategy,
+    primitive_to_rust, to_pascal_case, to_snake_case,
     Backend, CodegenError, CodegenOptions, CodegenOutput, IndentWriter,
 };
 use std::collections::HashSet;
@@ -648,6 +648,29 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
 /// come last: those present are written up to the first absent one, and a
 /// present one after it can't be placed, so encoding fails.
 fn emit_record_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
+    // A repeated member's items go inline, where it stands; every other
+    // member is required (dgtlrift/cddlc#134).
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        let rf = &s.fields[ri];
+        let fixed = s.fields.len() - 1;
+        let rname = field_ident(&rf.name);
+        w.line(&format!("let n = self.{rname}.len() as u64;"));
+        emit_repeat_check(w, s, rf, "n", "EncodeError");
+        w.line(&format!("e.array({fixed}u64 + n)?;"));
+        for f in &s.fields {
+            let access = format!("self.{}", field_ident(&f.name));
+            if f.occurrence.is_repeated() {
+                w.line(&format!("for v in {access}.iter() {{"));
+                w.indent();
+                emit_encode_typeref(w, &f.ty, "(*v)", opts, Some(module));
+                w.dedent();
+                w.line("}");
+            } else {
+                emit_encode_value(w, &f.ty, &access, &f.occurrence, opts, Some(module));
+            }
+        }
+        return;
+    }
     let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
     let optional: Vec<_> = s.fields.iter().filter(|f| !f.occurrence.is_required()).collect();
     if optional.is_empty() {
@@ -684,6 +707,23 @@ fn emit_record_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     }
 }
 
+/// Fails unless a repeated member's item count, `n`, is within its bounds.
+fn emit_repeat_check(w: &mut IndentWriter, s: &StructDef, f: &FieldDef, n: &str, err: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    if min > 0 {
+        w.line(&format!(
+            "if {n} < {min} {{ return Err({err}::message(\"{}: '{}' needs at least {min} items\")); }}",
+            s.name, f.name
+        ));
+    }
+    if let Some(max) = max {
+        w.line(&format!(
+            "if {n} > {max} {{ return Err({err}::message(\"{}: '{}' has more than {max} items\")); }}",
+            s.name, f.name
+        ));
+    }
+}
+
 /// Reads a record: an array of the members' values, in order; optional
 /// members at the end may be left off.
 fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
@@ -699,12 +739,15 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
     let before = cddlc_codegen::record_optionals_before(s);
     let middle = before.is_some();
+    // A repeated member holds the items the other members leave
+    // (dgtlrift/cddlc#134).
+    let repeated = cddlc_codegen::record_repeated(s);
     // The item count past which each optional member is present.
     let threshold = |f: &FieldDef| -> usize {
         let i = s.fields.iter().position(|x| x.name == f.name).unwrap_or(0);
         required + before.as_ref().map_or(0, |b| b[i])
     };
-    if middle {
+    if middle || repeated.is_some() {
         w.line("let count = match len {");
         w.indent();
         w.line("Some(n) => n,");
@@ -712,10 +755,35 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.dedent();
         w.line("};");
     }
+    if let Some(ri) = repeated {
+        w.line(&format!(
+            "let reps = count.checked_sub({required}).ok_or_else(|| DecodeError::message(\"{}: too few items\"))?;",
+            s.name
+        ));
+        emit_repeat_check(w, s, &s.fields[ri], "reps", "DecodeError");
+    }
     for f in &s.fields {
         let local = field_local(&f.name);
         let decode_expr = decode_expr_for_in_module(&f.ty, opts, Some(module));
-        if f.occurrence.is_required() {
+        if f.occurrence.is_repeated() {
+            let heapless = opts.no_std;
+            w.line(&format!("let mut {local} = {}::new();", if heapless { "heapless::Vec" } else { "Vec" }));
+            w.line("for _ in 0..reps {");
+            w.indent();
+            w.line(&format!("let val = {decode_expr};"));
+            emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
+            if heapless {
+                w.line(&format!(
+                    "{local}.push(val).map_err(|_| DecodeError::message(\"{}: '{}' has more items than its capacity\"))?;",
+                    s.name, f.name
+                ));
+            } else {
+                w.line(&format!("{local}.push(val);"));
+            }
+            w.line("i += 1;");
+            w.dedent();
+            w.line("}");
+        } else if f.occurrence.is_required() {
             w.line("if !more(d, len, i)? {");
             w.indent();
             w.line(&format!("return Err(DecodeError::message(\"{}: missing item '{}'\"));", s.name, f.name));
@@ -765,6 +833,7 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     for f in &s.fields {
         let local = field_local(&f.name);
         let value = match (is_boxed(&s.name, &f.ty, module), f.occurrence.is_required()) {
+            _ if f.occurrence.is_repeated() => local,
             (true, true) => format!("Box::new({local})"),
             (true, false) => format!("{local}.map(Box::new)"),
             (false, _) => local,
@@ -2032,8 +2101,9 @@ fn field_type_str(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Stri
             // In the generated crate, the type depends on the no-std feature.
             // We emit the std form here; the no-std form is handled at the
             // type alias level via #[cfg] in emit_array.
-            // For struct fields we pick based on alloc strategy at codegen time.
-            if opts.no_std || opts.alloc == AllocStrategy::Stack || opts.alloc == AllocStrategy::Arena {
+            // The crate depends on heapless only with --no-std, so a std
+            // build holds a repeated member in a Vec.
+            if opts.no_std {
                 format!("heapless::Vec<{base}, {cap}>")
             } else {
                 format!("Vec<{base}>")
@@ -2151,21 +2221,24 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
     let type_name = to_pascal_case(&s.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&s.name));
 
-    // Tier 1: default roundtrip
-    w.line("#[test]");
-    w.line(&format!("fn {test_name}_default() {{"));
-    w.indent();
-    w.line(&format!("let original = {}::default();", type_name));
-    w.line("let mut buf = Vec::new();");
-    w.line("minicbor::encode(&original, &mut buf).expect(\"encode\");");
-    w.line(&format!(
-        "let decoded: {} = minicbor::decode(&buf).expect(\"decode\");",
-        type_name
-    ));
-    w.line("assert_eq!(original, decoded);");
-    w.dedent();
-    w.line("}");
-    w.blank();
+    // Tier 1: default roundtrip, when the default encodes (a `+` member
+    // needs an item).
+    if cddlc_codegen::default_is_encodable(s) {
+        w.line("#[test]");
+        w.line(&format!("fn {test_name}_default() {{"));
+        w.indent();
+        w.line(&format!("let original = {}::default();", type_name));
+        w.line("let mut buf = Vec::new();");
+        w.line("minicbor::encode(&original, &mut buf).expect(\"encode\");");
+        w.line(&format!(
+            "let decoded: {} = minicbor::decode(&buf).expect(\"decode\");",
+            type_name
+        ));
+        w.line("assert_eq!(original, decoded);");
+        w.dedent();
+        w.line("}");
+        w.blank();
+    }
 
     // Tier 2: explicit values test
     w.line("#[test]");
@@ -2523,12 +2596,12 @@ fn default_value_expr(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> 
         Occurrence::Optional => "None".into(),
         Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => {
-            if opts.no_std || opts.alloc == AllocStrategy::Stack
-                || opts.alloc == AllocStrategy::Arena
-            {
-                "heapless::Vec::new()".into()
-            } else {
-                "Vec::new()".into()
+            // As many items as the member needs (`+`: one), so it encodes.
+            let (min, _) = cddlc_codegen::repeat_bounds(occ);
+            match (min, opts.no_std) {
+                (0, true) => "heapless::Vec::new()".into(),
+                (0, false) => "Vec::new()".into(),
+                (n, _) => format!("(0..{n}).map(|_| {}).collect()", primitive_default_expr(ty, opts)),
             }
         }
         Occurrence::Required => primitive_default_expr(ty, opts),
@@ -2995,6 +3068,9 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
     for (f, ty_str) in s.fields.iter().zip(field_types) {
         let inner = if f.occurrence.is_required() {
             ty_str.clone()
+        } else if f.occurrence.is_repeated() {
+            // A repeated member's items, each read on its own (dgtlrift/cddlc#134).
+            ty_str.strip_prefix("Vec<").and_then(|t| t.strip_suffix('>')).unwrap_or(ty_str).to_owned()
         } else {
             ty_str.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')).unwrap_or(ty_str).to_owned()
         };
@@ -3013,8 +3089,14 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
     w.indent();
     w.line("fn serialize<CddlcS: serde::Serializer>(&self, serializer: CddlcS) -> Result<CddlcS::Ok, CddlcS::Error> {");
     w.indent();
-    let has_optional = required < s.fields.len();
-    if has_optional {
+    let repeated = cddlc_codegen::record_repeated(s);
+    let has_optional = required < s.fields.len() && repeated.is_none();
+    if let Some(ri) = repeated {
+        w.line("use serde::ser::{Error as _, SerializeSeq};");
+        w.line(&format!("let n = self.{}.len();", field_ident(&s.fields[ri].name)));
+        emit_repeat_check_json(w, s, &s.fields[ri], "n", "CddlcS::Error");
+        w.line(&format!("let len = {required}usize + n;"));
+    } else if has_optional {
         w.line("use serde::ser::{Error as _, SerializeSeq};");
         w.line(&format!("let mut len = {required}usize;"));
         w.line("let mut gap = false;");
@@ -3022,7 +3104,7 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
         w.line("use serde::ser::SerializeSeq;");
         w.line(&format!("let len = {required}usize;"));
     }
-    for (f, _, _) in members.iter().filter(|(f, _, _)| !f.occurrence.is_required()) {
+    for (f, _, _) in members.iter().filter(|(f, _, _)| matches!(f.occurrence, Occurrence::Optional)) {
         w.line(&format!("if self.{}.is_some() {{", field_ident(&f.name)));
         w.indent();
         w.line(&format!(
@@ -3041,7 +3123,9 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
             Some(wr) => format!("&{wr}({v}.clone())"),
             None => v.to_owned(),
         };
-        if f.occurrence.is_required() {
+        if f.occurrence.is_repeated() {
+            w.line(&format!("for v in &{access} {{ seq.serialize_element({})?; }}", elem("v")));
+        } else if f.occurrence.is_required() {
             let v = match wrapper {
                 Some(wr) => format!("&{wr}({access}.clone())"),
                 None => format!("&{access}"),
@@ -3082,11 +3166,14 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
         let i = s.fields.iter().position(|x| x.name == f.name).unwrap_or(0);
         required + before.as_ref().map_or(0, |b| b[i])
     };
-    if middle {
+    if middle || repeated.is_some() {
         // A format that knows the length (CBOR's definite arrays) says it
         // up front; read the items in order.
         w.line("if let Some(n) = seq.size_hint() {");
         w.indent();
+        if let Some(ri) = repeated {
+            emit_reps_json(w, s, &s.fields[ri], required);
+        }
         for (f, inner, wrapper) in &members {
             let local = field_ident(&f.name);
             let (read_ty, unwrap) = match wrapper {
@@ -3097,7 +3184,10 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
                 "seq.next_element::<{read_ty}>()?{unwrap}.ok_or_else(|| A::Error::custom(\"{}: missing item '{}'\"))?",
                 s.name, f.name
             );
-            if f.occurrence.is_required() {
+            if f.occurrence.is_repeated() {
+                w.line(&format!("let mut {local} = Vec::new();"));
+                w.line(&format!("for _ in 0..reps {{ {local}.push({take}); }}"));
+            } else if f.occurrence.is_required() {
                 w.line(&format!("let {local} = {take};"));
             } else {
                 w.line(&format!("let {local} = if n > {} {{ Some({take}) }} else {{ None }};", threshold(f)));
@@ -3115,6 +3205,9 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
         w.line("let mut items = Vec::new();");
         w.line("while let Some(v) = seq.next_element::<serde_json::Value>()? { items.push(v); }");
         w.line("let n = items.len();");
+        if let Some(ri) = repeated {
+            emit_reps_json(w, s, &s.fields[ri], required);
+        }
         w.line("let mut items = items.into_iter();");
         for (f, inner, wrapper) in &members {
             let local = field_ident(&f.name);
@@ -3126,7 +3219,10 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
                 "serde_json::from_value::<{read_ty}>(items.next().ok_or_else(|| A::Error::custom(\"{}: missing item '{}'\"))?).map_err(A::Error::custom)?{unwrap}",
                 s.name, f.name
             );
-            if f.occurrence.is_required() {
+            if f.occurrence.is_repeated() {
+                w.line(&format!("let mut {local} = Vec::new();"));
+                w.line(&format!("for _ in 0..reps {{ {local}.push({take}); }}"));
+            } else if f.occurrence.is_required() {
                 w.line(&format!("let {local} = {take};"));
             } else {
                 w.line(&format!("let {local} = if n > {} {{ Some({take}) }} else {{ None }};", threshold(f)));
@@ -3177,6 +3273,33 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
     w.line("}");
     w.dedent();
     w.line("}");
+}
+
+/// Fails unless a repeated member's item count, `n`, is within its bounds
+/// (a serde error type, `err`).
+fn emit_repeat_check_json(w: &mut IndentWriter, s: &StructDef, f: &FieldDef, n: &str, err: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    if min > 0 {
+        w.line(&format!(
+            "if {n} < {min} {{ return Err({err}::custom(\"{}: '{}' needs at least {min} items\")); }}",
+            s.name, f.name
+        ));
+    }
+    if let Some(max) = max {
+        w.line(&format!(
+            "if {n} > {max} {{ return Err({err}::custom(\"{}: '{}' has more than {max} items\")); }}",
+            s.name, f.name
+        ));
+    }
+}
+
+/// The repeated member's item count, `reps`, from the array's, `n`.
+fn emit_reps_json(w: &mut IndentWriter, s: &StructDef, f: &FieldDef, required: usize) {
+    w.line(&format!(
+        "let reps = n.checked_sub({required}).ok_or_else(|| A::Error::custom(\"{}: too few items\"))?;",
+        s.name
+    ));
+    emit_repeat_check_json(w, s, f, "reps", "A::Error");
 }
 
 fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, module: &IrModule) {
@@ -3558,16 +3681,18 @@ fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &Codege
     let type_name = to_pascal_case(&s.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&s.name));
 
-    w.line("#[test]");
-    w.line(&format!("fn {test_name}_default() {{"));
-    w.indent();
-    w.line(&format!("let original = {type_name}::default();"));
-    w.line("let buf = original.encode();");
-    w.line(&format!("let decoded = {type_name}::decode(&buf).expect(\"decode\");"));
-    w.line("assert_eq!(original, decoded);");
-    emit_cbor_roundtrip(w, &type_name);
-    w.dedent();
-    w.line("}");
+    if cddlc_codegen::default_is_encodable(s) {
+        w.line("#[test]");
+        w.line(&format!("fn {test_name}_default() {{"));
+        w.indent();
+        w.line(&format!("let original = {type_name}::default();"));
+        w.line("let buf = original.encode();");
+        w.line(&format!("let decoded = {type_name}::decode(&buf).expect(\"decode\");"));
+        w.line("assert_eq!(original, decoded);");
+        emit_cbor_roundtrip(w, &type_name);
+        w.dedent();
+        w.line("}");
+    }
     w.blank();
 
     w.line("#[test]");
