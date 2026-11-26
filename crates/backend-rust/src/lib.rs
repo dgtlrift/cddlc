@@ -287,7 +287,10 @@ impl Backend for RustBackend {
         cddlc_codegen::check_rest_keys(module, opts, "Rust", true)?;
         // A member whose type is an inline choice holds any alternative, in
         // an enum of its own (dgtlrift/cddlc#146).
-        let lifted = lift_inline_choices(module);
+        // A rule whose type would hide one the crate uses (`result` →
+        // `Result`) is `<module>-<rule>` (dgtlrift/cddlc#191).
+        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::rust_reserved_renames(module));
+        let lifted = lift_inline_choices(&renamed);
         let module = &lifted;
         let fmt_tag    = if opts.is_json() { "json" } else { "cbor" };
         let crate_name = format!("{}-{fmt_tag}", module.name);
