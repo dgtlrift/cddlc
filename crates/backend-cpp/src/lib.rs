@@ -29,6 +29,7 @@ impl Backend for CppBackend {
         module: &IrModule,
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "C++", true)?;
         let name      = module.name.as_str();
         let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}-cpp");
@@ -278,7 +279,7 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         .collect();
     if let Some(r) = &s.rest {
         let rname = to_snake_case(&r.name);
-        let entry = format!("std::pair<std::string_view, {}>", cpp_typeref(&r.val_ty, opts));
+        let entry = format!("std::pair<{}, {}>", rest_key_cpp(r, opts), cpp_typeref(&r.val_ty, opts));
         w.line("/// The map's other entries.");
         if is_heap(opts) {
             w.line(&format!("std::vector<{entry}> {rname}{{}};"));
@@ -572,6 +573,17 @@ fn emit_cpp_array_item_decode(w: &mut IndentWriter, a: &ArrayDef, module: &IrMod
     }
 }
 
+/// Whether a map's other entries have plain `tstr` keys, held as
+/// `std::string_view` (otherwise they hold their key type; dgtlrift/cddlc#136).
+fn text_rest(r: &cddlc_ir::MapRest) -> bool {
+    matches!(r.key_ty, TypeRef::Primitive(Primitive::Tstr))
+}
+
+/// The C++ type of a map's other entries' keys.
+fn rest_key_cpp(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
+    if text_rest(r) { "std::string_view".into() } else { cpp_typeref(&r.key_ty, opts) }
+}
+
 /// Writes a map member's key: its text, or an integer key as an integer
 /// (dgtlrift/cddlc#176).
 fn cpp_key_write(key: &cddlc_ir::FieldKey) -> String {
@@ -655,7 +667,11 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                     w.line(&format!("    const auto &e = val.{rname}[i];"));
                 }
                 w.indent();
-                w.line("nanocbor_put_tstrn(enc, e.first.data(), e.first.size());");
+                if text_rest(r) {
+                    w.line("nanocbor_put_tstrn(enc, e.first.data(), e.first.size());");
+                } else {
+                    emit_cpp_encode_field(w, &r.key_ty, "e.first", &Occurrence::Required, opts);
+                }
                 emit_cpp_encode_field(w, &r.val_ty, "e.second", &Occurrence::Required, opts);
                 w.dedent();
                 w.line("}");
@@ -884,7 +900,13 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             w.indent();
             // A map with integer keys (`1 => tstr`) reads each key as text or
             // an integer (dgtlrift/cddlc#176).
-            let int_keys = cddlc_codegen::has_int_keys(s);
+            // Other entries with typed keys are read again as their key type
+            // from where the key starts (dgtlrift/cddlc#136).
+            let typed_rest = s.rest.as_ref().is_some_and(|r| !text_rest(r));
+            let int_keys = cddlc_codegen::has_int_keys(s) || typed_rest;
+            if typed_rest {
+                w.line("nanocbor_value_t key_start = map;");
+            }
             w.line("const uint8_t *key_ptr = nullptr; size_t key_len = 0;");
             if int_keys {
                 w.line("bool key_is_int = false; int64_t key_int = 0;");
@@ -931,10 +953,16 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 // Other keys are the map's other entries (dgtlrift/cddlc#82).
                 Some(r) => {
                     let rname = to_snake_case(&r.name);
-                    if int_keys {
-                        w.line("if (key_is_int) return -1; // the other entries have text keys");
+                    if typed_rest {
+                        w.line(&format!("std::pair<{}, {}> e{{}};", rest_key_cpp(r, opts), cpp_typeref(&r.val_ty, opts)));
+                        w.line("nanocbor_value_t kd = key_start;");
+                        emit_cpp_decode_field(w, &r.key_ty, "e.first", &[], &r.name, "&kd", opts);
+                    } else {
+                        if int_keys {
+                            w.line("if (key_is_int) return -1; // the other entries have text keys");
+                        }
+                        w.line(&format!("std::pair<std::string_view, {}> e{{key, {{}}}};", cpp_typeref(&r.val_ty, opts)));
                     }
-                    w.line(&format!("std::pair<std::string_view, {}> e{{key, {{}}}};", cpp_typeref(&r.val_ty, opts)));
                     emit_cpp_decode_field(w, &r.val_ty, "e.second", &[], &r.name, "&map", opts);
                     if is_heap(opts) {
                         w.line(&format!("out.{rname}.push_back(e);"));
@@ -1236,8 +1264,10 @@ fn emit_cpp_decode_field(
                     w.line("if (!_matched) {");
                     w.indent();
                     w.line(&format!("nanocbor_value_t _probe = *({dec_expr});"));
-                    w.line(&format!("{t} _v{{}};"));
-                    w.line(&format!("if ({} >= 0) {{ *({dec_expr}) = _probe; {dest} = _v; _matched = true; }}", cpp_decode_call(p, "_v", "&_probe")));
+                    w.line(&format!("{t} _alt{{}};"));
+                    // `_alt`, not `_v`: the member being decoded may be `_v`
+                    // itself, which an inner `_v` would shadow.
+                    w.line(&format!("if ({} >= 0) {{ *({dec_expr}) = _probe; {dest} = _alt; _matched = true; }}", cpp_decode_call(p, "_alt", "&_probe")));
                     w.dedent();
                     w.line("}");
                 }

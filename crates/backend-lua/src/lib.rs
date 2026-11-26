@@ -31,6 +31,7 @@ impl Backend for LuaBackend {
     fn file_extension(&self) -> &str { "lua" }
 
     fn generate(&self, module: &IrModule, opts: &CodegenOptions) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "Lua", false)?;
         let name = module.name.as_str();
         let dir = format!("{name}-{}", if opts.is_json() { "json" } else { "cbor" });
         let modname = lua_module_name(name, opts.namespace.as_deref());

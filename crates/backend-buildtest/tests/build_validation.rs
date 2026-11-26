@@ -40,6 +40,7 @@ fn work_dir(lang: &str) -> tempfile::TempDir {
 fn test_all_schemas_generate_rust() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &RustBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &RustBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 3, "schema '{name}': expected 3 files");
@@ -50,6 +51,7 @@ fn test_all_schemas_generate_rust() {
 fn test_all_schemas_generate_c() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &CBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &CBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 5, "schema '{name}': expected 5 files");
@@ -60,6 +62,7 @@ fn test_all_schemas_generate_c() {
 fn test_all_schemas_generate_cpp() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &CppBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 5, "schema '{name}': expected 5 files");
@@ -70,6 +73,7 @@ fn test_all_schemas_generate_cpp() {
 fn test_all_schemas_generate_csharp() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &CSharpBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &CSharpBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 3, "schema '{name}': expected 3 files");
@@ -80,6 +84,7 @@ fn test_all_schemas_generate_csharp() {
 fn test_all_schemas_generate_nodejs() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &NodeJsBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &NodeJsBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 4, "schema '{name}': expected 4 files");
@@ -90,6 +95,7 @@ fn test_all_schemas_generate_nodejs() {
 fn test_all_schemas_generate_python() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &PythonBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &PythonBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 3, "schema '{name}': expected 3 files");
@@ -211,6 +217,7 @@ fn test_cmake_includes_nanocbor_headers() {
 fn test_cpp_uses_nanocbor_put_tstrn() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &CppBackend, &opts).unwrap();
         let cpp = files.iter().find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/")).unwrap();
         assert!(!cpp.content.contains("nanocbor_put_tstr_len"),
@@ -224,6 +231,7 @@ fn test_cpp_uses_nanocbor_put_tstrn() {
 fn test_c_uses_nanocbor_put_tstrn() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &CBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &CBackend, &opts).unwrap();
         let c_src = files.iter().find(|f| f.path.ends_with(".c") && f.path.contains("/src/")).unwrap();
         assert!(!c_src.content.contains("nanocbor_put_tstr_len"),
@@ -264,6 +272,7 @@ fn test_cpp_optional_fields_dynamic_map_length() {
 fn test_cpp_array_operator_eq_no_neq() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
+        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) { continue; }
         let files = backend_buildtest::generate_schema(name, src, &CppBackend, &opts).unwrap();
         let hpp = files.iter().find(|f| f.path.ends_with(".hpp")).unwrap();
         assert!(!hpp.content.contains("items[i] != o.items[i]"),

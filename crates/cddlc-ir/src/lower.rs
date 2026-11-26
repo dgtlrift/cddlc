@@ -121,17 +121,35 @@ impl<'m> LowerCtx<'m> {
             }
         }
 
-        // The generated struct codecs read a map's keys as text, so the keys of
-        // a map's other entries are text too (checked once every alias is lowered).
+        // The keys of a map's other entries are text, integers, or a choice of
+        // them (COSE's `* label => values` with `label = int / tstr`,
+        // dgtlrift/cddlc#136); checked once every alias is lowered.
         for def in self.output.values() {
             if let TypeDef::Struct(st) = def {
                 if let Some(rest) = &st.rest {
-                    if !self.is_text(&rest.key_ty) {
+                    if !self.is_scalar_key(&rest.key_ty, 0) {
                         return Err(IrError::Unsupported {
                             rule:   st.name.to_string(),
-                            reason: "a computed key other than tstr alongside named members".into(),
+                            reason: "a computed key other than text or integers alongside named members".into(),
                         });
                     }
+                }
+            }
+        }
+        // A key that's an alias of `tstr` is `tstr`: backends hold text keys
+        // as text whatever the key's name.
+        let text_keyed: Vec<SmolStr> = self.output.iter()
+            .filter_map(|(name, def)| match def {
+                TypeDef::Struct(st) => st.rest.as_ref()
+                    .filter(|r| matches!(r.key_ty, TypeRef::Named(_)) && self.is_tstr(&r.key_ty, 0))
+                    .map(|_| name.clone()),
+                _ => None,
+            })
+            .collect();
+        for name in text_keyed {
+            if let Some(TypeDef::Struct(st)) = self.output.get_mut(&name) {
+                if let Some(r) = st.rest.as_mut() {
+                    r.key_ty = TypeRef::Primitive(Primitive::Tstr);
                 }
             }
         }
@@ -527,11 +545,28 @@ impl<'m> LowerCtx<'m> {
     }
 
     /// Whether `ty` is `tstr`, directly or through aliases.
-    fn is_text(&self, ty: &TypeRef) -> bool {
+    fn is_tstr(&self, ty: &TypeRef, depth: usize) -> bool {
         match ty {
             TypeRef::Primitive(Primitive::Tstr) => true,
+            TypeRef::Named(n) if depth <= 8 => matches!(
+                self.output.get(n.as_str()),
+                Some(TypeDef::Alias(a)) if self.is_tstr(&a.ty, depth + 1)
+            ),
+            _ => false,
+        }
+    }
+
+    /// Whether `ty` is text, an integer, or a choice (or enum) of them.
+    fn is_scalar_key(&self, ty: &TypeRef, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        match ty {
+            TypeRef::Primitive(Primitive::Tstr | Primitive::Uint | Primitive::Int) => true,
+            TypeRef::Choice(alts) => alts.iter().all(|a| self.is_scalar_key(a, depth + 1)),
             TypeRef::Named(n) => match self.output.get(n.as_str()) {
-                Some(TypeDef::Alias(a)) => self.is_text(&a.ty),
+                Some(TypeDef::Alias(a)) => self.is_scalar_key(&a.ty, depth + 1),
+                Some(TypeDef::Enum(e)) => e.variants.iter().all(|v| self.is_scalar_key(&v.ty, depth + 1)),
                 _ => false,
             },
             _ => false,
@@ -1058,8 +1093,35 @@ impl<'m> LowerCtx<'m> {
             name,
             &occ_meta,
         );
-        let (key_ty, key_cs) = self.lower_type_to_ref(key_ty, name)?;
-        let key_ty = self.constrained_alias(name, "key", key_ty, key_cs);
+        // A parenthesised key, `* (int / tstr) => any` (RFC 9203), is the type
+        // it wraps.
+        let key_ty = paren_type(key_ty).unwrap_or(key_ty);
+        // An inline choice of key types, `* (int / tstr) => any`, is an enum
+        // of its own (`<rule>-key`), as a named `label = int / tstr` would be,
+        // so every backend holds each alternative.
+        let key_ty = if key_ty.choices.len() > 1 && key_ty.choices.iter().all(|c| c.node.ops.is_empty()) {
+            let mut ename: SmolStr = format!("{name}-key").into();
+            while self.output.contains_key(&ename) || self.known_rules.contains(&ename) {
+                ename = format!("{ename}-type").into();
+            }
+            let mut variants = Vec::new();
+            for (i, choice) in key_ty.choices.iter().enumerate() {
+                let (var_name, ty, constraints) = self.classify_enum_variant(&choice.node.base.node, i, &ename)?;
+                variants.push(EnumVariant { name: var_name, ty, constraints });
+            }
+            self.known_rules.insert(ename.clone());
+            self.output.insert(ename.clone(), TypeDef::Enum(EnumDef {
+                name:       ename.clone(),
+                variants,
+                tagged:     None,
+                doc:        None,
+                deprecated: false,
+            }));
+            TypeRef::Named(ename)
+        } else {
+            let (key_ty, key_cs) = self.lower_type_to_ref(key_ty, name)?;
+            self.constrained_alias(name, "key", key_ty, key_cs)
+        };
         let (val_ty, val_cs) = self.lower_field_type(val_ty, name, "value")?;
         let val_ty = self.constrained_alias(name, "value", val_ty, val_cs);
         Ok((key_ty, val_ty, occurrence))

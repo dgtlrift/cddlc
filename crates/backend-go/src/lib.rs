@@ -30,6 +30,7 @@ impl Backend for GoBackend {
     fn file_extension(&self) -> &str { "go" }
 
     fn generate(&self, module: &IrModule, opts: &CodegenOptions) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "Go", true)?;
         let name = module.name.as_str();
         let dir  = format!("{name}-{}", fmt_tag(opts));
         let pkg  = go_package_name(name, opts.namespace.as_deref());
@@ -665,6 +666,7 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     let tables = module.types.values().any(|d| matches!(d, TypeDef::Map(_)));
     // Maps with other entries write them in key order.
     let rests = module.types.values().any(|d| matches!(d, TypeDef::Struct(s) if s.rest.is_some()));
+    let typed_rests = module.types.values().any(|d| matches!(d, TypeDef::Struct(s) if s.rest.as_ref().is_some_and(|r| !text_rest(r))));
     w.line("import (");
     if opts.is_json() {
         let mut imps = vec!["\"bytes\"", "\"encoding/base64\"", "\"encoding/json\"", "\"fmt\""];
@@ -675,7 +677,7 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
             w.line(&format!("\t{imp}"));
         }
     } else {
-        if tables { w.line("\t\"bytes\""); }
+        if tables || typed_rests { w.line("\t\"bytes\""); }
         w.line("\t\"fmt\"");
         if tables { w.line("\t\"slices\""); }
         if rests { w.line("\t\"sort\""); }
@@ -698,6 +700,11 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     }
     if rests {
         for line in [""].into_iter().chain(SORTED_KEYS_HELPER.lines()) {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
+    }
+    if typed_rests {
+        for line in [""].into_iter().chain(ENCODED_KEY_ORDER_HELPER.lines()) {
             if line.is_empty() { w.blank() } else { w.line(line) }
         }
     }
@@ -1101,7 +1108,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
         .collect();
     // The map's other entries (dgtlrift/cddlc#82).
     if let Some(r) = &s.rest {
-        fields.push((Some("The map's other entries."), go_field_name(&r.name), format!("map[string]{}", go_type(&r.val_ty))));
+        fields.push((Some("The map's other entries."), go_field_name(&r.name), format!("map[{}]{}", rest_key_go(r), go_type(&r.val_ty))));
     }
     emit_fields(w, &fields);
     w.dedent();
@@ -1165,9 +1172,11 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
         let named: Vec<String> = s.fields.iter()
             .filter_map(|f| match &f.key { FieldKey::Text(t) => Some(go_str(t)), _ => None })
             .collect();
-        w.line(&format!("for _, k := range sortedKeys({field}) {{"));
+        // Typed keys go in the order of their encodings (dgtlrift/cddlc#136).
+        let order = if text_rest(r) { "sortedKeys" } else { "encodedKeyOrder" };
+        w.line(&format!("for _, k := range {order}({field}) {{"));
         w.indent();
-        if !named.is_empty() {
+        if !named.is_empty() && text_rest(r) {
             w.line("switch k {");
             w.line(&format!("case {}:", named.join(", ")));
             w.line(&format!("    return nil, fmt.Errorf(\"%s: other entry %q is a named member's key\", {}, k)", go_str(&name)));
@@ -1275,13 +1284,25 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
         w.line(&format!("var x {}", go_type(&r.val_ty)));
         emit_decode(w, &r.val_ty, "r", "x", &format!("{name} value"));
         w.line(&format!("if {field} == nil {{"));
-        w.line(&format!("    {field} = map[string]{}{{}}", go_type(&r.val_ty)));
+        w.line(&format!("    {field} = map[{}]{}{{}}", rest_key_go(r), go_type(&r.val_ty)));
         w.line("}");
-        w.line(&format!("ks, err := keyText(k, {})", go_str(&name)));
-        w.line("if err != nil {");
-        w.line("    return err");
-        w.line("}");
-        w.line(&format!("{field}[ks] = x"));
+        if text_rest(r) {
+            w.line(&format!("ks, err := keyText(k, {})", go_str(&name)));
+            w.line("if err != nil {");
+            w.line("    return err");
+            w.line("}");
+            w.line(&format!("{field}[ks] = x"));
+        } else {
+            // A typed key: written again as CBOR, and read as its type
+            // (dgtlrift/cddlc#136).
+            w.line("kr, err := marshal(k)");
+            w.line("if err != nil {");
+            w.line("    return err");
+            w.line("}");
+            w.line(&format!("var kx {}", rest_key_go(r)));
+            emit_decode(w, &r.key_ty, "kr", "kx", &format!("{name} key"));
+            w.line(&format!("{field}[kx] = x"));
+        }
         w.dedent();
         w.line("}");
     }
@@ -1914,6 +1935,30 @@ func encodeEntries(keys, vals [][]byte) ([]byte, error) {
 }"#;
 
 /// A map's other entries are written in key order.
+const ENCODED_KEY_ORDER_HELPER: &str = r#"// encodedKeyOrder returns m's keys in the order of their CBOR encodings.
+func encodedKeyOrder[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	enc := map[K][]byte{}
+	for k := range m {
+		b, _ := marshal(k)
+		enc[k] = b
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return bytes.Compare(enc[keys[i]], enc[keys[j]]) < 0 })
+	return keys
+}"#;
+
+/// Whether a map's other entries have plain `tstr` keys (otherwise they hold
+/// their key type; dgtlrift/cddlc#136).
+fn text_rest(r: &cddlc_ir::MapRest) -> bool {
+    matches!(r.key_ty, TypeRef::Primitive(Primitive::Tstr))
+}
+
+/// The Go type of a map's other entries' keys.
+fn rest_key_go(r: &cddlc_ir::MapRest) -> String {
+    if text_rest(r) { "string".into() } else { go_type(&r.key_ty) }
+}
+
 const SORTED_KEYS_HELPER: &str = r#"// sortedKeys returns m's keys in order.
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
@@ -2084,7 +2129,22 @@ fn go_struct_value(s: &StructDef, module: &IrModule, explicit: bool, depth: usiz
     if let Some(r) = &s.rest {
         if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
             let v = go_value(&r.val_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
-            fields.push(format!("{}: map[string]{}{{\"other-key\": {v}}}", go_field_name(&r.name), go_type(&r.val_ty)));
+            // A key no member has: text, or 1000 for an integer key, through an
+            // enum's integer alternative (dgtlrift/cddlc#136).
+            let key = match &r.key_ty {
+                TypeRef::Primitive(Primitive::Tstr) => "\"other-key\"".to_owned(),
+                TypeRef::Primitive(Primitive::Int) => "int64(1000)".to_owned(),
+                TypeRef::Primitive(Primitive::Uint) => "uint64(1000)".to_owned(),
+                TypeRef::Named(n) => match module.get(n) {
+                    Some(TypeDef::Enum(e)) => match e.variants.iter().find(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Int | Primitive::Uint)) && v.constraints.is_empty()) {
+                        Some(v) => format!("New{}{}(1000)", go_type_name(n), go_type_name(&v.name)),
+                        None => go_value(&r.key_ty, &Occurrence::Required, &[], module, explicit, depth + 1),
+                    },
+                    _ => go_value(&r.key_ty, &Occurrence::Required, &[], module, explicit, depth + 1),
+                },
+                _ => go_value(&r.key_ty, &Occurrence::Required, &[], module, explicit, depth + 1),
+            };
+            fields.push(format!("{}: map[{}]{}{{{key}: {v}}}", go_field_name(&r.name), rest_key_go(r), go_type(&r.val_ty)));
         }
     }
     format!("{}{{{}}}", go_type_name(&s.name), fields.join(", "))

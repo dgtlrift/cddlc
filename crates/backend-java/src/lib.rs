@@ -51,6 +51,7 @@ impl Backend for JavaBackend {
     fn file_extension(&self) -> &str { "java" }
 
     fn generate(&self, module: &IrModule, opts: &CodegenOptions) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "Java", false)?;
         let name = module.name.as_str();
         let dir = format!("{name}-{}", if opts.is_json() { "json" } else { "cbor" });
         let pkg = java_package_name(name, opts.namespace.as_deref());

@@ -27,6 +27,7 @@ impl Backend for PythonBackend {
         module: &IrModule,
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
+        cddlc_codegen::check_rest_keys(module, opts, "Python", true)?;
         let name      = module.name.as_str();
         let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
@@ -397,8 +398,9 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     if let Some(r) = &s.rest {
         w.line("# The map's other entries.");
         w.line(&format!(
-            "{}: dict[str, {}] = field(default_factory=dict)",
+            "{}: dict[{}, {}] = field(default_factory=dict)",
             to_snake_case(&r.name),
+            py_typeref(&r.key_ty, opts),
             py_typeref(&r.val_ty, opts)
         ));
     }
@@ -450,7 +452,9 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         w.indent();
         w.line(&format!("raise ValueError(f\"{class_name}: other entry {{key!r}} is a named member's key\")"));
         w.dedent();
-        w.line(&format!("m[key] = {}", py_to_raw(&r.val_ty, "value", opts)));
+        // A typed key (an integer, or an enum of integers and text) is written
+        // as its raw value (dgtlrift/cddlc#136).
+        w.line(&format!("m[{}] = {}", py_to_raw(&r.key_ty, "key", opts), py_to_raw(&r.val_ty, "value", opts)));
         w.dedent();
     }
     return_tagged(w, s.tagged, "m", opts);
@@ -684,7 +688,10 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         format!("{} | None", value_types.join(" | "))
     };
 
-    w.line("@dataclass");
+    // An enum of scalar alternatives is frozen, so it's hashable and can key
+    // a dict (COSE's `label = int / tstr`, dgtlrift/cddlc#136).
+    let scalar = e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(p) if !matches!(p, Primitive::Any)));
+    w.line(if scalar { "@dataclass(frozen=True)" } else { "@dataclass" });
     w.line(&format!("class {class_name}:"));
     w.indent();
     not_a_test(w, &class_name);
@@ -1374,7 +1381,21 @@ fn py_struct_value(s: &StructDef, module: &IrModule, opts: &CodegenOptions, expl
     if let Some(r) = &s.rest {
         if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
             let v = py_value(&r.val_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1);
-            args.push(format!("{}={{\"other-key\": {v}}}", to_snake_case(&r.name)));
+            // A key no member has: text, or 1000 for an integer key, through an
+            // enum's integer alternative (dgtlrift/cddlc#136).
+            let key = match &r.key_ty {
+                TypeRef::Primitive(Primitive::Tstr) => "\"other-key\"".to_owned(),
+                TypeRef::Primitive(Primitive::Int | Primitive::Uint) => "1000".to_owned(),
+                TypeRef::Named(n) => match module.get(n) {
+                    Some(TypeDef::Enum(e)) => match e.variants.iter().find(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Int | Primitive::Uint)) && int_literal(v).is_none()) {
+                        Some(v) => format!("{}.make_{}(1000)", to_pascal_case(n), to_pascal_case(&v.name)),
+                        None => py_value(&r.key_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1),
+                    },
+                    _ => py_value(&r.key_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1),
+                },
+                _ => py_value(&r.key_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1),
+            };
+            args.push(format!("{}={{{key}: {v}}}", to_snake_case(&r.name)));
         }
     }
     format!("{}({})", to_pascal_case(&s.name), args.join(", "))

@@ -317,7 +317,7 @@ readings = [* sensor-reading]
 | Enumerations | `color = &colors`, `{ state: &( on: "on", off: "off" ) }` | The choice of a group's member values (`1 / 2 / 3`) |
 | Arrays | `readings = [* float32]`, `[+ T]`, `[n*m T]` | Capacity from pragma or `--max-array` |
 | Tables (open maps) | `props = { * tstr => any }`, `{ + uint => tstr }` | Any number of entries of the key and value types |
-| Maps with other entries | `device = { id: uint, * tstr => tstr }` | Named members plus an `extra` member holding the other entries; their keys are text |
+| Maps with other entries | `device = { id: uint, * tstr => tstr }`, `{ ? 1 => int, * label => any }` | Named members plus an `extra` member holding the other entries; their keys are text, integers, or a choice of them (`label = int / tstr`) |
 
 | Type aliases | `device-id = tstr .size 16` | With optional constraints |
 | CBOR tags | `#6.1(uint)` | Tag verification on decode, emission on encode |
@@ -372,6 +372,13 @@ value. Decoding puts every key that no named member has there; encoding writes t
 named members. Their keys must differ from the named members' keys: the Python, TypeScript,
 Go, Java, Lua and C# encoders (and C++ JSON) reject one that doesn't; the others write it
 as is. In C# JSON the values are `JsonElement`s (the serializer's extension data).
+
+The other entries' keys can also be integers, or a choice of integers and text, as in COSE's
+header maps (`header_map = { Generic_Headers, * label => values }`, `label = int / tstr`,
+RFC 9052). An inline choice (`* (int / tstr) => any`, RFC 9203) becomes an enum of its own,
+`<rule>-key`. These keys are CBOR only: JSON objects have text keys, so JSON output refuses
+such a map with an error. In CBOR, Rust, C, C++, C#, Python and Go hold them, keyed by the key
+type; TypeScript, Java, Lua and Dart refuse them for now (#181).
 
 ---
 
@@ -497,9 +504,12 @@ and the test fails when one starts working, so the list stays current.
   before it is set. A record can't repeat a member yet (`[primary, * extension, payload]`,
   #134).
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
-- **Maps with named members and other entries** need text keys for the other entries
-  (`{ a: uint, * tstr => any }`); other key types there (`{ 1 => int, * int => any }`), and
-  more than one member with a computed key, are rejected with an "unsupported" error.
+- **Maps with named members and other entries** need text or integer keys (or a choice of
+  them) for the other entries; other key types there (`{ a: uint, * bstr => any }`), and
+  more than one member with a computed key, are rejected with an "unsupported" error (#136).
+  Integer keys there are CBOR only, in Rust, C, C++, C#, Python and Go (#181).
+- **`any`** is held as a byte string in most backends, so a value that's any other data item
+  (COSE's header values, `values = any`) can't be decoded yet (#178).
 
 ### Validator gaps (`cddlc validate`)
 

@@ -792,7 +792,7 @@ fn mixed_map_has_rest() {
 #[test]
 fn mixed_map_limits() {
     for (src, want) in [
-        ("r = { a: uint, * int => any }\n", "other than tstr"),
+        ("r = { a: uint, * bstr => any }\n", "other than text or integers"),
         ("r = { a: uint, * tstr => any, * int => any }\n", "more than one member with a computed key"),
     ] {
         let parsed = parse_cddl(src, PathBuf::from("test.cddl")).unwrap();

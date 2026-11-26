@@ -512,3 +512,58 @@ fn key_bytes(key: &cddlc_ir::FieldKey) -> Vec<u8> {
 pub fn dcbor_key_order(a: &cddlc_ir::FieldDef, b: &cddlc_ir::FieldDef) -> std::cmp::Ordering {
     key_bytes(&a.key).cmp(&key_bytes(&b.key))
 }
+
+
+/// Whether a map's other entries (`* tstr => V`) have text keys, through
+/// aliases. Their keys may also be integers or a choice of them (COSE's
+/// `* label => values`, dgtlrift/cddlc#136).
+pub fn rest_keys_are_text(r: &cddlc_ir::MapRest, module: &cddlc_ir::IrModule) -> bool {
+    let mut ty = &r.key_ty;
+    for _ in 0..16 {
+        match ty {
+            cddlc_ir::TypeRef::Primitive(cddlc_ir::Primitive::Tstr) => return true,
+            cddlc_ir::TypeRef::Named(n) => match module.get(n) {
+                Some(cddlc_ir::TypeDef::Alias(a)) => ty = &a.ty,
+                _ => return false,
+            },
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A map, in the module, whose other entries have keys that aren't text: the
+/// first one's name. JSON objects have only text keys, so JSON output can't
+/// hold them (dgtlrift/cddlc#136).
+pub fn map_with_non_text_rest(module: &cddlc_ir::IrModule) -> Option<&str> {
+    module.types.values().find_map(|d| match d {
+        cddlc_ir::TypeDef::Struct(s) => s.rest.as_ref()
+            .filter(|r| !rest_keys_are_text(r, module))
+            .map(|_| s.name.as_str()),
+        _ => None,
+    })
+}
+
+/// Refuses a map whose other entries have keys that aren't text where they
+/// can't be held: in JSON output (JSON objects have only text keys), and in
+/// CBOR output for a backend that doesn't hold them yet (`cbor_ok` false,
+/// dgtlrift/cddlc#181).
+pub fn check_rest_keys(
+    module:  &cddlc_ir::IrModule,
+    opts:    &crate::CodegenOptions,
+    lang:    &str,
+    cbor_ok: bool,
+) -> Result<(), crate::CodegenError> {
+    let Some(name) = map_with_non_text_rest(module) else { return Ok(()) };
+    if opts.is_json() {
+        return Err(crate::CodegenError::new(format!(
+            "'{name}': JSON objects have text keys, so a map's other entries can't have integer keys in JSON output (dgtlrift/cddlc#136)"
+        )));
+    }
+    if !cbor_ok {
+        return Err(crate::CodegenError::new(format!(
+            "'{name}': the {lang} backend can't yet hold a map's other entries with integer keys (dgtlrift/cddlc#181)"
+        )));
+    }
+    Ok(())
+}
