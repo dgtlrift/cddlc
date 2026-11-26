@@ -1,13 +1,14 @@
-/// `cddlc sample` (dgtlrift/cddlc#110): every type of every reference schema has
-/// an example, and the example validates, as JSON and as CBOR.
-
-use std::path::PathBuf;
 use cddlc_validate::sample::{sample, to_cbor, to_diag, to_json, SampleOptions};
 use cddlc_validate::{validate_from, Source, Value};
+/// `cddlc sample` (dgtlrift/cddlc#110): every type of every reference schema has
+/// an example, and the example validates, as JSON and as CBOR.
+use std::path::PathBuf;
 
 fn module(src: &str) -> cddlc_ir::IrModule {
     let parsed = cddlc_parser::parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
-    cddlc_ir::lower(&parsed.value, 16, 64).expect("lower").module
+    cddlc_ir::lower(&parsed.value, 16, 64)
+        .expect("lower")
+        .module
 }
 
 /// Every type's sample, checked as the JSON and CBOR a reader would get.
@@ -76,13 +77,21 @@ fn recursive_types_end() {
     let d = diag(src, "tree", SampleOptions::default());
     assert!(d.starts_with(r#"{"value": 0, "left": {"value": 0"#), "{d}");
     // A choice takes the first alternative, then once deep the one that ends.
-    let d = diag("list = pair / null\npair = [uint, list]\n", "list", SampleOptions::default());
+    let d = diag(
+        "list = pair / null\npair = [uint, list]\n",
+        "list",
+        SampleOptions::default(),
+    );
     assert_eq!(d, "[0, [0, null]]");
 }
 
 #[test]
 fn tags_and_embedded_cbor() {
-    let d = diag("r = { t: #6.1(uint), e: bstr .cbor inner }\ninner = [uint, tstr]\n", "r", SampleOptions::default());
+    let d = diag(
+        "r = { t: #6.1(uint), e: bstr .cbor inner }\ninner = [uint, tstr]\n",
+        "r",
+        SampleOptions::default(),
+    );
     // 82 00 64 "text": [0, "text"].
     assert_eq!(d, r#"{"t": 1(0), "e": h'82006474657874'}"#);
 }
@@ -112,12 +121,32 @@ fn text_encodings_hold_an_encoded_sample() {
 fn floats_are_written_at_their_width() {
     let m = module("r = [float16, float32, float64, float]\n");
     let bytes = to_cbor(&sample(&m, Some("r"), SampleOptions::default()).unwrap());
-    assert_eq!(bytes, [0x84, 0xf9, 0, 0, 0xfa, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0]);
-    assert_eq!(cddlc_validate::cbor::decode(&[0xf9, 0x3c, 0x00]).map(|v| to_cbor(&v)), Ok(vec![0xf9, 0x3c, 0x00]));
+    assert_eq!(
+        bytes,
+        [
+            0x84, 0xf9, 0, 0, 0xfa, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0,
+            0, 0, 0
+        ]
+    );
+    assert_eq!(
+        cddlc_validate::cbor::decode(&[0xf9, 0x3c, 0x00]).map(|v| to_cbor(&v)),
+        Ok(vec![0xf9, 0x3c, 0x00])
+    );
 }
 
 #[test]
 fn repeated_group_members_sit_inline() {
-    check_all("groups", "r = [ + ( a: uint, b: tstr ) ]", SampleOptions::default());
-    assert_eq!(diag("r = [ + ( a: uint, b: tstr ) ]", "r", SampleOptions::default()), r#"[0, "text"]"#);
+    check_all(
+        "groups",
+        "r = [ + ( a: uint, b: tstr ) ]",
+        SampleOptions::default(),
+    );
+    assert_eq!(
+        diag(
+            "r = [ + ( a: uint, b: tstr ) ]",
+            "r",
+            SampleOptions::default()
+        ),
+        r#"[0, "text"]"#
+    );
 }

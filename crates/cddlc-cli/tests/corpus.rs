@@ -28,62 +28,190 @@ const INT_KEYED_OTHERS: &[&str] = &["rust", "c", "cpp", "csharp", "python", "go"
 /// A schema: its files (rules it uses from another RFC come first), and what
 /// it should do.
 struct Case {
-    files:  &'static [&'static str],
+    files: &'static [&'static str],
     expect: Expect,
 }
 
-const RECORD: &str = "a record array can't repeat a member beside another repeated or optional one yet";
+const RECORD: &str =
+    "a record array can't repeat a member beside another repeated or optional one yet";
 const MAP_GROUP: &str = "a repeated group in a map";
 const COMPUTED_KEYS: &str = "a map with more than one member with a computed key";
 
 const CASES: &[Case] = &[
-    Case { files: &["rfc/rfc8727.cddl"], expect: Expect::Fails(COMPUTED_KEYS, 136) },
-    Case { files: &["rfc/rfc8927.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc8990.cddl"], expect: Expect::Fails(RECORD, 134) },
-    Case { files: &["rfc/rfc8990-cleaned.cddl"], expect: Expect::Fails(RECORD, 134) },
-    Case { files: &["rfc/rfc9052.cddl"], expect: Expect::IntKeyedOthers },
-    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9053.cddl"], expect: Expect::IntKeyedOthers },
-    Case { files: &["rfc/rfc9054.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9090.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9115.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
-    Case { files: &["rfc/rfc9164.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9165.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9171.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9171.cddl", "rfc/rfc9173.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9177.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9202.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9203.cddl"], expect: Expect::IntKeyedOthers },
-    Case { files: &["rfc/rfc9237.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9277.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9290.cddl"], expect: Expect::Fails(COMPUTED_KEYS, 136) },
-    Case { files: &["rfc/rfc9321.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9338.cddl"], expect: Expect::IntKeyedOthers },
-    Case { files: &["rfc/rfc9360.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9393.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
-    Case { files: &["rfc/rfc9393-concise-swid-tag.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
-    Case { files: &["rfc/rfc9393.cddl", "rfc/rfc9393-sign.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
-    Case { files: &["rfc/rfc9393-sign1.cddl"], expect: Expect::IntKeyedOthers },
-    Case { files: &["rfc/rfc9393-concise-swid-tag.cddl", "rfc/rfc9393-tags.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
-    Case { files: &["rfc/rfc9431.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9526.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9528.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
-    Case { files: &["rfc/rfc9581.cddl"], expect: Expect::Fails(COMPUTED_KEYS, 136) },
-    Case { files: &["rfc/rfc9594-error-handling.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9594-example-extended-scope-aif.cddl"], expect: Expect::Fails("parse error", 137) },
-    Case { files: &["rfc/rfc9594-example-extended-scope-text.cddl"], expect: Expect::Fails("parse error", 137) },
-    Case { files: &["rfc/rfc9237.cddl", "rfc/rfc9594-example-scope-aif.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9594-example-scope-text.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9594-get_creds.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9594-sign_info_entry-with-a-gene.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9594-sign_info-parameter.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9597.cddl"], expect: Expect::Ok },
-    Case { files: &["webdriver-bidi/webdriver-bidi.cddl"], expect: Expect::Ok },
+    Case {
+        files: &["rfc/rfc8727.cddl"],
+        expect: Expect::Fails(COMPUTED_KEYS, 136),
+    },
+    Case {
+        files: &["rfc/rfc8927.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc8990.cddl"],
+        expect: Expect::Fails(RECORD, 134),
+    },
+    Case {
+        files: &["rfc/rfc8990-cleaned.cddl"],
+        expect: Expect::Fails(RECORD, 134),
+    },
+    Case {
+        files: &["rfc/rfc9052.cddl"],
+        expect: Expect::IntKeyedOthers,
+    },
+    Case {
+        files: &["rfc/rfc9052.cddl", "rfc/rfc9053.cddl"],
+        expect: Expect::IntKeyedOthers,
+    },
+    Case {
+        files: &["rfc/rfc9054.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9090.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9115.cddl"],
+        expect: Expect::Fails(MAP_GROUP, 135),
+    },
+    Case {
+        files: &["rfc/rfc9164.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9165.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9171.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9171.cddl", "rfc/rfc9173.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9177.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9202.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9203.cddl"],
+        expect: Expect::IntKeyedOthers,
+    },
+    Case {
+        files: &["rfc/rfc9237.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9277.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9290.cddl"],
+        expect: Expect::Fails(COMPUTED_KEYS, 136),
+    },
+    Case {
+        files: &["rfc/rfc9321.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9052.cddl", "rfc/rfc9338.cddl"],
+        expect: Expect::IntKeyedOthers,
+    },
+    Case {
+        files: &["rfc/rfc9360.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9393.cddl"],
+        expect: Expect::Fails(MAP_GROUP, 135),
+    },
+    Case {
+        files: &["rfc/rfc9393-concise-swid-tag.cddl"],
+        expect: Expect::Fails(MAP_GROUP, 135),
+    },
+    Case {
+        files: &["rfc/rfc9393.cddl", "rfc/rfc9393-sign.cddl"],
+        expect: Expect::Fails(MAP_GROUP, 135),
+    },
+    Case {
+        files: &["rfc/rfc9393-sign1.cddl"],
+        expect: Expect::IntKeyedOthers,
+    },
+    Case {
+        files: &["rfc/rfc9393-concise-swid-tag.cddl", "rfc/rfc9393-tags.cddl"],
+        expect: Expect::Fails(MAP_GROUP, 135),
+    },
+    Case {
+        files: &["rfc/rfc9431.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9526.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9528.cddl"],
+        expect: Expect::Fails(MAP_GROUP, 135),
+    },
+    Case {
+        files: &["rfc/rfc9581.cddl"],
+        expect: Expect::Fails(COMPUTED_KEYS, 136),
+    },
+    Case {
+        files: &["rfc/rfc9594-error-handling.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9594-example-extended-scope-aif.cddl"],
+        expect: Expect::Fails("parse error", 137),
+    },
+    Case {
+        files: &["rfc/rfc9594-example-extended-scope-text.cddl"],
+        expect: Expect::Fails("parse error", 137),
+    },
+    Case {
+        files: &["rfc/rfc9237.cddl", "rfc/rfc9594-example-scope-aif.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9594-example-scope-text.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9594-get_creds.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9594-sign_info_entry-with-a-gene.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9594-sign_info-parameter.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["rfc/rfc9597.cddl"],
+        expect: Expect::Ok,
+    },
+    Case {
+        files: &["webdriver-bidi/webdriver-bidi.cddl"],
+        expect: Expect::Ok,
+    },
 ];
 
-const LANGS: &[&str] = &["rust", "c", "cpp", "csharp", "nodejs", "python", "dart", "go", "java", "lua"];
+const LANGS: &[&str] = &[
+    "rust", "c", "cpp", "csharp", "nodejs", "python", "dart", "go", "java", "lua",
+];
 
 fn corpus() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("corpus")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("corpus")
 }
 
 /// Runs `cddlc generate` on `files`; the error output when it fails.

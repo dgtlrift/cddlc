@@ -1,20 +1,19 @@
+use backend_python::PythonBackend;
+use cddlc_codegen::{Backend, CodegenOptions};
+use cddlc_ir::lower;
+use cddlc_parser::parse_cddl;
 /// Integration tests for backend-python.
 ///
 /// The backend emits 3 files:
 ///   files[0] = pyproject.toml
 ///   files[1] = src/<module>.py
 ///   files[2] = tests/test_roundtrip.py
-
 use std::path::PathBuf;
-use backend_python::PythonBackend;
-use cddlc_codegen::{Backend, CodegenOptions};
-use cddlc_ir::lower;
-use cddlc_parser::parse_cddl;
 
 struct GeneratedPackage {
     pyproject: String,
-    source:    String,
-    tests:     String,
+    source: String,
+    tests: String,
 }
 
 fn compile(src: &str) -> GeneratedPackage {
@@ -22,14 +21,16 @@ fn compile(src: &str) -> GeneratedPackage {
 }
 
 fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedPackage {
-    let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let out     = PythonBackend.generate(&lowered.module, &opts).expect("generate");
+    let out = PythonBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
     assert_eq!(out.files.len(), 3, "expected 3 output files");
     GeneratedPackage {
         pyproject: out.files[0].content.clone(),
-        source:    out.files[1].content.clone(),
-        tests:     out.files[2].content.clone(),
+        source: out.files[1].content.clone(),
+        tests: out.files[2].content.clone(),
     }
 }
 
@@ -37,10 +38,10 @@ fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedPackage {
 
 #[test]
 fn test_emits_three_files() {
-    let opts   = CodegenOptions::default();
+    let opts = CodegenOptions::default();
     let parsed = parse_cddl("x = uint", PathBuf::from("t.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
-    let out    = PythonBackend.generate(&lowered.module, &opts).unwrap();
+    let out = PythonBackend.generate(&lowered.module, &opts).unwrap();
     assert_eq!(out.files.len(), 3);
     assert!(out.files[0].path.ends_with("pyproject.toml"));
     assert!(out.files[1].path.ends_with(".py"));
@@ -49,10 +50,10 @@ fn test_emits_three_files() {
 
 #[test]
 fn test_crate_dir_named_after_module() {
-    let opts   = CodegenOptions::default();
+    let opts = CodegenOptions::default();
     let parsed = parse_cddl("x = uint", PathBuf::from("sensor.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
-    let out    = PythonBackend.generate(&lowered.module, &opts).unwrap();
+    let out = PythonBackend.generate(&lowered.module, &opts).unwrap();
     assert!(out.files[0].path.starts_with("sensor-cbor/"));
     assert!(out.files[1].path.starts_with("sensor-cbor/src/"));
     assert!(out.files[2].path.starts_with("sensor-cbor/tests/"));
@@ -88,7 +89,12 @@ fn test_pyproject_pytest_dev_dependency() {
 fn test_pyproject_pep517_build_system() {
     let g = compile("x = uint");
     assert!(g.pyproject.contains("[build-system]"));
-    assert!(g.pyproject.contains("build-backend = \"setuptools.build_meta\""), "{}", g.pyproject);
+    assert!(
+        g.pyproject
+            .contains("build-backend = \"setuptools.build_meta\""),
+        "{}",
+        g.pyproject
+    );
 }
 
 // ── Source file ───────────────────────────────────────────────────────────────
@@ -197,7 +203,9 @@ fn test_struct_encode_builds_map() {
 #[test]
 fn test_struct_decode_uses_cbor2_loads() {
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("cbor2.loads(data, semantic_decoders=_SEMANTIC_DECODERS)"));
+    assert!(g
+        .source
+        .contains("cbor2.loads(data, semantic_decoders=_SEMANTIC_DECODERS)"));
     assert!(g.source.contains("return cls._from_raw(_loads(data))"));
 }
 
@@ -432,7 +440,8 @@ fn test_roundtrip_array_empty() {
 
 #[test]
 fn test_iot_schema() {
-    let g = compile(r#"
+    let g = compile(
+        r#"
 sensor-message = {
     version:   uint,
     device-id: device-id,
@@ -440,7 +449,8 @@ sensor-message = {
 }
 device-id = tstr .size 16
 timestamp = #6.1(uint)
-"#);
+"#,
+    );
     assert!(g.source.contains("class SensorMessage:"));
     assert!(g.source.contains("class DeviceId:"));
     assert!(g.source.contains("len(self.value) == 16"));
@@ -455,15 +465,28 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(g.source.contains("\"free-space\""), "{}", g.source);
     assert!(g.source.contains("\"Log_Distance\""), "{}", g.source);
     assert!(!g.source.contains("\"freespace\""), "{}", g.source);
-    assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
+    assert!(
+        !g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""),
+        "{}",
+        g.source
+    );
 }
 
 /// Issue #48: a class named `Test...` is marked so pytest does not collect it.
 #[test]
 fn test_test_prefixed_class_not_collected() {
     let g = compile("test-group = { id: uint }\nsensor = { id: uint }");
-    assert!(g.source.contains("class TestGroup:\n    __test__ = False"), "{}", g.source);
-    assert_eq!(g.source.matches("__test__ = False").count(), 1, "{}", g.source);
+    assert!(
+        g.source.contains("class TestGroup:\n    __test__ = False"),
+        "{}",
+        g.source
+    );
+    assert_eq!(
+        g.source.matches("__test__ = False").count(),
+        1,
+        "{}",
+        g.source
+    );
 }
 
 /// Issue #48: an enum of only text literals emits no empty integer branch,
@@ -471,7 +494,8 @@ fn test_test_prefixed_class_not_collected() {
 #[test]
 fn test_enum_from_raw_branches() {
     let g = compile("status = \"ok\" / \"warn\"\npriority = 1 / 2 / 3");
-    let status = &g.source[g.source.find("class Status").unwrap()..g.source.find("class Priority").unwrap()];
+    let status =
+        &g.source[g.source.find("class Status").unwrap()..g.source.find("class Priority").unwrap()];
     assert!(status.contains("if isinstance(raw, str):"), "{status}");
     assert!(!status.contains("isinstance(raw, int)"), "{status}");
     let priority = &g.source[g.source.find("class Priority").unwrap()..];
@@ -484,7 +508,11 @@ fn test_enum_from_raw_branches() {
 #[test]
 fn test_semantic_decoders_and_cbor2_version() {
     let g = compile("timestamp = #6.1(uint)");
-    assert!(g.source.contains("_SEMANTIC_DECODERS = {1: _raw_tag(1)}"), "{}", g.source);
+    assert!(
+        g.source.contains("_SEMANTIC_DECODERS = {1: _raw_tag(1)}"),
+        "{}",
+        g.source
+    );
     assert!(g.pyproject.contains("cbor2>=6.0"), "{}", g.pyproject);
 }
 
@@ -496,15 +524,31 @@ fn test_float_fields_keep_their_width() {
     assert!(g.source.contains("m[\"a\"] = _f16(self.a)"), "{}", g.source);
     assert!(g.source.contains("m[\"b\"] = _f32(self.b)"), "{}", g.source);
     assert!(g.source.contains("m[\"c\"] = self.c"), "{}", g.source);
-    assert!(g.source.contains("cbor2.dumps(value, default=_default)"), "{}", g.source);
+    assert!(
+        g.source.contains("cbor2.dumps(value, default=_default)"),
+        "{}",
+        g.source
+    );
 }
 
 /// Issue #48: range errors state the bounds, not Rust's `Option` debug text.
 #[test]
 fn test_range_error_message_is_readable() {
     let g = compile("pct = uint .le 100\ntemp = int .ge -40\nlevel = 0..10");
-    assert!(g.source.contains("\"Pct: value must be <= 100\""), "{}", g.source);
-    assert!(g.source.contains("\"Temp: value must be >= -40\""), "{}", g.source);
-    assert!(g.source.contains("value must be >= 0 and <= 10"), "{}", g.source);
+    assert!(
+        g.source.contains("\"Pct: value must be <= 100\""),
+        "{}",
+        g.source
+    );
+    assert!(
+        g.source.contains("\"Temp: value must be >= -40\""),
+        "{}",
+        g.source
+    );
+    assert!(
+        g.source.contains("value must be >= 0 and <= 10"),
+        "{}",
+        g.source
+    );
     assert!(!g.source.contains("Some("), "{}", g.source);
 }

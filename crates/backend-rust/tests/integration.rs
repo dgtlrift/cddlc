@@ -1,21 +1,20 @@
+use backend_rust::RustBackend;
+use cddlc_codegen::{Backend, CodegenOptions};
+use cddlc_ir::lower;
+use cddlc_parser::parse_cddl;
 /// Integration tests for backend-rust.
 ///
 /// The backend now emits a full Rust library crate (3 files):
 ///   files[0] = Cargo.toml
 ///   files[1] = src/lib.rs   ← types + Encode/Decode impls
 ///   files[2] = tests/roundtrip.rs
-
 use std::path::PathBuf;
-use backend_rust::RustBackend;
-use cddlc_codegen::{Backend, CodegenOptions};
-use cddlc_ir::lower;
-use cddlc_parser::parse_cddl;
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
 struct GeneratedCrate {
-    cargo_toml:   String,
-    lib_rs:       String,
+    cargo_toml: String,
+    lib_rs: String,
     roundtrip_rs: String,
 }
 
@@ -24,13 +23,15 @@ fn compile(src: &str) -> GeneratedCrate {
 }
 
 fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
-    let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let out     = RustBackend.generate(&lowered.module, &opts).expect("generate");
+    let out = RustBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
     assert_eq!(out.files.len(), 3, "expected 3 output files");
     GeneratedCrate {
-        cargo_toml:   out.files[0].content.clone(),
-        lib_rs:       out.files[1].content.clone(),
+        cargo_toml: out.files[0].content.clone(),
+        lib_rs: out.files[1].content.clone(),
         roundtrip_rs: out.files[2].content.clone(),
     }
 }
@@ -40,7 +41,7 @@ fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
 #[test]
 fn test_emits_three_files() {
     let opts = CodegenOptions::default();
-    let parsed  = parse_cddl("x = uint", PathBuf::from("t.cddl")).unwrap();
+    let parsed = parse_cddl("x = uint", PathBuf::from("t.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let out = RustBackend.generate(&lowered.module, &opts).unwrap();
     assert_eq!(out.files.len(), 3);
@@ -52,7 +53,7 @@ fn test_emits_three_files() {
 #[test]
 fn test_crate_dir_named_after_module() {
     let opts = CodegenOptions::default();
-    let parsed  = parse_cddl("x = uint", PathBuf::from("sensor.cddl")).unwrap();
+    let parsed = parse_cddl("x = uint", PathBuf::from("sensor.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let out = RustBackend.generate(&lowered.module, &opts).unwrap();
     assert!(out.files[0].path.starts_with("sensor-cbor/"));
@@ -79,7 +80,11 @@ fn test_cargo_toml_crate_name() {
 fn test_cargo_toml_minicbor_version_range() {
     // Caret 2.3: new 2.x releases, never an incompatible 3.0.
     let g = compile("device-id = uint");
-    assert!(g.cargo_toml.contains("minicbor = { version = \"2.3\""), "{}", g.cargo_toml);
+    assert!(
+        g.cargo_toml.contains("minicbor = { version = \"2.3\""),
+        "{}",
+        g.cargo_toml
+    );
     assert!(!g.cargo_toml.contains(">="), "{}", g.cargo_toml);
 }
 
@@ -123,7 +128,9 @@ fn test_generates_header() {
 #[test]
 fn test_no_std_is_feature_gated() {
     let g = compile("device-id = uint");
-    assert!(g.lib_rs.contains("#![cfg_attr(feature = \"no-std\", no_std)]"));
+    assert!(g
+        .lib_rs
+        .contains("#![cfg_attr(feature = \"no-std\", no_std)]"));
     assert!(!g.lib_rs.contains("#![no_std]"));
 }
 
@@ -132,7 +139,12 @@ fn test_no_std_is_feature_gated() {
 fn test_std_output_has_no_heapless_import() {
     let g = compile("device-id = uint");
     assert!(!g.lib_rs.contains("use heapless"), "{}", g.lib_rs);
-    assert!(g.cargo_toml.contains("heapless = { version = \"0.9\", optional = true }"), "{}", g.cargo_toml);
+    assert!(
+        g.cargo_toml
+            .contains("heapless = { version = \"0.9\", optional = true }"),
+        "{}",
+        g.cargo_toml
+    );
 }
 
 // ── Default derives ───────────────────────────────────────────────────────────
@@ -140,7 +152,9 @@ fn test_std_output_has_no_heapless_import() {
 #[test]
 fn test_struct_derives_default() {
     let g = compile("sensor = { id: uint, value: float32 }");
-    assert!(g.lib_rs.contains("#[derive(Debug, Clone, PartialEq, Default)]"));
+    assert!(g
+        .lib_rs
+        .contains("#[derive(Debug, Clone, PartialEq, Default)]"));
 }
 
 #[test]
@@ -149,7 +163,11 @@ fn test_enum_derives_default() {
     // Data-carrying enums get a manual impl Default instead
     let g = compile(r#"status = "ok" / "warn" / "error""#);
     // status has tstr variants — manual Default impl expected
-    assert!(g.lib_rs.contains("impl Default for Status") || g.lib_rs.contains("#[derive(Debug, Clone, PartialEq, Default)]"));
+    assert!(
+        g.lib_rs.contains("impl Default for Status")
+            || g.lib_rs
+                .contains("#[derive(Debug, Clone, PartialEq, Default)]")
+    );
 }
 
 #[test]
@@ -228,7 +246,7 @@ fn test_struct_decl() {
     let g = compile("sensor = { id: uint, label: tstr, value: float32 }");
     assert!(g.lib_rs.contains("pub struct Sensor {"));
     assert!(g.lib_rs.contains("pub id: u64,"));
-    assert!(g.lib_rs.contains("pub label: String,"));   // owned String, not &str
+    assert!(g.lib_rs.contains("pub label: String,")); // owned String, not &str
     assert!(g.lib_rs.contains("pub value: f32,"));
 }
 
@@ -250,7 +268,7 @@ fn test_struct_decode_impl() {
 #[test]
 fn test_optional_field_is_option() {
     let g = compile("msg = { id: uint, ? label: tstr }");
-    assert!(g.lib_rs.contains("pub label: Option<String>,"));  // owned String
+    assert!(g.lib_rs.contains("pub label: Option<String>,")); // owned String
 }
 
 #[test]
@@ -263,7 +281,12 @@ fn test_required_field_missing_errors() {
 fn test_unknown_field_rejected() {
     // A map has only the members its schema gives it (dgtlrift/cddlc#102).
     let g = compile("msg = { id: uint }");
-    assert!(g.lib_rs.contains("_ => { return Err(DecodeError::message(\"msg: unknown member\")); }"), "{}", g.lib_rs);
+    assert!(
+        g.lib_rs
+            .contains("_ => { return Err(DecodeError::message(\"msg: unknown member\")); }"),
+        "{}",
+        g.lib_rs
+    );
 }
 
 #[test]
@@ -294,7 +317,7 @@ fn test_string_enum_decl() {
 fn test_string_enum_encode() {
     let g = compile(r#"status = "ok" / "warn""#);
     assert!(g.lib_rs.contains("impl<CddlcC> Encode<CddlcC> for Status"));
-    assert!(g.lib_rs.contains("e.str(s.as_str())?"));  // owned String → .as_str()
+    assert!(g.lib_rs.contains("e.str(s.as_str())?")); // owned String → .as_str()
 }
 
 #[test]
@@ -344,14 +367,16 @@ fn test_generic_instantiation_emits_struct() {
 
 #[test]
 fn test_iot_schema_generates() {
-    let g = compile(r#"
+    let g = compile(
+        r#"
 sensor-message = {
     version:   uint,
     device-id: device-id,
     timestamp: #6.1(uint),
 }
 device-id = tstr .size 16
-"#);
+"#,
+    );
     assert!(g.lib_rs.contains("pub struct SensorMessage"));
     assert!(g.lib_rs.contains("pub struct DeviceId"));
     assert!(g.lib_rs.contains("val.len() == 16"));
@@ -432,7 +457,10 @@ end = { t: uint, type: "SimEnd", reason: "until" / "queue-empty" }
 "#;
 
 fn json_opts() -> CodegenOptions {
-    CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() }
+    CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    }
 }
 
 #[test]
@@ -447,7 +475,9 @@ fn test_keyword_field_is_raw_identifier() {
 fn test_json_literal_fields_use_markers() {
     let out = compile_with_opts(LITERALS, json_opts());
     assert!(out.lib_rs.contains("pub cat: StartCat,"), "{}", out.lib_rs);
-    assert!(out.lib_rs.contains("pub const VALUE: &'static str = \"kernel\";"));
+    assert!(out
+        .lib_rs
+        .contains("pub const VALUE: &'static str = \"kernel\";"));
     assert!(out.lib_rs.contains("#[serde(rename = \"queue-empty\")]"));
     assert!(!out.lib_rs.contains("Default::default()(String::new())"));
 }
@@ -455,7 +485,11 @@ fn test_json_literal_fields_use_markers() {
 #[test]
 fn test_cbor_literal_enum_uses_literal_strings() {
     let out = compile(LITERALS);
-    assert!(out.lib_rs.contains("\"queue-empty\" => Ok("), "{}", out.lib_rs);
+    assert!(
+        out.lib_rs.contains("\"queue-empty\" => Ok("),
+        "{}",
+        out.lib_rs
+    );
     assert!(!out.lib_rs.contains("\"queueempty\""));
     assert!(out.lib_rs.contains("let mut probe = d.clone();"));
     assert!(out.lib_rs.contains("cat: \"kernel\".to_string(),"));
@@ -464,7 +498,12 @@ fn test_cbor_literal_enum_uses_literal_strings() {
 #[test]
 fn test_json_constrained_alias_constructor() {
     let out = compile_with_opts("hex = tstr .size 4", json_opts());
-    assert!(out.lib_rs.contains("pub fn new(val: impl Into<String>) -> Result<Self, String> {"), "{}", out.lib_rs);
+    assert!(
+        out.lib_rs
+            .contains("pub fn new(val: impl Into<String>) -> Result<Self, String> {"),
+        "{}",
+        out.lib_rs
+    );
 }
 
 // ── Heap (non no-std) decoding ────────────────────────────────────────────────
@@ -490,7 +529,9 @@ fn test_keyword_field_local_has_no_raw_prefix() {
 fn test_bstr_array_elements_are_byte_strings() {
     // minicbor encodes Vec<u8> as an array of integers; elements must be ByteVec.
     let g = compile("reads = [* bstr]");
-    assert!(g.lib_rs.contains("pub type Reads = Vec<minicbor::bytes::ByteVec>;"));
+    assert!(g
+        .lib_rs
+        .contains("pub type Reads = Vec<minicbor::bytes::ByteVec>;"));
     assert!(g.lib_rs.contains("pub type Reads = heapless::Vec<"));
 }
 
@@ -505,7 +546,8 @@ fn test_cargo_toml_alloc_by_default() {
 fn test_json_optional_bstr_defaults_when_absent() {
     let out = compile_with_opts("op = { ? out: bstr }", json_opts());
     assert!(
-        out.lib_rs.contains("with = \"base64url_serde::option\", default"),
+        out.lib_rs
+            .contains("with = \"base64url_serde::option\", default"),
         "{}",
         out.lib_rs
     );
@@ -516,7 +558,11 @@ fn test_json_optional_bstr_defaults_when_absent() {
 #[test]
 fn test_json_bytes_follow_the_format() {
     let out = compile_with_opts("op = { data: bstr }", json_opts());
-    assert!(out.lib_rs.contains("if s.is_human_readable() {"), "{}", out.lib_rs);
+    assert!(
+        out.lib_rs.contains("if s.is_human_readable() {"),
+        "{}",
+        out.lib_rs
+    );
     assert!(out.lib_rs.contains("s.serialize_bytes(v)"));
     assert!(out.lib_rs.contains("d.deserialize_byte_buf(BytesVisitor)"));
     assert!(out.lib_rs.contains("with = \"base64url_serde\""));
@@ -530,10 +576,21 @@ fn test_json_bytes_through_aliases_arrays_and_variants() {
                val = uint / bstr\n";
     let out = compile_with_opts(src, json_opts());
     // A plain alias of bstr serializes as bytes too.
-    assert!(out.lib_rs.contains("#[serde(with = \"base64url_serde\")]\n    pub id:"), "{}", out.lib_rs);
-    assert!(out.lib_rs.contains("#[serde(with = \"base64url_serde::vec\")]"));
-    assert!(out.lib_rs.contains("with = \"base64url_serde::vec_option\", default"));
-    assert!(out.lib_rs.contains("(#[serde(with = \"base64url_serde\")] Vec<u8>),"));
+    assert!(
+        out.lib_rs
+            .contains("#[serde(with = \"base64url_serde\")]\n    pub id:"),
+        "{}",
+        out.lib_rs
+    );
+    assert!(out
+        .lib_rs
+        .contains("#[serde(with = \"base64url_serde::vec\")]"));
+    assert!(out
+        .lib_rs
+        .contains("with = \"base64url_serde::vec_option\", default"));
+    assert!(out
+        .lib_rs
+        .contains("(#[serde(with = \"base64url_serde\")] Vec<u8>),"));
     // The array alias's own helpers go through the wrappers.
     assert!(out.lib_rs.contains("base64url_serde::BytesRef(b)"));
 }
@@ -541,7 +598,9 @@ fn test_json_bytes_through_aliases_arrays_and_variants() {
 #[test]
 fn test_json_roundtrips_also_go_through_cbor() {
     let out = compile_with_opts("op = { data: bstr }", json_opts());
-    assert!(out.roundtrip_rs.contains("ciborium::into_writer(&original, &mut cbor)"));
+    assert!(out
+        .roundtrip_rs
+        .contains("ciborium::into_writer(&original, &mut cbor)"));
     assert!(out.cargo_toml.contains("ciborium = \"0.2\""));
 }
 
@@ -578,12 +637,18 @@ fn test_member_typed_true_is_a_bool() {
 
     let cbor = compile(src).lib_rs;
     assert!(cbor.contains("pub present: Option<bool>,"), "{cbor}");
-    assert!(cbor.contains("validation failed for field 'present'"), "{cbor}");
+    assert!(
+        cbor.contains("validation failed for field 'present'"),
+        "{cbor}"
+    );
     assert!(cbor.contains("pub enabled: Option<bool>,"), "{cbor}");
     assert!(!cbor.contains("Vec<u8>"), "{cbor}");
 
     let json = compile_with_opts(src, json_opts()).lib_rs;
-    assert!(json.contains("pub present: Option<FlagMapPresent>,"), "{json}");
+    assert!(
+        json.contains("pub present: Option<FlagMapPresent>,"),
+        "{json}"
+    );
     assert!(json.contains("pub const VALUE: bool = true;"), "{json}");
     assert!(json.contains("pub enabled: Option<bool>,"), "{json}");
     assert!(!json.contains("base64url_serde::option"), "{json}");
@@ -596,8 +661,16 @@ fn test_roundtrip_variant_named_default_gets_unique_test_name() {
     let src = "record = { decided_by: \"tags\" / \"default\" }";
     for out in [compile(src), compile_with_opts(src, json_opts())] {
         let rt = &out.roundtrip_rs;
-        assert_eq!(rt.matches("fn roundtrip_record_decided_by_default()").count(), 1, "{rt}");
-        assert!(rt.contains("fn roundtrip_record_decided_by_variant_default()"), "{rt}");
+        assert_eq!(
+            rt.matches("fn roundtrip_record_decided_by_default()")
+                .count(),
+            1,
+            "{rt}"
+        );
+        assert!(
+            rt.contains("fn roundtrip_record_decided_by_variant_default()"),
+            "{rt}"
+        );
         assert!(rt.contains("fn roundtrip_record_decided_by_tags()"), "{rt}");
     }
 }
@@ -610,40 +683,108 @@ fn test_tagged_member_writes_and_checks_tag() {
     assert!(lib.contains("e.str(\"stamp\")?;\n        e.tag(minicbor::data::Tag::new(1))?;\n        e.u64(self.stamp)?;"), "{lib}");
     assert!(lib.contains("let val = { if d.tag()? != minicbor::data::Tag::new(1) { return Err(DecodeError::message(\"unexpected CBOR tag\")); } d.u64()? };"), "{lib}");
     // A repeated tagged member's items each carry the tag.
-    assert!(lib.contains("pub type ReadingTimes = Vec<minicbor::data::Tagged<1, u64>>;"), "{lib}");
+    assert!(
+        lib.contains("pub type ReadingTimes = Vec<minicbor::data::Tagged<1, u64>>;"),
+        "{lib}"
+    );
 }
 
 fn no_std_opts() -> CodegenOptions {
-    CodegenOptions { no_std: true, ..CodegenOptions::default() }
+    CodegenOptions {
+        no_std: true,
+        ..CodegenOptions::default()
+    }
 }
 
 /// Issue #65: `--no-std` text and bytes are fixed-capacity heapless collections
 /// (no undeclared `'b` lifetime), decoded through the capacity-checking helpers.
 #[test]
 fn test_no_std_text_and_bytes_are_heapless() {
-    let g = compile_with_opts("msg = { name: tstr, blob: bstr, ? unit: tstr }", no_std_opts());
-    assert!(!g.lib_rs.contains("'b str") && !g.lib_rs.contains("'b [u8]"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("pub name: heapless::String<64>,"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("pub blob: heapless::Vec<u8, 64>,"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("let val = cddlc_text(d.str()?)?;"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("let val = cddlc_bytes(d.bytes()?)?;"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("pub fn cddlc_text<const N: usize>(s: &str)"), "{}", g.lib_rs);
-    assert!(g.roundtrip_rs.contains("cddlc_text(\"hello\").expect(\"fits its capacity\")"), "{}", g.roundtrip_rs);
+    let g = compile_with_opts(
+        "msg = { name: tstr, blob: bstr, ? unit: tstr }",
+        no_std_opts(),
+    );
+    assert!(
+        !g.lib_rs.contains("'b str") && !g.lib_rs.contains("'b [u8]"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.lib_rs.contains("pub name: heapless::String<64>,"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.lib_rs.contains("pub blob: heapless::Vec<u8, 64>,"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.lib_rs.contains("let val = cddlc_text(d.str()?)?;"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.lib_rs.contains("let val = cddlc_bytes(d.bytes()?)?;"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.lib_rs
+            .contains("pub fn cddlc_text<const N: usize>(s: &str)"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.roundtrip_rs
+            .contains("cddlc_text(\"hello\").expect(\"fits its capacity\")"),
+        "{}",
+        g.roundtrip_rs
+    );
     // heapless is a plain dependency: the types use it whatever the features.
-    assert!(g.cargo_toml.contains("heapless = \"0.9\"\n"), "{}", g.cargo_toml);
+    assert!(
+        g.cargo_toml.contains("heapless = \"0.9\"\n"),
+        "{}",
+        g.cargo_toml
+    );
 }
 
 /// Issue #65: a `--no-std` array is always a heapless Vec with its own
 /// encode/decode functions, which a struct holding it calls.
 #[test]
 fn test_no_std_array_has_own_functions() {
-    let g = compile_with_opts("readings = [* reading]\nreading = { v: uint }\nmsg = { r: readings }", no_std_opts());
-    assert!(g.lib_rs.contains("pub type Readings = heapless::Vec<Reading, 16>;"), "{}", g.lib_rs);
-    assert!(!g.lib_rs.contains("pub type Readings = Vec<"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("pub fn encode_readings<CddlcC, CddlcW: Write>(val: &Readings"), "{}", g.lib_rs);
+    let g = compile_with_opts(
+        "readings = [* reading]\nreading = { v: uint }\nmsg = { r: readings }",
+        no_std_opts(),
+    );
+    assert!(
+        g.lib_rs
+            .contains("pub type Readings = heapless::Vec<Reading, 16>;"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        !g.lib_rs.contains("pub type Readings = Vec<"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.lib_rs
+            .contains("pub fn encode_readings<CddlcC, CddlcW: Write>(val: &Readings"),
+        "{}",
+        g.lib_rs
+    );
     assert!(g.lib_rs.contains("pub fn decode_readings(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<Readings, DecodeError>"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("encode_readings(&self.r, e, ctx)?;"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("let val = decode_readings(d, ctx)?;"), "{}", g.lib_rs);
+    assert!(
+        g.lib_rs.contains("encode_readings(&self.r, e, ctx)?;"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.lib_rs.contains("let val = decode_readings(d, ctx)?;"),
+        "{}",
+        g.lib_rs
+    );
     assert!(g.lib_rs.contains("out.push(item).map_err(|_| DecodeError::message(\"array longer than its capacity\"))?;"), "{}", g.lib_rs);
 }
 
@@ -652,10 +793,23 @@ fn test_no_std_array_has_own_functions() {
 #[test]
 fn test_json_int_literal_enum_uses_markers() {
     let g = compile_with_opts("priority = 1 / 2 / 3", json_opts());
-    assert!(g.lib_rs.contains("Variant2(PriorityVariant2),"), "{}", g.lib_rs);
-    assert!(g.lib_rs.contains("pub const VALUE: u64 = 2;"), "{}", g.lib_rs);
+    assert!(
+        g.lib_rs.contains("Variant2(PriorityVariant2),"),
+        "{}",
+        g.lib_rs
+    );
+    assert!(
+        g.lib_rs.contains("pub const VALUE: u64 = 2;"),
+        "{}",
+        g.lib_rs
+    );
     assert!(!g.lib_rs.contains("Variant2(u64)"), "{}", g.lib_rs);
-    assert!(g.roundtrip_rs.contains("let original = Priority::Variant2(PriorityVariant2);"), "{}", g.roundtrip_rs);
+    assert!(
+        g.roundtrip_rs
+            .contains("let original = Priority::Variant2(PriorityVariant2);"),
+        "{}",
+        g.roundtrip_rs
+    );
 }
 
 /// Issue #63: a JSON `bstr` alias brings the traits its encode/decode call into scope.
@@ -663,19 +817,36 @@ fn test_json_int_literal_enum_uses_markers() {
 fn test_json_bstr_alias_imports_traits() {
     let g = compile_with_opts("blob = bstr", json_opts());
     let enc = &g.lib_rs[g.lib_rs.find("pub fn encode_Blob").unwrap()..];
-    assert!(enc.starts_with("pub fn encode_Blob(val: &Blob) -> Vec<u8> {\n    use base64::Engine;"), "{enc}");
-    assert!(g.lib_rs.contains("<serde_json::Error as serde::de::Error>::custom(e.to_string())"), "{}", g.lib_rs);
+    assert!(
+        enc.starts_with("pub fn encode_Blob(val: &Blob) -> Vec<u8> {\n    use base64::Engine;"),
+        "{enc}"
+    );
+    assert!(
+        g.lib_rs
+            .contains("<serde_json::Error as serde::de::Error>::custom(e.to_string())"),
+        "{}",
+        g.lib_rs
+    );
 }
 
 #[test]
 fn test_bstr_alias_is_a_byte_string() {
     // minicbor encodes a Vec<u8> as an array of integers; a bstr alias must be a bstr.
     let src = "payload = bstr";
-    let parsed  = cddlc_parser::parse_cddl(src, std::path::PathBuf::from("t.cddl")).expect("parse");
+    let parsed = cddlc_parser::parse_cddl(src, std::path::PathBuf::from("t.cddl")).expect("parse");
     let lowered = cddlc_ir::lower(&parsed.value, 16, 64).expect("lower");
     let out = backend_rust::RustBackend
         .generate(&lowered.module, &cddlc_codegen::CodegenOptions::default())
         .expect("generate");
-    let lib = out.files.iter().find(|f| f.path.ends_with("lib.rs")).expect("lib.rs");
-    assert!(lib.content.contains("pub type Payload = minicbor::bytes::ByteVec;"), "{}", lib.content);
+    let lib = out
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("lib.rs"))
+        .expect("lib.rs");
+    assert!(
+        lib.content
+            .contains("pub type Payload = minicbor::bytes::ByteVec;"),
+        "{}",
+        lib.content
+    );
 }

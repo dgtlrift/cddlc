@@ -25,23 +25,22 @@
 
 pub mod ast;
 pub mod error;
-pub mod pragma;
 pub mod parser;
+pub mod pragma;
 
 // Flat re-exports for convenience
 pub use ast::{
-    CddlModule, CtlOp, GroupChoice, GroupEntry, Ident, MemberEntry, MemberKind,
-    MemberKey, Occurrence, Pragma, PragmaValue, Rule, RuleKind, Span, Spanned,
-    Type, Type1, Type2, TypeOp, Value, SourceLine,
+    CddlModule, CtlOp, GroupChoice, GroupEntry, Ident, MemberEntry, MemberKey, MemberKind,
+    Occurrence, Pragma, PragmaValue, Rule, RuleKind, SourceLine, Span, Spanned, Type, Type1, Type2,
+    TypeOp, Value,
 };
 pub use error::{ParseError, ParseResult, ParseWarning, WarningKind};
-pub use parser::{parse_cddl, parse_cddl_debug, parse_type_str, format_parse_diagnostic};
+pub use parser::{format_parse_diagnostic, parse_cddl, parse_cddl_debug, parse_type_str};
 
 /// Prelude for consumers of this crate.
 pub mod prelude {
     pub use crate::{
-        parse_cddl, parse_type_str,
-        CddlModule, Rule, RuleKind, Type, Type2, Pragma, PragmaValue,
-        ParseError, ParseResult, ParseWarning,
+        parse_cddl, parse_type_str, CddlModule, ParseError, ParseResult, ParseWarning, Pragma,
+        PragmaValue, Rule, RuleKind, Type, Type2,
     };
 }

@@ -6,19 +6,17 @@
 ///   - `minicbor::Decode` implementations (with inline validation)
 ///   - Tag verification on decode, tag emission on encode
 ///   - `#![no_std]` compatible when `opts.no_std` is true
-
 use cddlc_codegen::{
-    capacity_value, constraint_to_rust_check,
-    primitive_to_rust, to_pascal_case, to_snake_case,
+    capacity_value, constraint_to_rust_check, primitive_to_rust, to_pascal_case, to_snake_case,
     Backend, CodegenError, CodegenOptions, CodegenOutput, IndentWriter,
 };
 use std::collections::HashSet;
 
-use smol_str::SmolStr;
 use cddlc_ir::{
-    AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
-    FieldDef, FieldKey, IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant, FieldDef, FieldKey,
+    IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
+use smol_str::SmolStr;
 
 /// Rust keywords (strict, reserved and edition-2024) that cannot be plain identifiers.
 
@@ -46,11 +44,17 @@ fn inline_named(ty: &TypeRef) -> Option<&str> {
 /// variants' named types.
 fn inline_edges<'m>(name: &str, module: &'m IrModule) -> Vec<&'m str> {
     match module.get(name) {
-        Some(TypeDef::Struct(s)) => s.fields.iter()
+        Some(TypeDef::Struct(s)) => s
+            .fields
+            .iter()
             .filter(|f| matches!(f.occurrence, Occurrence::Required | Occurrence::Optional))
             .filter_map(|f| inline_named(&f.ty))
             .collect(),
-        Some(TypeDef::Enum(e)) => e.variants.iter().filter_map(|v| inline_named(&v.ty)).collect(),
+        Some(TypeDef::Enum(e)) => e
+            .variants
+            .iter()
+            .filter_map(|v| inline_named(&v.ty))
+            .collect(),
         _ => vec![],
     }
 }
@@ -59,7 +63,9 @@ fn inline_edges<'m>(name: &str, module: &'m IrModule) -> Vec<&'m str> {
 /// holds `from` again, inline, so the type would have infinite size
 /// (dgtlrift/cddlc#139). A `Vec` or map in between already puts it on the heap.
 fn is_boxed(from: &str, ty: &TypeRef, module: &IrModule) -> bool {
-    let Some(start) = inline_named(ty) else { return false };
+    let Some(start) = inline_named(ty) else {
+        return false;
+    };
     let mut seen: HashSet<&str> = HashSet::new();
     let mut stack = vec![start];
     while let Some(n) = stack.pop() {
@@ -88,7 +94,8 @@ fn key_write(key: &FieldKey) -> String {
 fn module_has_boxes(module: &IrModule) -> bool {
     module.types.iter().any(|(name, def)| match def {
         TypeDef::Struct(s) => s.fields.iter().any(|f| {
-            matches!(f.occurrence, Occurrence::Required | Occurrence::Optional) && is_boxed(name, &f.ty, module)
+            matches!(f.occurrence, Occurrence::Required | Occurrence::Optional)
+                && is_boxed(name, &f.ty, module)
         }),
         TypeDef::Enum(e) => e.variants.iter().any(|v| is_boxed(name, &v.ty, module)),
         _ => false,
@@ -117,7 +124,10 @@ fn field_literal(f: &FieldDef) -> Option<&LiteralValue> {
         (&f.ty, lit),
         (TypeRef::Primitive(Primitive::Tstr), LiteralValue::Text(_))
             | (TypeRef::Primitive(Primitive::Uint), LiteralValue::Uint(_))
-            | (TypeRef::Primitive(Primitive::Int), LiteralValue::Int(_) | LiteralValue::Uint(_))
+            | (
+                TypeRef::Primitive(Primitive::Int),
+                LiteralValue::Int(_) | LiteralValue::Uint(_)
+            )
             | (TypeRef::Primitive(Primitive::Bool), LiteralValue::Bool(_))
     );
     (matches_ty && matches!(f.occurrence, Occurrence::Required | Occurrence::Optional))
@@ -144,7 +154,10 @@ fn no_std_text(expr: &str) -> String {
 /// holds one alternative only (dgtlrift/cddlc#146).
 fn lift_inline_choices(module: &IrModule) -> IrModule {
     fn liftable(cs: &[TypeRef]) -> bool {
-        cs.len() > 1 && cs.iter().all(|c| matches!(c, TypeRef::Primitive(_) | TypeRef::Named(_)))
+        cs.len() > 1
+            && cs
+                .iter()
+                .all(|c| matches!(c, TypeRef::Primitive(_) | TypeRef::Named(_)))
     }
     // The choice inside `ty` (under a tag), replaced by `name`.
     fn take(ty: &mut TypeRef, name: &SmolStr) -> Option<Vec<TypeRef>> {
@@ -164,8 +177,13 @@ fn lift_inline_choices(module: &IrModule) -> IrModule {
     for (name, def) in &module.types {
         let mut def = def.clone();
         if let TypeDef::Struct(st) = &mut def {
-            let mut slots: Vec<(&mut TypeRef, String)> = st.fields.iter_mut()
-                .map(|f| { let n = format!("{name}-{}", f.name); (&mut f.ty, n) })
+            let mut slots: Vec<(&mut TypeRef, String)> = st
+                .fields
+                .iter_mut()
+                .map(|f| {
+                    let n = format!("{name}-{}", f.name);
+                    (&mut f.ty, n)
+                })
                 .collect();
             if let Some(r) = st.rest.as_mut() {
                 slots.push((&mut r.val_ty, format!("{name}-{}-value", r.name)));
@@ -178,26 +196,40 @@ fn lift_inline_choices(module: &IrModule) -> IrModule {
                 let Some(cs) = take(ty, &ename) else { continue };
                 taken.insert(ename.clone());
                 let mut seen = std::collections::HashSet::new();
-                let variants = cs.into_iter().map(|c| {
-                    let base = match &c {
-                        TypeRef::Primitive(p) => format!("{p:?}").to_lowercase(),
-                        TypeRef::Named(n) => n.to_string(),
-                        _ => "alt".into(),
-                    };
-                    let mut vname = base.clone();
-                    let mut i = 1;
-                    while !seen.insert(vname.clone()) {
-                        i += 1;
-                        vname = format!("{base}{i}");
-                    }
-                    EnumVariant { name: vname.into(), ty: c, constraints: vec![] }
-                }).collect();
+                let variants = cs
+                    .into_iter()
+                    .map(|c| {
+                        let base = match &c {
+                            TypeRef::Primitive(p) => format!("{p:?}").to_lowercase(),
+                            TypeRef::Named(n) => n.to_string(),
+                            _ => "alt".into(),
+                        };
+                        let mut vname = base.clone();
+                        let mut i = 1;
+                        while !seen.insert(vname.clone()) {
+                            i += 1;
+                            vname = format!("{base}{i}");
+                        }
+                        EnumVariant {
+                            name: vname.into(),
+                            ty: c,
+                            constraints: vec![],
+                        }
+                    })
+                    .collect();
                 if let Some(src) = module.sources.types.get(name).cloned() {
                     out.sources.types.insert(ename.clone(), src);
                 }
-                out.types.insert(ename.clone(), TypeDef::Enum(EnumDef {
-                    name: ename, variants, tagged: None, doc: None, deprecated: false,
-                }));
+                out.types.insert(
+                    ename.clone(),
+                    TypeDef::Enum(EnumDef {
+                        name: ename,
+                        variants,
+                        tagged: None,
+                        doc: None,
+                        deprecated: false,
+                    }),
+                );
             }
         }
         out.types.insert(name.clone(), def);
@@ -210,7 +242,10 @@ fn lift_inline_choices(module: &IrModule) -> IrModule {
 /// (dgtlrift/cddlc#178).
 fn emit_any_item(w: &mut IndentWriter, opts: &CodegenOptions) {
     let (bytes, null) = if opts.no_std {
-        (format!("heapless::Vec<u8, {}>", opts.max_str), "heapless::Vec::from_slice(&[0xf6]).expect(\"fits its capacity\")".to_owned())
+        (
+            format!("heapless::Vec<u8, {}>", opts.max_str),
+            "heapless::Vec::from_slice(&[0xf6]).expect(\"fits its capacity\")".to_owned(),
+        )
     } else {
         ("Vec<u8>".to_owned(), "vec![0xf6]".to_owned())
     };
@@ -272,7 +307,10 @@ fn rust_primitive(p: &Primitive, opts: &CodegenOptions) -> String {
 /// Whether `name` is an array or table type, which with `--no-std` is encoded
 /// and decoded by its own functions.
 fn is_container(name: &str, module: Option<&IrModule>) -> bool {
-    matches!(module.and_then(|m| m.get(name)), Some(TypeDef::Array(_) | TypeDef::Map(_)))
+    matches!(
+        module.and_then(|m| m.get(name)),
+        Some(TypeDef::Array(_) | TypeDef::Map(_))
+    )
 }
 
 /// Whether `name` is encoded and decoded by its own `encode_<name>` /
@@ -286,7 +324,10 @@ fn has_codec_fns(name: &str, module: Option<&IrModule>, opts: &CodegenOptions) -
 /// The integer of an integer-literal enum variant (the `2` in `1 / 2 / 3`).
 fn int_literal(v: &EnumVariant) -> Option<&LiteralValue> {
     match (&v.ty, literal_eq(&v.constraints)) {
-        (TypeRef::Primitive(Primitive::Uint | Primitive::Int), Some(lit @ (LiteralValue::Uint(_) | LiteralValue::Int(_)))) => Some(lit),
+        (
+            TypeRef::Primitive(Primitive::Uint | Primitive::Int),
+            Some(lit @ (LiteralValue::Uint(_) | LiteralValue::Int(_))),
+        ) => Some(lit),
         _ => None,
     }
 }
@@ -304,7 +345,7 @@ fn literal_value_expr(lit: &LiteralValue, no_std: bool) -> String {
         LiteralValue::Bytes(b) if no_std => no_std_bytes(&format!("&{b:?}")),
         LiteralValue::Text(t) => format!("{t:?}.to_string()"),
         LiteralValue::Uint(n) => format!("{n}u64"),
-        LiteralValue::Int(n)  => format!("{n}i64"),
+        LiteralValue::Int(n) => format!("{n}i64"),
         LiteralValue::Bool(b) => b.to_string(),
         LiteralValue::Float(f) => format!("{f:?}"),
         LiteralValue::Null => "()".into(),
@@ -325,40 +366,53 @@ fn marker_name(owner: &str, member: &str, module: &IrModule) -> String {
 pub struct RustBackend;
 
 impl Backend for RustBackend {
-    fn language_name(&self) -> &str { "Rust" }
-    fn file_extension(&self) -> &str { "rs" }
+    fn language_name(&self) -> &str {
+        "Rust"
+    }
+    fn file_extension(&self) -> &str {
+        "rs"
+    }
 
     fn generate(
         &self,
         module: &IrModule,
-        opts:   &CodegenOptions,
+        opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "Rust", true)?;
         // A member whose type is an inline choice holds any alternative, in
         // an enum of its own (dgtlrift/cddlc#146).
         // A rule whose type would hide one the crate uses (`result` →
         // `Result`) is `<module>-<rule>` (dgtlrift/cddlc#191).
-        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::rust_reserved_renames(module));
+        let renamed =
+            cddlc_codegen::rename_types(module, &cddlc_codegen::rust_reserved_renames(module));
         let lifted = lift_inline_choices(&renamed);
         let module = &lifted;
-        let fmt_tag    = if opts.is_json() { "json" } else { "cbor" };
+        let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_name = format!("{}-{fmt_tag}", module.name);
-        let lib_src    = if opts.is_json() { emit_module_json(module, opts) } else { emit_module(module, opts) };
-        let tests_src  = if opts.is_json() { emit_roundtrip_tests_json(module, opts) } else { emit_roundtrip_tests(module, opts) };
+        let lib_src = if opts.is_json() {
+            emit_module_json(module, opts)
+        } else {
+            emit_module(module, opts)
+        };
+        let tests_src = if opts.is_json() {
+            emit_roundtrip_tests_json(module, opts)
+        } else {
+            emit_roundtrip_tests(module, opts)
+        };
         let cargo_toml = emit_cargo_toml(&crate_name, opts, module_has_boxes(module));
 
         Ok(CodegenOutput {
             files: vec![
                 cddlc_codegen::GeneratedFile {
-                    path:    format!("{}/Cargo.toml", crate_name),
+                    path: format!("{}/Cargo.toml", crate_name),
                     content: cargo_toml,
                 },
                 cddlc_codegen::GeneratedFile {
-                    path:    format!("{}/src/lib.rs", crate_name),
+                    path: format!("{}/src/lib.rs", crate_name),
                     content: lib_src,
                 },
                 cddlc_codegen::GeneratedFile {
-                    path:    format!("{}/tests/roundtrip.rs", crate_name),
+                    path: format!("{}/tests/roundtrip.rs", crate_name),
                     content: tests_src,
                 },
             ],
@@ -392,10 +446,10 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
         w.blank();
         match def {
             TypeDef::Struct(s) => emit_struct(&mut w, s, opts, module),
-            TypeDef::Enum(e)   => emit_enum(&mut w, e, opts, module),
-            TypeDef::Array(a)  => emit_array(&mut w, a, opts, module),
-            TypeDef::Alias(a)  => emit_alias(&mut w, a, opts),
-            TypeDef::Map(m)    => emit_map(&mut w, m, opts, module),
+            TypeDef::Enum(e) => emit_enum(&mut w, e, opts, module),
+            TypeDef::Array(a) => emit_array(&mut w, a, opts, module),
+            TypeDef::Alias(a) => emit_alias(&mut w, a, opts),
+            TypeDef::Map(m) => emit_map(&mut w, m, opts, module),
         }
     }
 
@@ -441,7 +495,11 @@ fn emit_bits_check(w: &mut IndentWriter, module: &IrModule) {
     w.line("}");
     w.line("#[allow(unused_imports)]");
     w.line("use cddlc_bits::BitsCheck as _;");
-    if !module.types.keys().any(|n| to_pascal_case(n) == "BitsCheck") {
+    if !module
+        .types
+        .keys()
+        .any(|n| to_pascal_case(n) == "BitsCheck")
+    {
         w.line("pub use cddlc_bits::BitsCheck;");
     }
 }
@@ -451,7 +509,9 @@ fn emit_header(w: &mut IndentWriter, module: &IrModule, opts: &CodegenOptions) {
         w.line(&l);
     }
     w.line("// Runtime: minicbor");
-    if opts.dcbor { w.line("// Encoding: deterministic (dCBOR)"); }
+    if opts.dcbor {
+        w.line("// Encoding: deterministic (dCBOR)");
+    }
     w.blank();
 
     // no_std is always feature-gated so the crate works in both environments
@@ -522,7 +582,9 @@ fn emit_header(w: &mut IndentWriter, module: &IrModule, opts: &CodegenOptions) {
     w.line("}");
     w.dedent();
     w.line("}");
-    let free: Vec<&str> = RUNTIME_TYPES.iter().copied()
+    let free: Vec<&str> = RUNTIME_TYPES
+        .iter()
+        .copied()
         .filter(|t| !module.types.keys().any(|n| to_pascal_case(n) == *t))
         .collect();
     if !free.is_empty() {
@@ -541,7 +603,9 @@ const RUNTIME_TYPES: &[&str] = &["ErrorCode", "FieldError"];
 /// a `BTreeMap` from text, or with `--no-std` a `heapless::LinearMap`.
 fn rest_type(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
     let cap = capacity_value(
-        r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        r.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     if opts.no_std {
@@ -555,7 +619,11 @@ fn rest_type(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
         };
         format!("heapless::LinearMap<{key}, {val}, {cap}>")
     } else {
-        format!("std::collections::BTreeMap<{}, {}>", rest_key_rust(r, opts), rest_value_heap(&r.val_ty, opts))
+        format!(
+            "std::collections::BTreeMap<{}, {}>",
+            rest_key_rust(r, opts),
+            rest_value_heap(&r.val_ty, opts)
+        )
     }
 }
 
@@ -571,23 +639,40 @@ fn rest_key_rust(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
 /// A test key for a map's other entries that no named member has: `"k"`, or
 /// 1000 for integer keys, through an enum's integer variant.
 fn rest_test_key(r: &cddlc_ir::MapRest, module: &IrModule, opts: &CodegenOptions) -> String {
-    let text = || if opts.no_std { no_std_text("\"k\"") } else { "\"k\".to_string()".into() };
+    let text = || {
+        if opts.no_std {
+            no_std_text("\"k\"")
+        } else {
+            "\"k\".to_string()".into()
+        }
+    };
     match &r.key_ty {
         TypeRef::Primitive(Primitive::Uint) => "1000u64".into(),
         TypeRef::Primitive(Primitive::Int) => "1000i64".into(),
         TypeRef::Named(n) => match module.get(n) {
             Some(TypeDef::Enum(e)) => {
                 let enum_name = to_pascal_case(n);
-                match e.variants.iter().find(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Int | Primitive::Uint)) && literal_eq(&v.constraints).is_none()) {
+                match e.variants.iter().find(|v| {
+                    matches!(v.ty, TypeRef::Primitive(Primitive::Int | Primitive::Uint))
+                        && literal_eq(&v.constraints).is_none()
+                }) {
                     Some(v) => {
-                        let lit = if matches!(v.ty, TypeRef::Primitive(Primitive::Uint)) { "1000u64" } else { "1000i64" };
+                        let lit = if matches!(v.ty, TypeRef::Primitive(Primitive::Uint)) {
+                            "1000u64"
+                        } else {
+                            "1000i64"
+                        };
                         format!("{enum_name}::{}({lit})", to_pascal_case(&v.name))
                     }
                     None => format!("{enum_name}::default()"),
                 }
             }
-            Some(TypeDef::Alias(a)) if matches!(a.ty, TypeRef::Primitive(Primitive::Int)) => "1000i64".into(),
-            Some(TypeDef::Alias(a)) if matches!(a.ty, TypeRef::Primitive(Primitive::Uint)) => "1000u64".into(),
+            Some(TypeDef::Alias(a)) if matches!(a.ty, TypeRef::Primitive(Primitive::Int)) => {
+                "1000i64".into()
+            }
+            Some(TypeDef::Alias(a)) if matches!(a.ty, TypeRef::Primitive(Primitive::Uint)) => {
+                "1000u64".into()
+            }
             _ => text(),
         },
         _ => text(),
@@ -598,7 +683,11 @@ fn rest_test_key(r: &cddlc_ir::MapRest, module: &IrModule, opts: &CodegenOptions
 /// a bstr is a `ByteVec`, a tagged value a `Tagged`.
 fn rest_value_heap(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Tagged(tag, inner) => format!("minicbor::data::Tagged<{}, {}>", tag.0, rest_value_heap(inner, opts)),
+        TypeRef::Tagged(tag, inner) => format!(
+            "minicbor::data::Tagged<{}, {}>",
+            tag.0,
+            rest_value_heap(inner, opts)
+        ),
         other if is_bstr(other) => "minicbor::bytes::ByteVec".to_owned(),
         other => typeref_to_rust(other, opts),
     }
@@ -610,8 +699,11 @@ fn rest_test_value(r: &cddlc_ir::MapRest, module: &IrModule, opts: &CodegenOptio
     // A plain alias of a byte string is a `ByteVec` outside `--no-std`, which
     // has no `Default` (dgtlrift/cddlc#179).
     let val = match plain_alias(&r.val_ty, Some(module)) {
-        TypeRef::Primitive(Primitive::Bstr) if !opts.no_std && !matches!(r.val_ty, TypeRef::Primitive(_)) =>
-            "minicbor::bytes::ByteVec::from(Vec::<u8>::new())".to_owned(),
+        TypeRef::Primitive(Primitive::Bstr)
+            if !opts.no_std && !matches!(r.val_ty, TypeRef::Primitive(_)) =>
+        {
+            "minicbor::bytes::ByteVec::from(Vec::<u8>::new())".to_owned()
+        }
         resolved => primitive_default_expr(resolved, opts),
     };
     let key = rest_test_key(r, module, opts);
@@ -627,9 +719,13 @@ fn rest_test_value(r: &cddlc_ir::MapRest, module: &IrModule, opts: &CodegenOptio
 
 fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, s.doc.as_deref());
-    if s.deprecated { w.line("#[deprecated]"); }
+    if s.deprecated {
+        w.line("#[deprecated]");
+    }
 
-    let has_required_literal = s.fields.iter()
+    let has_required_literal = s
+        .fields
+        .iter()
         .any(|f| f.occurrence.is_required() && field_literal(f).is_some());
     if has_required_literal {
         w.line("#[derive(Debug, Clone, PartialEq)]");
@@ -645,7 +741,11 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, modul
     }
     if let Some(r) = &s.rest {
         w.line("/// The map's other entries.");
-        w.line(&format!("pub {}: {},", field_ident(&r.name), rest_type(r, opts)));
+        w.line(&format!(
+            "pub {}: {},",
+            field_ident(&r.name),
+            rest_type(r, opts)
+        ));
     }
     w.dedent();
     w.line("}");
@@ -683,7 +783,12 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, modul
     emit_struct_decode(w, s, opts, module);
 }
 
-fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
+fn emit_struct_encode(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    opts: &CodegenOptions,
+    module: &IrModule,
+) {
     let type_name = to_pascal_case(&s.name);
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<CddlcC> Encode<CddlcC> for {} {{", type_name));
@@ -707,21 +812,34 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     }
 
     // Compute map length: required count is static; add 1 per present optional field
-    let req_count = s.fields.iter()
+    let req_count = s
+        .fields
+        .iter()
         .filter(|f| !matches!(f.occurrence, Occurrence::Optional))
         .count();
-    let has_optional = s.fields.iter().any(|f| matches!(f.occurrence, Occurrence::Optional));
+    let has_optional = s
+        .fields
+        .iter()
+        .any(|f| matches!(f.occurrence, Occurrence::Optional));
 
-    let rest_len = s.rest.as_ref()
+    let rest_len = s
+        .rest
+        .as_ref()
         .map(|r| format!(" + self.{}.len() as u64", field_ident(&r.name)))
         .unwrap_or_default();
     if !has_optional {
         w.line(&format!("e.map({}u64{rest_len})?;", req_count));
     } else {
         let mut len_expr = format!("{}u64", req_count);
-        for f in s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)) {
+        for f in s
+            .fields
+            .iter()
+            .filter(|f| matches!(f.occurrence, Occurrence::Optional))
+        {
             let fname = field_ident(&f.name);
-            len_expr.push_str(&format!(" + if self.{fname}.is_some() {{ 1 }} else {{ 0 }}"));
+            len_expr.push_str(&format!(
+                " + if self.{fname}.is_some() {{ 1 }} else {{ 0 }}"
+            ));
         }
         w.line(&format!("e.map({}{rest_len})?;", len_expr));
     }
@@ -755,7 +873,10 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     }
     // The other entries, after the named members.
     if let Some(r) = &s.rest {
-        w.line(&format!("for (k, v) in self.{}.iter() {{", field_ident(&r.name)));
+        w.line(&format!(
+            "for (k, v) in self.{}.iter() {{",
+            field_ident(&r.name)
+        ));
         w.indent();
         if cddlc_codegen::rest_keys_are_text(r, module) {
             w.line("e.str(k)?;");
@@ -781,7 +902,12 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
 /// A record's members as an array, in order (RFC 8610 §3.4). Optional members
 /// come last: those present are written up to the first absent one, and a
 /// present one after it can't be placed, so encoding fails.
-fn emit_record_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
+fn emit_record_encode(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    opts: &CodegenOptions,
+    module: &IrModule,
+) {
     // A repeated member's items go inline, where it stands; every other
     // member is required (dgtlrift/cddlc#134).
     if let Some(ri) = cddlc_codegen::record_repeated(s) {
@@ -805,8 +931,16 @@ fn emit_record_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         }
         return;
     }
-    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
-    let optional: Vec<_> = s.fields.iter().filter(|f| !f.occurrence.is_required()).collect();
+    let required = s
+        .fields
+        .iter()
+        .filter(|f| f.occurrence.is_required())
+        .count();
+    let optional: Vec<_> = s
+        .fields
+        .iter()
+        .filter(|f| !f.occurrence.is_required())
+        .collect();
     if optional.is_empty() {
         w.line(&format!("e.array({required}u64)?;"));
     } else {
@@ -860,17 +994,28 @@ fn emit_repeat_check(w: &mut IndentWriter, s: &StructDef, f: &FieldDef, n: &str,
 
 /// Reads a record: an array of the members' values, in order; optional
 /// members at the end may be left off.
-fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
+fn emit_record_decode(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    opts: &CodegenOptions,
+    module: &IrModule,
+) {
     w.line("let len = d.array()?;");
     w.line("let mut i = 0u64;");
     w.line("fn more(d: &mut Decoder<'_>, len: Option<u64>, i: u64) -> Result<bool, DecodeError> {");
     w.indent();
-    w.line("Ok(match len { Some(n) => i < n, None => d.datatype()? != minicbor::data::Type::Break })");
+    w.line(
+        "Ok(match len { Some(n) => i < n, None => d.datatype()? != minicbor::data::Type::Break })",
+    );
     w.dedent();
     w.line("}");
     // One optional member before required ones: the item count says whether
     // it's there, so count the items (on a copy, for an indefinite length).
-    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let required = s
+        .fields
+        .iter()
+        .filter(|f| f.occurrence.is_required())
+        .count();
     let before = cddlc_codegen::record_optionals_before(s);
     let middle = before.is_some();
     // A repeated member holds the items the other members leave
@@ -901,11 +1046,19 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         let decode_expr = decode_expr_for_in_module(&f.ty, opts, Some(module));
         if f.occurrence.is_repeated() {
             let heapless = opts.no_std;
-            w.line(&format!("let mut {local} = {}::new();", if heapless { "heapless::Vec" } else { "Vec" }));
+            w.line(&format!(
+                "let mut {local} = {}::new();",
+                if heapless { "heapless::Vec" } else { "Vec" }
+            ));
             w.line("for _ in 0..reps {");
             w.indent();
             w.line(&format!("let val = {decode_expr};"));
-            emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
+            emit_field_validation(
+                w,
+                &f.constraints,
+                &checked_value(&f.ty, "val", Some(module)),
+                &f.name,
+            );
             if heapless {
                 w.line(&format!(
                     "{local}.push(val).map_err(|_| DecodeError::message(\"{}: '{}' has more items than its capacity\"))?;",
@@ -920,23 +1073,40 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         } else if f.occurrence.is_required() {
             w.line("if !more(d, len, i)? {");
             w.indent();
-            w.line(&format!("return Err(DecodeError::message(\"{}: missing item '{}'\"));", s.name, f.name));
+            w.line(&format!(
+                "return Err(DecodeError::message(\"{}: missing item '{}'\"));",
+                s.name, f.name
+            ));
             w.dedent();
             w.line("}");
             w.line(&format!("let {local} = {{ let val = {decode_expr};"));
             w.indent();
-            emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
+            emit_field_validation(
+                w,
+                &f.constraints,
+                &checked_value(&f.ty, "val", Some(module)),
+                &f.name,
+            );
             w.line("val };");
             w.dedent();
             w.line("i += 1;");
         } else {
             // An optional member before required ones is present when the
             // array holds every member (dgtlrift/cddlc#134).
-            let cond = if middle { format!("count > {}", threshold(f)) } else { "more(d, len, i)?".to_owned() };
+            let cond = if middle {
+                format!("count > {}", threshold(f))
+            } else {
+                "more(d, len, i)?".to_owned()
+            };
             w.line(&format!("let {local} = if {cond} {{"));
             w.indent();
             w.line(&format!("let val = {decode_expr};"));
-            emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
+            emit_field_validation(
+                w,
+                &f.constraints,
+                &checked_value(&f.ty, "val", Some(module)),
+                &f.name,
+            );
             w.line("i += 1;");
             w.line("Some(val)");
             w.dedent();
@@ -953,7 +1123,10 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.indent();
     w.line("if d.datatype()? != minicbor::data::Type::Break {");
     w.indent();
-    w.line(&format!("return Err(DecodeError::message(\"{}: too many items\"));", s.name));
+    w.line(&format!(
+        "return Err(DecodeError::message(\"{}: too many items\"));",
+        s.name
+    ));
     w.dedent();
     w.line("}");
     w.line("d.skip()?;");
@@ -978,7 +1151,12 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("})");
 }
 
-fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
+fn emit_struct_decode(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    opts: &CodegenOptions,
+    module: &IrModule,
+) {
     let type_name = to_pascal_case(&s.name);
 
     w.line("#[allow(unused_variables)]");
@@ -1011,14 +1189,23 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     // double-wrap with Option<Option<T>>; other occurrences use field_type_str.
     for f in &s.fields {
         let var_ty = match &f.occurrence {
-            Occurrence::Optional if is_boxed(&s.name, &f.ty, module) => format!("Box<{}>", typeref_to_rust(&f.ty, opts)),
+            Occurrence::Optional if is_boxed(&s.name, &f.ty, module) => {
+                format!("Box<{}>", typeref_to_rust(&f.ty, opts))
+            }
             Occurrence::Optional => typeref_to_rust(member_alias(&f.ty, module, opts), opts),
             _ => member_type(&s.name, f, opts, module),
         };
-        w.line(&format!("let mut {}: Option<{}> = None;", field_local(&f.name), var_ty));
+        w.line(&format!(
+            "let mut {}: Option<{}> = None;",
+            field_local(&f.name),
+            var_ty
+        ));
     }
     if let Some(r) = &s.rest {
-        w.line(&format!("let mut rest = {}::new();", rest_type(r, opts).split('<').next().unwrap_or_default()));
+        w.line(&format!(
+            "let mut rest = {}::new();",
+            rest_type(r, opts).split('<').next().unwrap_or_default()
+        ));
     }
     w.blank();
 
@@ -1033,7 +1220,10 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     // integer (dgtlrift/cddlc#176); one with only text keys reads text.
     // Other entries with integer keys (COSE's `* label => values`) are read
     // again as their key type from where the key starts (dgtlrift/cddlc#136).
-    let rest_typed = s.rest.as_ref().filter(|r| !cddlc_codegen::rest_keys_are_text(r, module));
+    let rest_typed = s
+        .rest
+        .as_ref()
+        .filter(|r| !cddlc_codegen::rest_keys_are_text(r, module));
     let int_keys = cddlc_codegen::has_int_keys(s) || rest_typed.is_some();
     if rest_typed.is_some() {
         w.line("let key_start = d.clone();");
@@ -1064,7 +1254,12 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         w.line(&format!("let val = {};", decode_expr));
 
         // Inline validation
-        emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
+        emit_field_validation(
+            w,
+            &f.constraints,
+            &checked_value(&f.ty, "val", Some(module)),
+            &f.name,
+        );
 
         if is_boxed(&s.name, &f.ty, module) {
             w.line(&format!("{local} = Some(Box::new(val));"));
@@ -1081,9 +1276,17 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             w.line("_ => {");
             w.indent();
             w.line("let mut kd = key_start;");
-            w.line(&format!("let k = {};", decode_expr_for_in_module(&r.key_ty, opts, Some(module)).replace("(d,", "(&mut kd,").replace("d.", "kd.")));
+            w.line(&format!(
+                "let k = {};",
+                decode_expr_for_in_module(&r.key_ty, opts, Some(module))
+                    .replace("(d,", "(&mut kd,")
+                    .replace("d.", "kd.")
+            ));
             if opts.no_std {
-                w.line(&format!("let val = {};", decode_expr_for_in_module(&r.val_ty, opts, Some(module))));
+                w.line(&format!(
+                    "let val = {};",
+                    decode_expr_for_in_module(&r.val_ty, opts, Some(module))
+                ));
                 w.line("rest.insert(k, val).map_err(|_| DecodeError::message(\"map larger than its capacity\"))?;");
             } else {
                 w.line("rest.insert(k, d.decode()?);");
@@ -1093,19 +1296,32 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         }
         // Other keys are the map's other entries.
         Some(r) if opts.no_std => {
-            w.line(if int_keys { "CddlcKey::Text(key) => {" } else { "_ => {" });
+            w.line(if int_keys {
+                "CddlcKey::Text(key) => {"
+            } else {
+                "_ => {"
+            });
             w.indent();
-            w.line(&format!("let val = {};", decode_expr_for_in_module(&r.val_ty, opts, Some(module))));
+            w.line(&format!(
+                "let val = {};",
+                decode_expr_for_in_module(&r.val_ty, opts, Some(module))
+            ));
             w.line("rest.insert(cddlc_text(key)?, val).map_err(|_| DecodeError::message(\"map larger than its capacity\"))?;");
             w.dedent();
             w.line("}");
             if int_keys {
-                w.line(&format!("_ => {{ return Err(DecodeError::message(\"{}: unknown member\")); }}", s.name));
+                w.line(&format!(
+                    "_ => {{ return Err(DecodeError::message(\"{}: unknown member\")); }}",
+                    s.name
+                ));
             }
         }
         Some(_) if int_keys => {
             w.line("CddlcKey::Text(key) => { rest.insert(key.to_string(), d.decode()?); }");
-            w.line(&format!("_ => {{ return Err(DecodeError::message(\"{}: unknown member\")); }}", s.name));
+            w.line(&format!(
+                "_ => {{ return Err(DecodeError::message(\"{}: unknown member\")); }}",
+                s.name
+            ));
         }
         Some(_) => w.line("_ => { rest.insert(key.to_string(), d.decode()?); }"),
         // A map has only the members its schema gives it (RFC 8610 §3.5;
@@ -1138,9 +1354,7 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
                 w.line(&format!("{snake}: {local},"));
             }
             _ => {
-                w.line(&format!(
-                    "{snake}: {local}.unwrap_or_default(),",
-                ));
+                w.line(&format!("{snake}: {local}.unwrap_or_default(),",));
             }
         }
     }
@@ -1165,17 +1379,25 @@ fn ord_derives(e: &EnumDef) -> &'static str {
         TypeRef::Primitive(p) => !is_float(p),
         _ => false,
     });
-    if ordered { ", Eq, PartialOrd, Ord" } else { "" }
+    if ordered {
+        ", Eq, PartialOrd, Ord"
+    } else {
+        ""
+    }
 }
 
 fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, e.doc.as_deref());
-    if e.deprecated { w.line("#[deprecated]"); }
+    if e.deprecated {
+        w.line("#[deprecated]");
+    }
 
     // Check if first variant is a unit variant (can use #[derive(Default)] + #[default])
-    let first_is_unit = e.variants.first().map(|v|
-        matches!(&v.ty, TypeRef::Primitive(Primitive::Null))
-    ).unwrap_or(true);
+    let first_is_unit = e
+        .variants
+        .first()
+        .map(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null)))
+        .unwrap_or(true);
 
     let ord = ord_derives(e);
     if first_is_unit {
@@ -1187,7 +1409,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &
     w.indent();
     for (i, v) in e.variants.iter().enumerate() {
         let vname = to_pascal_case(&v.name);
-        if i == 0 && first_is_unit { w.line("#[default]"); }
+        if i == 0 && first_is_unit {
+            w.line("#[default]");
+        }
         match &v.ty {
             TypeRef::Primitive(Primitive::Null) => w.line(&format!("{vname},")),
             TypeRef::Primitive(p) => {
@@ -1211,7 +1435,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &
     if !first_is_unit {
         if let Some(v) = e.variants.first() {
             let type_name = to_pascal_case(&e.name);
-            let vname     = to_pascal_case(&v.name);
+            let vname = to_pascal_case(&v.name);
             w.blank();
             w.line(&format!("impl Default for {type_name} {{"));
             w.indent();
@@ -1220,23 +1444,31 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &
             let default_inner = match &v.ty {
                 TypeRef::Primitive(Primitive::Uint) => {
                     // For literal integer variants ("Variant1" etc.), store the literal value
-                    v.name.as_str().strip_prefix("Variant")
+                    v.name
+                        .as_str()
+                        .strip_prefix("Variant")
                         .and_then(|s| s.parse::<u64>().ok())
                         .map(|n| format!("{n}u64"))
                         .unwrap_or_else(|| "0u64".into())
                 }
-                TypeRef::Primitive(Primitive::Int) => {
-                    v.name.as_str().strip_prefix("Variant")
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .map(|n| format!("{n}i64"))
-                        .unwrap_or_else(|| "0i64".into())
-                }
+                TypeRef::Primitive(Primitive::Int) => v
+                    .name
+                    .as_str()
+                    .strip_prefix("Variant")
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .map(|n| format!("{n}i64"))
+                    .unwrap_or_else(|| "0i64".into()),
                 TypeRef::Primitive(Primitive::Bool) => "false".into(),
-                TypeRef::Primitive(Primitive::Float | Primitive::Float32 |
-                                   Primitive::Float64 | Primitive::Float16) => "0.0".into(),
+                TypeRef::Primitive(
+                    Primitive::Float | Primitive::Float32 | Primitive::Float64 | Primitive::Float16,
+                ) => "0.0".into(),
                 TypeRef::Primitive(Primitive::Tstr) => {
                     let lit = variant_str(v);
-                    if opts.no_std { no_std_text(&format!("{lit:?}")) } else { format!("{lit:?}.to_string()") }
+                    if opts.no_std {
+                        no_std_text(&format!("{lit:?}"))
+                    } else {
+                        format!("{lit:?}.to_string()")
+                    }
                 }
                 TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "Default::default()".into(),
                 TypeRef::Named(n) => format!("{}::default()", to_pascal_case(n)),
@@ -1280,48 +1512,99 @@ fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
             // `heapless::String` / `heapless::Vec<u8, N>` (`--no-std`) have the
             // same `as_str` / `as_slice` as `String` / `Vec<u8>`.
             TypeRef::Primitive(Primitive::Tstr) => {
-                w.line(&format!("{}::{}(s) => {{ e.str(s.as_str())?; }}", type_vname, vname));
+                w.line(&format!(
+                    "{}::{}(s) => {{ e.str(s.as_str())?; }}",
+                    type_vname, vname
+                ));
             }
             TypeRef::Primitive(Primitive::Bstr) => {
-                w.line(&format!("{}::{}(b) => {{ e.bytes(b.as_slice())?; }}", type_vname, vname));
+                w.line(&format!(
+                    "{}::{}(b) => {{ e.bytes(b.as_slice())?; }}",
+                    type_vname, vname
+                ));
             }
             // The encoded item, written back unchanged (dgtlrift/cddlc#178).
             TypeRef::Primitive(Primitive::Any) => {
-                w.line(&format!("{}::{}(x) => {{ e.encode(x)?; }}", type_vname, vname));
+                w.line(&format!(
+                    "{}::{}(x) => {{ e.encode(x)?; }}",
+                    type_vname, vname
+                ));
             }
             TypeRef::Primitive(Primitive::Undefined) => {
-                w.line(&format!("{}::{}(_) => {{ e.undefined()?; }}", type_vname, vname));
+                w.line(&format!(
+                    "{}::{}(_) => {{ e.undefined()?; }}",
+                    type_vname, vname
+                ));
             }
             TypeRef::Primitive(Primitive::Bool) => {
-                w.line(&format!("{}::{}(b) => {{ e.bool(*b)?; }}", type_vname, vname));
+                w.line(&format!(
+                    "{}::{}(b) => {{ e.bool(*b)?; }}",
+                    type_vname, vname
+                ));
             }
             TypeRef::Primitive(Primitive::Uint) => {
                 // For literal integer variants ("Variant1" etc.), always encode the literal
-                if let Some(lit) = v.name.as_str().strip_prefix("Variant").and_then(|s| s.parse::<u64>().ok()) {
-                    w.line(&format!("{}::{}(_) => {{ e.u64({lit}u64)?; }}", type_vname, vname));
+                if let Some(lit) = v
+                    .name
+                    .as_str()
+                    .strip_prefix("Variant")
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    w.line(&format!(
+                        "{}::{}(_) => {{ e.u64({lit}u64)?; }}",
+                        type_vname, vname
+                    ));
                 } else {
-                    w.line(&format!("{}::{}(n) => {{ e.u64(*n)?; }}", type_vname, vname));
+                    w.line(&format!(
+                        "{}::{}(n) => {{ e.u64(*n)?; }}",
+                        type_vname, vname
+                    ));
                 }
             }
             TypeRef::Primitive(Primitive::Int) => {
-                if let Some(lit) = v.name.as_str().strip_prefix("Variant").and_then(|s| s.parse::<i64>().ok()) {
-                    w.line(&format!("{}::{}(_) => {{ e.i64({lit}i64)?; }}", type_vname, vname));
+                if let Some(lit) = v
+                    .name
+                    .as_str()
+                    .strip_prefix("Variant")
+                    .and_then(|s| s.parse::<i64>().ok())
+                {
+                    w.line(&format!(
+                        "{}::{}(_) => {{ e.i64({lit}i64)?; }}",
+                        type_vname, vname
+                    ));
                 } else {
-                    w.line(&format!("{}::{}(n) => {{ e.i64(*n as i64)?; }}", type_vname, vname));
+                    w.line(&format!(
+                        "{}::{}(n) => {{ e.i64(*n as i64)?; }}",
+                        type_vname, vname
+                    ));
                 }
             }
             TypeRef::Primitive(p) if is_integer(p) => {
-                w.line(&format!("{}::{}(n) => {{ e.i64(*n as i64)?; }}", type_vname, vname));
+                w.line(&format!(
+                    "{}::{}(n) => {{ e.i64(*n as i64)?; }}",
+                    type_vname, vname
+                ));
             }
             TypeRef::Primitive(p) if is_float(p) => {
-                w.line(&format!("{}::{}(f) => {{ e.f64(*f as f64)?; }}", type_vname, vname));
+                w.line(&format!(
+                    "{}::{}(f) => {{ e.f64(*f as f64)?; }}",
+                    type_vname, vname
+                ));
             }
             // With `--no-std`, an array or table variant has its own encoder.
             TypeRef::Named(n) if has_codec_fns(n, Some(module), opts) => {
-                w.line(&format!("{}::{}(inner) => {{ encode_{}(inner, e, ctx)?; }}", type_vname, vname, to_snake_case(n)));
+                w.line(&format!(
+                    "{}::{}(inner) => {{ encode_{}(inner, e, ctx)?; }}",
+                    type_vname,
+                    vname,
+                    to_snake_case(n)
+                ));
             }
             TypeRef::Named(_) => {
-                w.line(&format!("{}::{}(inner) => {{ inner.encode(e, ctx)?; }}", type_vname, vname));
+                w.line(&format!(
+                    "{}::{}(inner) => {{ inner.encode(e, ctx)?; }}",
+                    type_vname, vname
+                ));
             }
             _ => {
                 w.line(&format!("{}::{} => {{ e.null()?; }}", type_vname, vname));
@@ -1359,14 +1642,14 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
     w.indent();
 
     // Group variants by their expected CBOR type
-    let mut has_str   = false;
-    let mut has_bool  = false;
-    let mut has_int   = false;
-    let mut has_map   = false;
+    let mut has_str = false;
+    let mut has_bool = false;
+    let mut has_int = false;
+    let mut has_map = false;
 
     for v in &e.variants {
         match &v.ty {
-            TypeRef::Primitive(Primitive::Tstr) => has_str  = true,
+            TypeRef::Primitive(Primitive::Tstr) => has_str = true,
             TypeRef::Primitive(Primitive::Bool) => has_bool = true,
             TypeRef::Primitive(p) if is_integer(p) => has_int = true,
             TypeRef::Named(_) => has_map = true,
@@ -1382,17 +1665,33 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
         w.line("let s = d.str()?;");
         w.line("match s {");
         w.indent();
-        let val: &str = if opts.no_std { "cddlc_text(s)?" } else { "s.to_string()" };
+        let val: &str = if opts.no_std {
+            "cddlc_text(s)?"
+        } else {
+            "s.to_string()"
+        };
         for v in &e.variants {
-            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && literal_eq(&v.constraints).is_some() {
-                let vname    = to_pascal_case(&v.name);
+            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr))
+                && literal_eq(&v.constraints).is_some()
+            {
+                let vname = to_pascal_case(&v.name);
                 let cddl_str = variant_str(v);
-                w.line(&format!("{:?} => Ok({}::{}({val})),", cddl_str, enum_name, vname));
+                w.line(&format!(
+                    "{:?} => Ok({}::{}({val})),",
+                    cddl_str, enum_name, vname
+                ));
             }
         }
         // A `tstr` alternative without a literal takes any other text.
-        match e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && literal_eq(&v.constraints).is_none()) {
-            Some(v) => w.line(&format!("_ => Ok({}::{}({val})),", enum_name, to_pascal_case(&v.name))),
+        match e.variants.iter().find(|v| {
+            matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr))
+                && literal_eq(&v.constraints).is_none()
+        }) {
+            Some(v) => w.line(&format!(
+                "_ => Ok({}::{}({val})),",
+                enum_name,
+                to_pascal_case(&v.name)
+            )),
             None => w.line("_ => Err(DecodeError::message(\"unknown enum variant\")),"),
         }
         w.dedent();
@@ -1409,18 +1708,24 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
         w.indent();
 
         // Collect integer variants and check if all are literal (named "VariantN")
-        let int_vars: Vec<(&EnumVariant, i64)> = e.variants.iter()
+        let int_vars: Vec<(&EnumVariant, i64)> = e
+            .variants
+            .iter()
             .filter(|v| matches!(&v.ty, TypeRef::Primitive(p) if is_integer(p)))
             .filter_map(|v| {
-                v.name.as_str().strip_prefix("Variant")
+                v.name
+                    .as_str()
+                    .strip_prefix("Variant")
                     .and_then(|s| s.parse::<i64>().ok())
                     .map(|lit| (v, lit))
             })
             .collect();
 
-        let all_literal = int_vars.len() == e.variants.iter()
-            .filter(|v| matches!(&v.ty, TypeRef::Primitive(p) if is_integer(p)))
-            .count();
+        let all_literal = int_vars.len()
+            == e.variants
+                .iter()
+                .filter(|v| matches!(&v.ty, TypeRef::Primitive(p) if is_integer(p)))
+                .count();
 
         if all_literal && !int_vars.is_empty() {
             // Literal integer enum: decode the value and match against each literal
@@ -1431,7 +1736,7 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
                 let vname = to_pascal_case(&v.name);
                 let inner = match &v.ty {
                     TypeRef::Primitive(Primitive::Uint) => format!("{lit}u64"),
-                    _                                   => format!("{lit}i64"),
+                    _ => format!("{lit}i64"),
                 };
                 w.line(&format!("{lit} => Ok({}::{}({inner})),", enum_name, vname));
             }
@@ -1444,7 +1749,12 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
                 if let TypeRef::Primitive(p) = &v.ty {
                     if is_integer(p) {
                         let vname = to_pascal_case(&v.name);
-                        w.line(&format!("Ok({}::{}(d.{}()?))", enum_name, vname, decode_fn_for_primitive(p)));
+                        w.line(&format!(
+                            "Ok({}::{}(d.{}()?))",
+                            enum_name,
+                            vname,
+                            decode_fn_for_primitive(p)
+                        ));
                         break;
                     }
                 }
@@ -1469,21 +1779,45 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
     }
 
     // Byte strings, null, undefined and floats.
-    let first = |pred: &dyn Fn(&Primitive) -> bool| e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(p) if pred(p)));
+    let first = |pred: &dyn Fn(&Primitive) -> bool| {
+        e.variants
+            .iter()
+            .find(|v| matches!(&v.ty, TypeRef::Primitive(p) if pred(p)))
+    };
     // An `any` variant takes whatever no other variant does (dgtlrift/cddlc#178).
-    let any = first(&|p| *p == Primitive::Any).map(|v| format!("Ok({enum_name}::{}(d.decode::<AnyItem>()?))", to_pascal_case(&v.name)));
+    let any = first(&|p| *p == Primitive::Any).map(|v| {
+        format!(
+            "Ok({enum_name}::{}(d.decode::<AnyItem>()?))",
+            to_pascal_case(&v.name)
+        )
+    });
     if let Some(v) = first(&|p| *p == Primitive::Bstr) {
-        let val = if opts.no_std { "cddlc_bytes(d.bytes()?)?" } else { "d.bytes()?.to_vec()" };
-        w.line(&format!("minicbor::data::Type::Bytes => Ok({enum_name}::{}({val})),", to_pascal_case(&v.name)));
+        let val = if opts.no_std {
+            "cddlc_bytes(d.bytes()?)?"
+        } else {
+            "d.bytes()?.to_vec()"
+        };
+        w.line(&format!(
+            "minicbor::data::Type::Bytes => Ok({enum_name}::{}({val})),",
+            to_pascal_case(&v.name)
+        ));
     }
     if let Some(v) = first(&|p| *p == Primitive::Null) {
-        w.line(&format!("minicbor::data::Type::Null => {{ d.skip()?; Ok({enum_name}::{}) }}", to_pascal_case(&v.name)));
+        w.line(&format!(
+            "minicbor::data::Type::Null => {{ d.skip()?; Ok({enum_name}::{}) }}",
+            to_pascal_case(&v.name)
+        ));
     }
     if let Some(v) = first(&|p| *p == Primitive::Undefined) {
-        w.line(&format!("minicbor::data::Type::Undefined => {{ d.skip()?; Ok({enum_name}::{}(())) }}", to_pascal_case(&v.name)));
+        w.line(&format!(
+            "minicbor::data::Type::Undefined => {{ d.skip()?; Ok({enum_name}::{}(())) }}",
+            to_pascal_case(&v.name)
+        ));
     }
     if let Some(v) = first(&|p| is_float(p)) {
-        let TypeRef::Primitive(p) = &v.ty else { unreachable!() };
+        let TypeRef::Primitive(p) = &v.ty else {
+            unreachable!()
+        };
         w.line(&format!(
             "minicbor::data::Type::F16 | minicbor::data::Type::F32 | minicbor::data::Type::F64 => Ok({enum_name}::{}(d.{}()?)),",
             to_pascal_case(&v.name), decode_fn_for_primitive(p)
@@ -1502,7 +1836,10 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
                 w.indent();
                 w.line("let mut probe = d.clone();");
                 if has_codec_fns(n, Some(module), opts) {
-                    w.line(&format!("if let Ok(inner) = decode_{}(&mut probe, ctx) {{", to_snake_case(n)));
+                    w.line(&format!(
+                        "if let Ok(inner) = decode_{}(&mut probe, ctx) {{",
+                        to_snake_case(n)
+                    ));
                 } else {
                     w.line(&format!(
                         "if let Ok(inner) = <{} as Decode<'b, ()>>::decode(&mut probe, ctx) {{",
@@ -1512,7 +1849,9 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
                 w.indent();
                 w.line("*d = probe;");
                 if is_boxed(&e.name, &v.ty, module) {
-                    w.line(&format!("return Ok({enum_name}::{vname}(Box::new(inner)));"));
+                    w.line(&format!(
+                        "return Ok({enum_name}::{vname}(Box::new(inner)));"
+                    ));
                 } else {
                     w.line(&format!("return Ok({enum_name}::{vname}(inner));"));
                 }
@@ -1546,7 +1885,9 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
 
 fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, a.doc.as_deref());
-    if a.deprecated { w.line("#[deprecated]"); }
+    if a.deprecated {
+        w.line("#[deprecated]");
+    }
 
     let type_name = to_pascal_case(&a.name);
     if a.flat {
@@ -1558,23 +1899,31 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module:
         return;
     }
     // minicbor encodes a `Vec<u8>` element as an array of integers; `ByteVec` is a bstr.
-    let heap_inner = |ty: &TypeRef| if is_bstr(ty) {
-        "minicbor::bytes::ByteVec".to_owned()
-    } else {
-        typeref_to_rust(ty, opts)
+    let heap_inner = |ty: &TypeRef| {
+        if is_bstr(ty) {
+            "minicbor::bytes::ByteVec".to_owned()
+        } else {
+            typeref_to_rust(ty, opts)
+        }
     };
     // The array is a plain `Vec` alias encoded by minicbor's blanket impls, so a
     // tagged element (`[* #6.1(uint)]`) is wrapped in `minicbor::data::Tagged`,
     // which writes and checks the tag per item (dgtlrift/cddlc#47).
     let (elem_ty, heap_elem_ty) = match &a.element {
         TypeRef::Tagged(tag, inner) => (
-            format!("minicbor::data::Tagged<{}, {}>", tag.0, typeref_to_rust(inner, opts)),
+            format!(
+                "minicbor::data::Tagged<{}, {}>",
+                tag.0,
+                typeref_to_rust(inner, opts)
+            ),
             format!("minicbor::data::Tagged<{}, {}>", tag.0, heap_inner(inner)),
         ),
         other => (typeref_to_rust(other, opts), heap_inner(other)),
     };
-    let cap       = capacity_value(
-        a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+    let cap = capacity_value(
+        a.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
 
@@ -1600,10 +1949,14 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module:
 /// `heapless::LinearMap` with its own encode/decode functions (dgtlrift/cddlc#82).
 fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, m.doc.as_deref());
-    if m.deprecated { w.line("#[deprecated]"); }
+    if m.deprecated {
+        w.line("#[deprecated]");
+    }
     let type_name = to_pascal_case(&m.name);
     let cap = capacity_value(
-        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        m.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     let plain = |ty: &TypeRef| match ty {
@@ -1617,7 +1970,11 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &Ir
             TypeRef::Tagged(tag, inner) => format!(
                 "minicbor::data::Tagged<{}, {}>",
                 tag.0,
-                if is_bstr(inner) { "minicbor::bytes::ByteVec".to_owned() } else { typeref_to_rust(inner, opts) }
+                if is_bstr(inner) {
+                    "minicbor::bytes::ByteVec".to_owned()
+                } else {
+                    typeref_to_rust(inner, opts)
+                }
             ),
             other if is_bstr(other) => "minicbor::bytes::ByteVec".to_owned(),
             other => typeref_to_rust(other, opts),
@@ -1626,13 +1983,15 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &Ir
         w.line("#[cfg(not(feature = \"no-std\"))]");
         w.line(&format!(
             "pub type {type_name} = std::collections::BTreeMap<{}, {}>;",
-            heap(&m.key_ty), heap(&m.val_ty)
+            heap(&m.key_ty),
+            heap(&m.val_ty)
         ));
         w.line("#[allow(unexpected_cfgs)]");
         w.line("#[cfg(feature = \"no-std\")]");
         w.line(&format!(
             "pub type {type_name} = heapless::LinearMap<{}, {}, {cap}>;",
-            plain(&m.key_ty), plain(&m.val_ty)
+            plain(&m.key_ty),
+            plain(&m.val_ty)
         ));
         return;
     }
@@ -1640,7 +1999,8 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &Ir
     let snake = to_snake_case(&m.name);
     w.line(&format!(
         "pub type {type_name} = heapless::LinearMap<{}, {}, {cap}>;",
-        plain(&m.key_ty), plain(&m.val_ty)
+        plain(&m.key_ty),
+        plain(&m.val_ty)
     ));
     w.blank();
     w.line(&format!("/// Writes a `{type_name}` as a CBOR map."));
@@ -1663,7 +2023,9 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &Ir
     w.dedent();
     w.line("}");
     w.blank();
-    w.line(&format!("/// Reads a `{type_name}`; fails past its capacity of {cap}."));
+    w.line(&format!(
+        "/// Reads a `{type_name}`; fails past its capacity of {cap}."
+    ));
     w.line("#[allow(unused_variables)]");
     w.line(&format!(
         "pub fn decode_{snake}(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<{type_name}, DecodeError> {{"
@@ -1679,8 +2041,14 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &Ir
     w.indent();
     w.line("match len { Some(n) if i >= n => break, None if d.datatype()? == minicbor::data::Type::Break => { d.skip()?; break }, _ => {} }");
     w.line("i += 1;");
-    w.line(&format!("let key = {};", decode_expr_for_in_module(&m.key_ty, opts, Some(module))));
-    w.line(&format!("let value = {};", decode_expr_for_in_module(&m.val_ty, opts, Some(module))));
+    w.line(&format!(
+        "let key = {};",
+        decode_expr_for_in_module(&m.key_ty, opts, Some(module))
+    ));
+    w.line(&format!(
+        "let value = {};",
+        decode_expr_for_in_module(&m.val_ty, opts, Some(module))
+    ));
     w.line("out.insert(key, value).map_err(|_| DecodeError::message(\"map larger than its capacity\"))?;");
     w.dedent();
     w.line("}");
@@ -1696,26 +2064,38 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &Ir
 fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module: &IrModule) {
     let type_name = to_pascal_case(&a.name);
     let snake = to_snake_case(&a.name);
-    let TypeRef::Named(entry) = &a.element else { return };
-    let Some(TypeDef::Struct(rec)) = module.get(entry) else { return };
+    let TypeRef::Named(entry) = &a.element else {
+        return;
+    };
+    let Some(TypeDef::Struct(rec)) = module.get(entry) else {
+        return;
+    };
     let elem = to_pascal_case(entry);
     let width = rec.fields.len();
     let cap = capacity_value(
-        a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        a.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     if opts.no_std {
-        w.line(&format!("pub type {type_name} = heapless::Vec<{elem}, {cap}>;"));
+        w.line(&format!(
+            "pub type {type_name} = heapless::Vec<{elem}, {cap}>;"
+        ));
     } else {
         w.line("#[allow(unexpected_cfgs)]");
         w.line("#[cfg(not(feature = \"no-std\"))]");
         w.line(&format!("pub type {type_name} = Vec<{elem}>;"));
         w.line("#[allow(unexpected_cfgs)]");
         w.line("#[cfg(feature = \"no-std\")]");
-        w.line(&format!("pub type {type_name} = heapless::Vec<{elem}, {cap}>;"));
+        w.line(&format!(
+            "pub type {type_name} = heapless::Vec<{elem}, {cap}>;"
+        ));
     }
     w.blank();
-    w.line(&format!("/// Writes a `{type_name}`: each `{elem}`'s {width} members, inline, in one CBOR array."));
+    w.line(&format!(
+        "/// Writes a `{type_name}`: each `{elem}`'s {width} members, inline, in one CBOR array."
+    ));
     w.line("#[allow(unused_variables)]");
     w.line(&format!(
         "pub fn encode_{snake}<CddlcC, CddlcW: Write>(val: &{type_name}, e: &mut Encoder<CddlcW>, ctx: &mut CddlcC) -> Result<(), EncodeError<CddlcW::Error>> {{"
@@ -1728,7 +2108,14 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
     w.line("for item in val.iter() {");
     w.indent();
     for f in &rec.fields {
-        emit_encode_value(w, &f.ty, &format!("item.{}", field_ident(&f.name)), &Occurrence::Required, opts, Some(module));
+        emit_encode_value(
+            w,
+            &f.ty,
+            &format!("item.{}", field_ident(&f.name)),
+            &Occurrence::Required,
+            opts,
+            Some(module),
+        );
     }
     w.dedent();
     w.line("}");
@@ -1736,7 +2123,9 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
     w.dedent();
     w.line("}");
     w.blank();
-    w.line(&format!("/// Reads a `{type_name}`: groups of {width} items, each one `{elem}`."));
+    w.line(&format!(
+        "/// Reads a `{type_name}`: groups of {width} items, each one `{elem}`."
+    ));
     w.line("#[allow(unused_variables, unused_mut)]");
     w.line(&format!(
         "pub fn decode_{snake}(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<{type_name}, DecodeError> {{"
@@ -1759,9 +2148,17 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
     let mut names = Vec::new();
     for f in &rec.fields {
         let local = field_local(&f.name);
-        w.line(&format!("let {local} = {{ let val = {};", decode_expr_for_in_module(&f.ty, opts, Some(module))));
+        w.line(&format!(
+            "let {local} = {{ let val = {};",
+            decode_expr_for_in_module(&f.ty, opts, Some(module))
+        ));
         w.indent();
-        emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
+        emit_field_validation(
+            w,
+            &f.constraints,
+            &checked_value(&f.ty, "val", Some(module)),
+            &f.name,
+        );
         w.line("val };");
         w.dedent();
         names.push(format!("{}: {local}", field_ident(&f.name)));
@@ -1790,10 +2187,14 @@ fn emit_array_no_std(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, 
         other => typeref_to_rust(other, opts),
     };
     let cap = capacity_value(
-        a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        a.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
-    w.line(&format!("pub type {type_name} = heapless::Vec<{elem}, {cap}>;"));
+    w.line(&format!(
+        "pub type {type_name} = heapless::Vec<{elem}, {cap}>;"
+    ));
     w.blank();
     w.line(&format!("/// Writes a `{type_name}` as a CBOR array."));
     w.line("#[allow(unused_variables)]");
@@ -1814,7 +2215,9 @@ fn emit_array_no_std(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, 
     w.dedent();
     w.line("}");
     w.blank();
-    w.line(&format!("/// Reads a `{type_name}`; fails past its capacity of {cap}."));
+    w.line(&format!(
+        "/// Reads a `{type_name}`; fails past its capacity of {cap}."
+    ));
     w.line("#[allow(unused_variables)]");
     w.line(&format!(
         "pub fn decode_{snake}(d: &mut Decoder<'_>, ctx: &mut ()) -> Result<{type_name}, DecodeError> {{"
@@ -1830,8 +2233,13 @@ fn emit_array_no_std(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, 
     w.indent();
     w.line("match len { Some(n) if i >= n => break, None if d.datatype()? == minicbor::data::Type::Break => { d.skip()?; break }, _ => {} }");
     w.line("i += 1;");
-    w.line(&format!("let item = {};", decode_expr_for_in_module(&a.element, opts, Some(module))));
-    w.line("out.push(item).map_err(|_| DecodeError::message(\"array longer than its capacity\"))?;");
+    w.line(&format!(
+        "let item = {};",
+        decode_expr_for_in_module(&a.element, opts, Some(module))
+    ));
+    w.line(
+        "out.push(item).map_err(|_| DecodeError::message(\"array longer than its capacity\"))?;",
+    );
     w.dedent();
     w.line("}");
     w.line("Ok(out)");
@@ -1842,9 +2250,13 @@ fn emit_array_no_std(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, 
 /// A text or byte value of length `n`, for a size-constrained default or test value.
 fn sized_value(ty: &TypeRef, n: usize, opts: &CodegenOptions) -> Option<String> {
     match ty {
-        TypeRef::Primitive(Primitive::Tstr) if opts.no_std => Some(no_std_text(&format!("{:?}", "a".repeat(n)))),
+        TypeRef::Primitive(Primitive::Tstr) if opts.no_std => {
+            Some(no_std_text(&format!("{:?}", "a".repeat(n))))
+        }
         TypeRef::Primitive(Primitive::Tstr) => Some(format!("{:?}.to_string()", "a".repeat(n))),
-        TypeRef::Primitive(Primitive::Bstr) if opts.no_std => Some(no_std_bytes(&format!("&[0u8; {n}]"))),
+        TypeRef::Primitive(Primitive::Bstr) if opts.no_std => {
+            Some(no_std_bytes(&format!("&[0u8; {n}]")))
+        }
         TypeRef::Primitive(Primitive::Bstr) => Some(format!("vec![0u8; {n}]")),
         _ => None,
     }
@@ -1880,19 +2292,17 @@ fn alias_default(a: &AliasDef, opts: &CodegenOptions) -> Option<String> {
             sized_value(&a.ty, *n, opts)
         }
         Constraint::Eq(lit) => Some(literal_value_expr(lit, opts.no_std)),
-        Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 => {
-            Some(format!("{}u64", *lo))
-        }
-        Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 => {
-            Some(format!("{}i64", *lo))
-        }
+        Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 => Some(format!("{}u64", *lo)),
+        Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 => Some(format!("{}i64", *lo)),
         _ => None,
     })
 }
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     emit_doc(w, a.doc.as_deref());
-    if a.deprecated { w.line("#[deprecated]"); }
+    if a.deprecated {
+        w.line("#[deprecated]");
+    }
 
     let type_name = to_pascal_case(&a.name);
 
@@ -1903,15 +2313,23 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         // `#6.55801(#6.1668547250('BOR'))`, dgtlrift/cddlc#142).
         match alias_default(a, opts) {
             Some(default_val) => {
-                w.line(&format!("#[derive(Debug, Clone, PartialEq{})]", newtype_ord(&a.ty)));
+                w.line(&format!(
+                    "#[derive(Debug, Clone, PartialEq{})]",
+                    newtype_ord(&a.ty)
+                ));
                 w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
                 w.blank();
                 w.line(&format!("impl Default for {type_name} {{"));
-                w.line(&format!("    fn default() -> Self {{ {type_name}({default_val}) }}"));
+                w.line(&format!(
+                    "    fn default() -> Self {{ {type_name}({default_val}) }}"
+                ));
                 w.line("}");
             }
             None => {
-                w.line(&format!("#[derive(Debug, Clone, PartialEq, Default{})]", newtype_ord(&a.ty)));
+                w.line(&format!(
+                    "#[derive(Debug, Clone, PartialEq, Default{})]",
+                    newtype_ord(&a.ty)
+                ));
                 w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
             }
         }
@@ -1940,7 +2358,10 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         let size_default = alias_default(a, opts);
 
         if let Some(default_val) = size_default {
-            w.line(&format!("#[derive(Debug, Clone, PartialEq{})]", newtype_ord(&a.ty)));
+            w.line(&format!(
+                "#[derive(Debug, Clone, PartialEq{})]",
+                newtype_ord(&a.ty)
+            ));
             w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
             w.blank();
             w.line(&format!("impl Default for {} {{", type_name));
@@ -1953,7 +2374,10 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
             w.dedent();
             w.line("}");
         } else {
-            w.line(&format!("#[derive(Debug, Clone, PartialEq, Default{})]", newtype_ord(&a.ty)));
+            w.line(&format!(
+                "#[derive(Debug, Clone, PartialEq, Default{})]",
+                newtype_ord(&a.ty)
+            ));
             w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
         }
         w.blank();
@@ -1966,11 +2390,11 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
 // ── Tagged newtype impl ───────────────────────────────────────────────────────
 
 fn emit_tagged_newtype_encode(
-    w:         &mut IndentWriter,
+    w: &mut IndentWriter,
     type_name: &str,
-    tag:       CborTag,
-    inner:     &TypeRef,
-    opts:      &CodegenOptions,
+    tag: CborTag,
+    inner: &TypeRef,
+    opts: &CodegenOptions,
 ) {
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<CddlcC> Encode<CddlcC> for {} {{", type_name));
@@ -1987,12 +2411,12 @@ fn emit_tagged_newtype_encode(
 }
 
 fn emit_tagged_newtype_decode(
-    w:           &mut IndentWriter,
-    type_name:   &str,
-    tag:         CborTag,
-    inner:       &TypeRef,
+    w: &mut IndentWriter,
+    type_name: &str,
+    tag: CborTag,
+    inner: &TypeRef,
     constraints: &[Constraint],
-    opts:        &CodegenOptions,
+    opts: &CodegenOptions,
 ) {
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<'b> Decode<'b, ()> for {} {{", type_name));
@@ -2016,10 +2440,10 @@ fn emit_tagged_newtype_decode(
 }
 
 fn emit_constrained_newtype_encode(
-    w:         &mut IndentWriter,
+    w: &mut IndentWriter,
     type_name: &str,
-    inner:     &TypeRef,
-    opts:      &CodegenOptions,
+    inner: &TypeRef,
+    opts: &CodegenOptions,
 ) {
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<CddlcC> Encode<CddlcC> for {} {{", type_name));
@@ -2035,11 +2459,11 @@ fn emit_constrained_newtype_encode(
 }
 
 fn emit_constrained_newtype_decode(
-    w:           &mut IndentWriter,
-    type_name:   &str,
-    inner:       &TypeRef,
+    w: &mut IndentWriter,
+    type_name: &str,
+    inner: &TypeRef,
     constraints: &[Constraint],
-    opts:        &CodegenOptions,
+    opts: &CodegenOptions,
 ) {
     w.line("#[allow(unused_variables)]");
     w.line(&format!("impl<'b> Decode<'b, ()> for {} {{", type_name));
@@ -2059,11 +2483,11 @@ fn emit_constrained_newtype_decode(
 // ── Encode helpers ────────────────────────────────────────────────────────────
 
 fn emit_encode_value(
-    w:      &mut IndentWriter,
-    ty:     &TypeRef,
-    expr:   &str,
-    occ:    &Occurrence,
-    opts:   &CodegenOptions,
+    w: &mut IndentWriter,
+    ty: &TypeRef,
+    expr: &str,
+    occ: &Occurrence,
+    opts: &CodegenOptions,
     module: Option<&IrModule>,
 ) {
     match occ {
@@ -2090,7 +2514,13 @@ fn emit_encode_value(
     }
 }
 
-fn emit_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: Option<&IrModule>) {
+fn emit_encode_typeref(
+    w: &mut IndentWriter,
+    ty: &TypeRef,
+    expr: &str,
+    opts: &CodegenOptions,
+    module: Option<&IrModule>,
+) {
     match plain_alias(ty, module) {
         TypeRef::Primitive(p) => {
             let enc = encode_call_for_primitive(p, expr);
@@ -2123,21 +2553,21 @@ fn encode_call_for_primitive(p: &Primitive, expr: &str) -> String {
     // For method-call primitives (Tstr, Bstr) the parens are necessary to bind
     // the deref before `.as_str()` / `.as_slice()`, so keep expr as-is there.
     let val = if expr.starts_with("(*") && expr.ends_with(')') {
-        &expr[1..expr.len() - 1]  // (*v) → *v
+        &expr[1..expr.len() - 1] // (*v) → *v
     } else {
         expr
     };
     match p {
-        Primitive::Bool    => format!("e.bool({val})"),
+        Primitive::Bool => format!("e.bool({val})"),
         Primitive::Null | Primitive::Undefined => "e.null()".into(),
-        Primitive::Uint    => format!("e.u64({val})"),
-        Primitive::Int     => format!("e.i64({val})"),
+        Primitive::Uint => format!("e.u64({val})"),
+        Primitive::Int => format!("e.i64({val})"),
         Primitive::Float16 | Primitive::Float32 => format!("e.f32({val})"),
-        Primitive::Float64 | Primitive::Float   => format!("e.f64({val})"),
+        Primitive::Float64 | Primitive::Float => format!("e.f64({val})"),
         // For owned String / Vec<u8>, use original expr so (*v).as_str() is correct
-        Primitive::Tstr    => format!("e.str({expr}.as_str())"),
-        Primitive::Bstr    => format!("e.bytes({expr}.as_slice())"),
-        Primitive::Any     => format!("e.encode(&{expr})"),
+        Primitive::Tstr => format!("e.str({expr}.as_str())"),
+        Primitive::Bstr => format!("e.bytes({expr}.as_slice())"),
+        Primitive::Any => format!("e.encode(&{expr})"),
     }
 }
 
@@ -2147,7 +2577,11 @@ fn decode_expr_for(ty: &TypeRef, opts: &CodegenOptions) -> String {
     decode_expr_for_in_module(ty, opts, None)
 }
 
-fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option<&IrModule>) -> String {
+fn decode_expr_for_in_module(
+    ty: &TypeRef,
+    opts: &CodegenOptions,
+    module: Option<&IrModule>,
+) -> String {
     match plain_alias(ty, module) {
         TypeRef::Primitive(p) => {
             let fn_name = decode_fn_for_primitive(p);
@@ -2188,16 +2622,16 @@ fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option
 
 fn decode_fn_for_primitive(p: &Primitive) -> &'static str {
     match p {
-        Primitive::Bool               => "bool",
+        Primitive::Bool => "bool",
         Primitive::Null | Primitive::Undefined => "null",
-        Primitive::Uint               => "u64",
-        Primitive::Int                => "i64",
-        Primitive::Float16            => "f32",
-        Primitive::Float32            => "f32",
+        Primitive::Uint => "u64",
+        Primitive::Int => "i64",
+        Primitive::Float16 => "f32",
+        Primitive::Float32 => "f32",
         Primitive::Float64 | Primitive::Float => "f64",
-        Primitive::Bstr               => "bytes",
-        Primitive::Tstr               => "str",
-        Primitive::Any                => "bytes",
+        Primitive::Bstr => "bytes",
+        Primitive::Tstr => "str",
+        Primitive::Any => "bytes",
     }
 }
 
@@ -2210,21 +2644,25 @@ fn checked_value(ty: &TypeRef, val: &str, module: Option<&IrModule>) -> String {
     let mut ty = ty;
     let mut hops = 0;
     while let (TypeRef::Named(n), Some(m)) = (ty, module) {
-        let Some(TypeDef::Alias(a)) = m.get(n) else { break };
+        let Some(TypeDef::Alias(a)) = m.get(n) else {
+            break;
+        };
         if a.tagged.is_some() || !a.constraints.is_empty() {
             expr.push_str(".0");
         }
         ty = &a.ty;
         hops += 1;
-        if hops > 16 { break; }
+        if hops > 16 {
+            break;
+        }
     }
     expr
 }
 
 fn emit_field_validation(
-    w:          &mut IndentWriter,
+    w: &mut IndentWriter,
     constraints: &[Constraint],
-    val_expr:   &str,
+    val_expr: &str,
     field_name: &str,
 ) {
     for c in constraints {
@@ -2245,7 +2683,12 @@ fn emit_field_validation(
 
 /// A struct member's Rust type: [`field_type_str`], with a `Box` around a
 /// type that holds the struct again (dgtlrift/cddlc#139).
-fn member_type(struct_name: &str, f: &FieldDef, opts: &CodegenOptions, module: &IrModule) -> String {
+fn member_type(
+    struct_name: &str,
+    f: &FieldDef,
+    opts: &CodegenOptions,
+    module: &IrModule,
+) -> String {
     if is_boxed(struct_name, &f.ty, module) {
         let base = typeref_to_rust(&f.ty, opts);
         match f.occurrence {
@@ -2278,8 +2721,13 @@ fn plain_alias<'a>(ty: &'a TypeRef, module: Option<&'a IrModule>) -> &'a TypeRef
     for _ in 0..8 {
         let TypeRef::Named(n) = ty else { break };
         match module.and_then(|m| m.get(n)) {
-            Some(TypeDef::Alias(a)) if a.constraints.is_empty() && a.tagged.is_none()
-                && matches!(a.ty, TypeRef::Primitive(_) | TypeRef::Named(_)) => ty = &a.ty,
+            Some(TypeDef::Alias(a))
+                if a.constraints.is_empty()
+                    && a.tagged.is_none()
+                    && matches!(a.ty, TypeRef::Primitive(_) | TypeRef::Named(_)) =>
+            {
+                ty = &a.ty
+            }
             _ => break,
         }
     }
@@ -2290,7 +2738,8 @@ fn field_type_str(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Stri
     let base = typeref_to_rust(ty, opts);
     match occ {
         Occurrence::Optional => format!("Option<{base}>"),
-        Occurrence::ZeroOrMore { capacity } | Occurrence::OneOrMore { capacity }
+        Occurrence::ZeroOrMore { capacity }
+        | Occurrence::OneOrMore { capacity }
         | Occurrence::Bounded { capacity, .. } => {
             let cap = capacity_value(capacity, opts.max_array);
             // In the generated crate, the type depends on the no-std feature.
@@ -2310,10 +2759,10 @@ fn field_type_str(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Stri
 
 fn typeref_to_rust(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(p)  => rust_primitive(p, opts),
-        TypeRef::Named(n)      => to_pascal_case(n),
+        TypeRef::Primitive(p) => rust_primitive(p, opts),
+        TypeRef::Named(n) => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => typeref_to_rust(inner, opts),
-        TypeRef::Choice(cs)    => {
+        TypeRef::Choice(cs) => {
             // Inline choices are rare in field position; use the first variant
             cs.first()
                 .map(|c| typeref_to_rust(c, opts))
@@ -2327,7 +2776,10 @@ fn is_integer(p: &Primitive) -> bool {
 }
 
 fn is_float(p: &Primitive) -> bool {
-    matches!(p, Primitive::Float | Primitive::Float16 | Primitive::Float32 | Primitive::Float64)
+    matches!(
+        p,
+        Primitive::Float | Primitive::Float16 | Primitive::Float32 | Primitive::Float64
+    )
 }
 
 fn emit_doc(w: &mut IndentWriter, doc: Option<&str>) {
@@ -2337,7 +2789,10 @@ fn emit_doc(w: &mut IndentWriter, doc: Option<&str>) {
 
 fn emit_cargo_toml(crate_name: &str, opts: &CodegenOptions, boxes: bool) -> String {
     let mut s = String::new();
-    s.push_str(&cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Hash));
+    s.push_str(&cddlc_codegen::header_text(
+        opts,
+        cddlc_codegen::CommentStyle::Hash,
+    ));
     s.push_str("[package]\n");
     s.push_str(&format!("name    = {:?}\n", crate_name));
     s.push_str("version = \"0.1.0\"\n");
@@ -2401,10 +2856,10 @@ fn emit_roundtrip_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     for (_, def) in &module.types {
         match def {
             TypeDef::Struct(s) => emit_struct_roundtrip(&mut w, s, module, opts),
-            TypeDef::Enum(e)   => emit_enum_roundtrip(&mut w, e, module, opts),
-            TypeDef::Alias(a)  => emit_alias_roundtrip(&mut w, a, opts),
-            TypeDef::Array(a)  => emit_array_roundtrip(&mut w, a, opts),
-            TypeDef::Map(m)    => emit_map_roundtrip(&mut w, m, opts),
+            TypeDef::Enum(e) => emit_enum_roundtrip(&mut w, e, module, opts),
+            TypeDef::Alias(a) => emit_alias_roundtrip(&mut w, a, opts),
+            TypeDef::Array(a) => emit_array_roundtrip(&mut w, a, opts),
+            TypeDef::Map(m) => emit_map_roundtrip(&mut w, m, opts),
         }
         w.blank();
     }
@@ -2412,7 +2867,12 @@ fn emit_roundtrip_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts: &CodegenOptions) {
+fn emit_struct_roundtrip(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    module: &IrModule,
+    opts: &CodegenOptions,
+) {
     let type_name = to_pascal_case(&s.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&s.name));
 
@@ -2448,7 +2908,9 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
             (Occurrence::Required, _) if field_literal(f).is_some() => {
                 literal_value_expr(field_literal(f).expect("checked"), opts.no_std)
             }
-            (Occurrence::Required, TypeRef::Primitive(p)) if bits_value(&f.constraints, p, opts).is_some() => {
+            (Occurrence::Required, TypeRef::Primitive(p))
+                if bits_value(&f.constraints, p, opts).is_some() =>
+            {
                 bits_value(&f.constraints, p, opts).expect("checked")
             }
             (Occurrence::Required, TypeRef::Named(n)) => {
@@ -2479,7 +2941,11 @@ fn emit_struct_roundtrip(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
         w.line(&format!("{fname}: {val},"));
     }
     if let Some(r) = &s.rest {
-        w.line(&format!("{}: {},", field_ident(&r.name), rest_test_value(r, module, opts)));
+        w.line(&format!(
+            "{}: {},",
+            field_ident(&r.name),
+            rest_test_value(r, module, opts)
+        ));
     }
     w.dedent();
     w.line("};");
@@ -2499,7 +2965,12 @@ fn is_map_struct(name: &str, module: &IrModule) -> bool {
     matches!(module.get(name), Some(TypeDef::Struct(s)) if s.encoding == cddlc_ir::StructEncoding::Map)
 }
 
-fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &CodegenOptions) {
+fn emit_enum_roundtrip(
+    w: &mut IndentWriter,
+    e: &EnumDef,
+    module: &IrModule,
+    opts: &CodegenOptions,
+) {
     let type_name = to_pascal_case(&e.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&e.name));
     let mut used_tests = HashSet::from([format!("{test_name}_default")]);
@@ -2520,41 +2991,56 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opt
 
     // Test each variant
     for v in &e.variants {
-        let vname     = to_pascal_case(&v.name);
+        let vname = to_pascal_case(&v.name);
         let construct = match &v.ty {
             TypeRef::Primitive(Primitive::Tstr) => {
                 let s = variant_str(v);
                 if opts.no_std {
-                    format!("{}::{}({})", type_name, vname, no_std_text(&format!("{s:?}")))
+                    format!(
+                        "{}::{}({})",
+                        type_name,
+                        vname,
+                        no_std_text(&format!("{s:?}"))
+                    )
                 } else {
                     format!("{}::{}({:?}.to_string())", type_name, vname, s)
                 }
             }
             TypeRef::Primitive(Primitive::Uint) => {
-                let val = v.name.as_str().strip_prefix("Variant")
+                let val = v
+                    .name
+                    .as_str()
+                    .strip_prefix("Variant")
                     .and_then(|s| s.parse::<u64>().ok())
                     .map(|n| format!("{n}u64"))
                     .unwrap_or_else(|| "0u64".into());
                 format!("{}::{}({})", type_name, vname, val)
             }
             TypeRef::Primitive(Primitive::Int) => {
-                let val = v.name.as_str().strip_prefix("Variant")
+                let val = v
+                    .name
+                    .as_str()
+                    .strip_prefix("Variant")
                     .and_then(|s| s.parse::<i64>().ok())
                     .map(|n| format!("{n}i64"))
                     .unwrap_or_else(|| "0i64".into());
                 format!("{}::{}({})", type_name, vname, val)
             }
-            TypeRef::Primitive(Primitive::Bool) =>
-                format!("{}::{}(false)", type_name, vname),
-            TypeRef::Primitive(Primitive::Null) =>
-                format!("{}::{}", type_name, vname),
+            TypeRef::Primitive(Primitive::Bool) => format!("{}::{}(false)", type_name, vname),
+            TypeRef::Primitive(Primitive::Null) => format!("{}::{}", type_name, vname),
             // A variant of a map type (dgtlrift/cddlc#102).
-            TypeRef::Named(n) if is_map_struct(n, module) =>
+            TypeRef::Named(n) if is_map_struct(n, module) => {
                 if is_boxed(&e.name, &v.ty, module) {
-                    format!("{}::{}(Box::new({}::default()))", type_name, vname, to_pascal_case(n))
+                    format!(
+                        "{}::{}(Box::new({}::default()))",
+                        type_name,
+                        vname,
+                        to_pascal_case(n)
+                    )
                 } else {
                     format!("{}::{}({}::default())", type_name, vname, to_pascal_case(n))
-                },
+                }
+            }
             _ => continue,
         };
 
@@ -2573,7 +3059,11 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opt
         ));
         // A map variant with the same members as an earlier one decodes as
         // that one, to the same encoding (dgtlrift/cddlc#192).
-        if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+        if e.variants
+            .iter()
+            .take_while(|x| x.name != v.name)
+            .any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module))
+        {
             w.line("assert_eq!(minicbor::to_vec(&decoded).expect(\"encode\"), buf);");
         } else {
             w.line("assert_eq!(original, decoded);");
@@ -2636,7 +3126,10 @@ fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOption
         w.line(&format!("let original = {}::default();", type_name));
         w.line("let mut buf = Vec::new();");
         w.line("minicbor::encode(&original, &mut buf).expect(\"encode\");");
-        w.line(&format!("// CBOR tag({}) must be the first byte group", tag.0));
+        w.line(&format!(
+            "// CBOR tag({}) must be the first byte group",
+            tag.0
+        ));
         w.line("assert!(buf.len() >= 2, \"encoded output too short to contain tag\");");
         w.dedent();
         w.line("}");
@@ -2646,7 +3139,9 @@ fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOption
     for c in &a.constraints {
         match c {
             cddlc_ir::Constraint::SizeExact(n) => {
-                let Some(valid_val) = sized_value(&a.ty, *n, opts) else { continue };
+                let Some(valid_val) = sized_value(&a.ty, *n, opts) else {
+                    continue;
+                };
                 w.blank();
                 w.line("#[test]");
                 w.line(&format!("fn {test_name}_valid_size() {{"));
@@ -2664,7 +3159,11 @@ fn emit_alias_roundtrip(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOption
             }
             cddlc_ir::Constraint::ValueRangeInt { min, max, .. } => {
                 if let Some(lo) = min {
-                    let mid = if let Some(hi) = max { (lo + hi) / 2 } else { *lo };
+                    let mid = if let Some(hi) = max {
+                        (lo + hi) / 2
+                    } else {
+                        *lo
+                    };
                     w.blank();
                     w.line("#[test]");
                     w.line(&format!("fn {test_name}_in_range() {{"));
@@ -2699,7 +3198,9 @@ fn emit_map_roundtrip(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     if opts.no_std {
         let snake = to_snake_case(&m.name);
         w.line(&format!("let mut original = {type_name}::new();"));
-        w.line(&format!("original.insert({key}, {val}).expect(\"capacity\");"));
+        w.line(&format!(
+            "original.insert({key}, {val}).expect(\"capacity\");"
+        ));
         w.line("let mut buf = Vec::new();");
         w.line(&format!("encode_{snake}(&original, &mut minicbor::Encoder::new(&mut buf), &mut ()).expect(\"encode\");"));
         w.line(&format!("let decoded = decode_{snake}(&mut minicbor::Decoder::new(&buf), &mut ()).expect(\"decode\");"));
@@ -2710,7 +3211,9 @@ fn emit_map_roundtrip(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
         w.line(&format!("original.insert(({key}).into(), ({val}).into());"));
         w.line("let mut buf = Vec::new();");
         w.line("minicbor::encode(&original, &mut buf).expect(\"encode\");");
-        w.line(&format!("let decoded: {type_name} = minicbor::decode(&buf).expect(\"decode\");"));
+        w.line(&format!(
+            "let decoded: {type_name} = minicbor::decode(&buf).expect(\"decode\");"
+        ));
     }
     w.line("assert_eq!(original, decoded);");
     w.dedent();
@@ -2746,7 +3249,9 @@ fn emit_array_roundtrip(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOption
         w.line("#[test]");
         w.line(&format!("fn {test_name}_empty() {{"));
         w.indent();
-        w.line(&format!("let original: {type_name} = heapless::Vec::new();"));
+        w.line(&format!(
+            "let original: {type_name} = heapless::Vec::new();"
+        ));
         w.line("let mut buf = Vec::new();");
         w.line(&format!("encode_{snake}(&original, &mut minicbor::Encoder::new(&mut buf), &mut ()).expect(\"encode\");"));
         w.line(&format!("let decoded = decode_{snake}(&mut minicbor::Decoder::new(&buf), &mut ()).expect(\"decode\");"));
@@ -2784,9 +3289,16 @@ fn bits_value(constraints: &[Constraint], p: &Primitive, opts: &CodegenOptions) 
     match p {
         Primitive::Uint => Some(format!("{:#x}u64", cddlc_codegen::bits_mask_u64(bits))),
         Primitive::Bstr => {
-            let bytes = cddlc_codegen::bits_mask_bytes(bits).iter()
-                .map(|b| format!("{b:#04x}u8")).collect::<Vec<_>>().join(", ");
-            Some(if opts.no_std { no_std_bytes(&format!("&[{bytes}]")) } else { format!("vec![{bytes}]") })
+            let bytes = cddlc_codegen::bits_mask_bytes(bits)
+                .iter()
+                .map(|b| format!("{b:#04x}u8"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(if opts.no_std {
+                no_std_bytes(&format!("&[{bytes}]"))
+            } else {
+                format!("vec![{bytes}]")
+            })
         }
         _ => None,
     }
@@ -2795,14 +3307,18 @@ fn bits_value(constraints: &[Constraint], p: &Primitive, opts: &CodegenOptions) 
 fn default_value_expr(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     match occ {
         Occurrence::Optional => "None".into(),
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => {
             // As many items as the member needs (`+`: one), so it encodes.
             let (min, _) = cddlc_codegen::repeat_bounds(occ);
             match (min, opts.no_std) {
                 (0, true) => "heapless::Vec::new()".into(),
                 (0, false) => "Vec::new()".into(),
-                (n, _) => format!("(0..{n}).map(|_| {}).collect()", primitive_default_expr(ty, opts)),
+                (n, _) => format!(
+                    "(0..{n}).map(|_| {}).collect()",
+                    primitive_default_expr(ty, opts)
+                ),
             }
         }
         Occurrence::Required => primitive_default_expr(ty, opts),
@@ -2814,30 +3330,37 @@ fn primitive_default_expr(ty: &TypeRef, opts: &CodegenOptions) -> String {
         // `any`: the item `1` (dgtlrift/cddlc#178), not `null`, which an
         // optional member would read as absent.
         TypeRef::Primitive(Primitive::Any) if opts.is_json() => "serde_json::Value::from(1)".into(),
-        TypeRef::Primitive(Primitive::Any) if opts.no_std => format!("AnyItem({})", no_std_bytes("&[0x01u8]")),
+        TypeRef::Primitive(Primitive::Any) if opts.no_std => {
+            format!("AnyItem({})", no_std_bytes("&[0x01u8]"))
+        }
         TypeRef::Primitive(Primitive::Any) => "AnyItem(vec![0x01u8])".into(),
         TypeRef::Primitive(Primitive::Bstr) if opts.no_std => no_std_bytes("&[0xf6u8]"),
         TypeRef::Primitive(Primitive::Tstr) if opts.no_std => no_std_text("\"hello\""),
         TypeRef::Primitive(p) => match p {
-            Primitive::Bool               => "true".into(),
+            Primitive::Bool => "true".into(),
             Primitive::Null | Primitive::Undefined => "()".into(),
-            Primitive::Uint               => "42u64".into(),
-            Primitive::Int                => "-1i64".into(),
+            Primitive::Uint => "42u64".into(),
+            Primitive::Int => "-1i64".into(),
             Primitive::Float16 | Primitive::Float32 => "1.0f32".into(),
-            Primitive::Float64 | Primitive::Float   => "1.0f64".into(),
-            Primitive::Bstr                         => "vec![0xf6u8]".into(),
-            Primitive::Any                          => "AnyItem(vec![0x01u8])".into(),
-            Primitive::Tstr               => r#""hello".to_string()"#.into(),
+            Primitive::Float64 | Primitive::Float => "1.0f64".into(),
+            Primitive::Bstr => "vec![0xf6u8]".into(),
+            Primitive::Any => "AnyItem(vec![0x01u8])".into(),
+            Primitive::Tstr => r#""hello".to_string()"#.into(),
         },
-        TypeRef::Named(n)      => format!("{}::default()", to_pascal_case(n)),
+        TypeRef::Named(n) => format!("{}::default()", to_pascal_case(n)),
         TypeRef::Tagged(_, inner) => primitive_default_expr(inner, opts),
-        TypeRef::Choice(cs)    => cs.first()
+        TypeRef::Choice(cs) => cs
+            .first()
             .map(|c| primitive_default_expr(c, opts))
             .unwrap_or_else(|| "Default::default()".into()),
     }
 }
 
-fn tstr_test_value_for(type_name: &str, module: &IrModule, opts: &CodegenOptions) -> Option<String> {
+fn tstr_test_value_for(
+    type_name: &str,
+    module: &IrModule,
+    opts: &CodegenOptions,
+) -> Option<String> {
     match module.types.get(type_name)? {
         TypeDef::Alias(a) if matches!(&a.ty, TypeRef::Primitive(Primitive::Tstr)) => {
             let n = a.constraints.iter().find_map(|c| match c {
@@ -2845,7 +3368,11 @@ fn tstr_test_value_for(type_name: &str, module: &IrModule, opts: &CodegenOptions
                 Constraint::SizeRange { min: Some(n), .. } => Some(*n),
                 _ => None,
             })?;
-            Some(format!("{}({})", to_pascal_case(type_name), sized_value(&a.ty, n, opts)?))
+            Some(format!(
+                "{}({})",
+                to_pascal_case(type_name),
+                sized_value(&a.ty, n, opts)?
+            ))
         }
         _ => None,
     }
@@ -2860,7 +3387,9 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
         w.line(&l);
     }
     w.line("// Format: JSON (RFC 8259)");
-    if opts.dcbor { w.line("// Encoding: deterministic (key sorting enabled)"); }
+    if opts.dcbor {
+        w.line("// Encoding: deterministic (key sorting enabled)");
+    }
     w.blank();
 
     w.line("use serde::{Deserialize, Serialize};");
@@ -2872,7 +3401,9 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
 
     w.line("/// Byte strings (`bstr`), in the form each serde format expects.");
     w.line("///");
-    w.line("/// Human-readable formats such as JSON get base64url text (RFC 8949 section 6.1), binary");
+    w.line(
+        "/// Human-readable formats such as JSON get base64url text (RFC 8949 section 6.1), binary",
+    );
     w.line("/// ones such as CBOR a native byte string. Decoding accepts both, as serde's buffering for");
     w.line("/// untagged enums reports itself human-readable in any format.");
     w.line("#[allow(dead_code)]");
@@ -2961,7 +3492,9 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("        }");
     w.blank();
     w.line("        pub fn deserialize<'de, CddlcD: Deserializer<'de>>(d: CddlcD) -> Result<Vec<Vec<u8>>, CddlcD::Error> {");
-    w.line("            Ok(Vec::<super::Bytes>::deserialize(d)?.into_iter().map(|b| b.0).collect())");
+    w.line(
+        "            Ok(Vec::<super::Bytes>::deserialize(d)?.into_iter().map(|b| b.0).collect())",
+    );
     w.line("        }");
     w.line("    }");
     w.blank();
@@ -3002,10 +3535,10 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
         w.blank();
         match def {
             TypeDef::Struct(s) => emit_struct_json(&mut w, s, opts, module),
-            TypeDef::Enum(e)   => emit_enum_json(&mut w, e, opts, module),
-            TypeDef::Array(a)  => emit_array_json(&mut w, a, opts, module),
-            TypeDef::Alias(a)  => emit_alias_json(&mut w, a, opts),
-            TypeDef::Map(m)    => emit_map_json(&mut w, m, opts),
+            TypeDef::Enum(e) => emit_enum_json(&mut w, e, opts, module),
+            TypeDef::Array(a) => emit_array_json(&mut w, a, opts, module),
+            TypeDef::Alias(a) => emit_alias_json(&mut w, a, opts),
+            TypeDef::Map(m) => emit_map_json(&mut w, m, opts),
         }
     }
 
@@ -3055,7 +3588,9 @@ fn bytes_with(shape: ByteShape, occ: &Occurrence) -> (&'static str, bool) {
     match (shape, optional, repeated) {
         (ByteShape::One, true, _) => ("base64url_serde::option", true),
         (ByteShape::One, false, false) => ("base64url_serde", false),
-        (ByteShape::One, false, true) | (ByteShape::Many, false, false) => ("base64url_serde::vec", false),
+        (ByteShape::One, false, true) | (ByteShape::Many, false, false) => {
+            ("base64url_serde::vec", false)
+        }
         (ByteShape::Many, true, _) => ("base64url_serde::vec_option", true),
         (ByteShape::Many, false, true) => ("base64url_serde::vec", false),
     }
@@ -3072,12 +3607,18 @@ fn present_null<'de, CddlcD: serde::Deserializer<'de>>(d: CddlcD) -> Result<Opti
 /// Whether a member is optional and typed `null` / `undefined` (a Rust `Option<()>`).
 fn is_optional_null(ty: &TypeRef, occ: &Occurrence) -> bool {
     matches!(occ, Occurrence::Optional)
-        && matches!(ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined))
+        && matches!(
+            ty,
+            TypeRef::Primitive(Primitive::Null | Primitive::Undefined)
+        )
 }
 
 fn module_has_optional_null(module: &IrModule) -> bool {
     module.types.values().any(|def| match def {
-        TypeDef::Struct(s) => s.fields.iter().any(|f| is_optional_null(&f.ty, &f.occurrence)),
+        TypeDef::Struct(s) => s
+            .fields
+            .iter()
+            .any(|f| is_optional_null(&f.ty, &f.occurrence)),
         _ => false,
     })
 }
@@ -3142,7 +3683,7 @@ fn emit_literal_marker_json(w: &mut IndentWriter, name: &str, lit: &LiteralValue
     let (value_ty, de_ty, value) = match lit {
         LiteralValue::Text(t) => ("&'static str", "String", format!("{t:?}")),
         LiteralValue::Uint(n) => ("u64", "u64", format!("{n}")),
-        LiteralValue::Int(n)  => ("i64", "i64", format!("{n}")),
+        LiteralValue::Int(n) => ("i64", "i64", format!("{n}")),
         LiteralValue::Bool(b) => ("bool", "bool", b.to_string()),
         _ => return,
     };
@@ -3189,7 +3730,9 @@ fn emit_literal_marker_json(w: &mut IndentWriter, name: &str, lit: &LiteralValue
 
 fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, s.doc.as_deref());
-    if s.deprecated { w.line("#[deprecated]"); }
+    if s.deprecated {
+        w.line("#[deprecated]");
+    }
 
     let mut markers = Vec::new();
     let record = s.encoding == cddlc_ir::StructEncoding::Array;
@@ -3209,12 +3752,24 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
     for f in &s.fields {
         emit_doc(w, f.doc.as_deref());
         let fname = field_ident(&f.name);
-        let attrs = serde_field_attrs_json(&cddlc_codegen::field_key_json(&f.key), &fname, &f.ty, &f.occurrence, module);
-        if !attrs.is_empty() && !record { w.line(&attrs); }
+        let attrs = serde_field_attrs_json(
+            &cddlc_codegen::field_key_json(&f.key),
+            &fname,
+            &f.ty,
+            &f.occurrence,
+            module,
+        );
+        if !attrs.is_empty() && !record {
+            w.line(&attrs);
+        }
         let ty_str = match field_literal(f) {
             Some(lit) => {
                 let marker = marker_name(&s.name, &f.name, module);
-                let ty = if f.occurrence.is_required() { marker.clone() } else { format!("Option<{marker}>") };
+                let ty = if f.occurrence.is_required() {
+                    marker.clone()
+                } else {
+                    format!("Option<{marker}>")
+                };
                 markers.push((marker, lit.clone()));
                 ty
             }
@@ -3268,7 +3823,12 @@ fn emit_struct_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, 
 /// its own impls: an array of its members' values, in order, optional members
 /// at the end left off when absent. Byte members go through a wrapper that
 /// carries their base64url conversion.
-fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[String], module: &IrModule) {
+fn emit_record_json_impls(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    field_types: &[String],
+    module: &IrModule,
+) {
     let ty = to_pascal_case(&s.name);
     // Per member: (field, element type to read, wrapper type if any).
     let mut members = Vec::new();
@@ -3277,20 +3837,34 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
             ty_str.clone()
         } else if f.occurrence.is_repeated() {
             // A repeated member's items, each read on its own (dgtlrift/cddlc#134).
-            ty_str.strip_prefix("Vec<").and_then(|t| t.strip_suffix('>')).unwrap_or(ty_str).to_owned()
+            ty_str
+                .strip_prefix("Vec<")
+                .and_then(|t| t.strip_suffix('>'))
+                .unwrap_or(ty_str)
+                .to_owned()
         } else {
-            ty_str.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')).unwrap_or(ty_str).to_owned()
+            ty_str
+                .strip_prefix("Option<")
+                .and_then(|t| t.strip_suffix('>'))
+                .unwrap_or(ty_str)
+                .to_owned()
         };
         let wrapper = byte_shape(&f.ty, module).map(|shape| {
             let (with, _) = bytes_with(shape, &Occurrence::Required);
             let name = format!("{ty}{}Json", to_pascal_case(&f.name));
             w.line("#[derive(Serialize, Deserialize)]");
-            w.line(&format!("struct {name}(#[serde(with = {with:?})] {inner});"));
+            w.line(&format!(
+                "struct {name}(#[serde(with = {with:?})] {inner});"
+            ));
             name
         });
         members.push((f, inner, wrapper));
     }
-    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let required = s
+        .fields
+        .iter()
+        .filter(|f| f.occurrence.is_required())
+        .count();
 
     w.line(&format!("impl Serialize for {ty} {{"));
     w.indent();
@@ -3300,7 +3874,10 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
     let has_optional = required < s.fields.len() && repeated.is_none();
     if let Some(ri) = repeated {
         w.line("use serde::ser::{Error as _, SerializeSeq};");
-        w.line(&format!("let n = self.{}.len();", field_ident(&s.fields[ri].name)));
+        w.line(&format!(
+            "let n = self.{}.len();",
+            field_ident(&s.fields[ri].name)
+        ));
         emit_repeat_check_json(w, s, &s.fields[ri], "n", "CddlcS::Error");
         w.line(&format!("let len = {required}usize + n;"));
     } else if has_optional {
@@ -3311,7 +3888,10 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
         w.line("use serde::ser::SerializeSeq;");
         w.line(&format!("let len = {required}usize;"));
     }
-    for (f, _, _) in members.iter().filter(|(f, _, _)| matches!(f.occurrence, Occurrence::Optional)) {
+    for (f, _, _) in members
+        .iter()
+        .filter(|(f, _, _)| matches!(f.occurrence, Occurrence::Optional))
+    {
         w.line(&format!("if self.{}.is_some() {{", field_ident(&f.name)));
         w.indent();
         w.line(&format!(
@@ -3322,7 +3902,9 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
         w.dedent();
         w.line("} else { gap = true; }");
     }
-    if has_optional { w.line("let _ = gap;"); }
+    if has_optional {
+        w.line("let _ = gap;");
+    }
     w.line("let mut seq = serializer.serialize_seq(Some(len))?;");
     for (f, _, wrapper) in &members {
         let access = format!("self.{}", field_ident(&f.name));
@@ -3331,7 +3913,10 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
             None => v.to_owned(),
         };
         if f.occurrence.is_repeated() {
-            w.line(&format!("for v in &{access} {{ seq.serialize_element({})?; }}", elem("v")));
+            w.line(&format!(
+                "for v in &{access} {{ seq.serialize_element({})?; }}",
+                elem("v")
+            ));
         } else if f.occurrence.is_required() {
             let v = match wrapper {
                 Some(wr) => format!("&{wr}({access}.clone())"),
@@ -3339,7 +3924,10 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
             };
             w.line(&format!("seq.serialize_element({v})?;"));
         } else {
-            w.line(&format!("if let Some(v) = &{access} {{ seq.serialize_element({})?; }}", elem("v")));
+            w.line(&format!(
+                "if let Some(v) = &{access} {{ seq.serialize_element({})?; }}",
+                elem("v")
+            ));
         }
     }
     w.line("seq.end()");
@@ -3397,7 +3985,10 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
             } else if f.occurrence.is_required() {
                 w.line(&format!("let {local} = {take};"));
             } else {
-                w.line(&format!("let {local} = if n > {} {{ Some({take}) }} else {{ None }};", threshold(f)));
+                w.line(&format!(
+                    "let {local} = if n > {} {{ Some({take}) }} else {{ None }};",
+                    threshold(f)
+                ));
             }
         }
         w.line(&format!(
@@ -3432,10 +4023,16 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
             } else if f.occurrence.is_required() {
                 w.line(&format!("let {local} = {take};"));
             } else {
-                w.line(&format!("let {local} = if n > {} {{ Some({take}) }} else {{ None }};", threshold(f)));
+                w.line(&format!(
+                    "let {local} = if n > {} {{ Some({take}) }} else {{ None }};",
+                    threshold(f)
+                ));
             }
         }
-        w.line(&format!("if items.next().is_some() {{ return Err(A::Error::custom(\"{}: too many items\")); }}", s.name));
+        w.line(&format!(
+            "if items.next().is_some() {{ return Err(A::Error::custom(\"{}: too many items\")); }}",
+            s.name
+        ));
         let names: Vec<_> = s.fields.iter().map(|f| field_ident(&f.name)).collect();
         w.line(&format!("Ok({ty} {{ {} }})", names.join(", ")));
         w.dedent();
@@ -3461,12 +4058,17 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
                 s.name, f.name
             ));
         } else {
-            w.line(&format!("let {local} = seq.next_element::<{read_ty}>()?{unwrap};"));
+            w.line(&format!(
+                "let {local} = seq.next_element::<{read_ty}>()?{unwrap};"
+            ));
         }
     }
     w.line("if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {");
     w.indent();
-    w.line(&format!("return Err(A::Error::custom(\"{}: too many items\"));", s.name));
+    w.line(&format!(
+        "return Err(A::Error::custom(\"{}: too many items\"));",
+        s.name
+    ));
     w.dedent();
     w.line("}");
     let names: Vec<_> = s.fields.iter().map(|f| field_ident(&f.name)).collect();
@@ -3511,7 +4113,9 @@ fn emit_reps_json(w: &mut IndentWriter, s: &StructDef, f: &FieldDef, required: u
 
 fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, e.doc.as_deref());
-    if e.deprecated { w.line("#[deprecated]"); }
+    if e.deprecated {
+        w.line("#[deprecated]");
+    }
 
     let type_name = to_pascal_case(&e.name);
 
@@ -3523,12 +4127,17 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
     let all_unit = e.variants.iter().all(unit_like);
 
     if all_unit {
-        w.line(&format!("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize{})]", ord_derives(e)));
+        w.line(&format!(
+            "#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize{})]",
+            ord_derives(e)
+        ));
         w.line(&format!("pub enum {type_name} {{"));
         w.indent();
         for (i, v) in e.variants.iter().enumerate() {
             let vname = to_pascal_case(&v.name);
-            if i == 0 { w.line("#[default]"); }
+            if i == 0 {
+                w.line("#[default]");
+            }
             w.line(&format!("#[serde(rename = {:?})]", variant_str(v)));
             w.line(&format!("{vname},"));
         }
@@ -3536,7 +4145,10 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
         w.line("}");
     } else {
         let mut markers = Vec::new();
-        w.line(&format!("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize{})]", ord_derives(e)));
+        w.line(&format!(
+            "#[derive(Debug, Clone, PartialEq, Serialize, Deserialize{})]",
+            ord_derives(e)
+        ));
         w.line("#[serde(untagged)]");
         w.line(&format!("pub enum {type_name} {{"));
         w.indent();
@@ -3546,41 +4158,62 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
             // Text and integer literals are marker types that serialize as, and only
             // accept, their literal (an integer variant holding a `u64` would take
             // any number, so every value decoded as the first one; dgtlrift/cddlc#63).
-            let literal = text_literal(v).map(|t| LiteralValue::Text(t.to_owned()))
+            let literal = text_literal(v)
+                .map(|t| LiteralValue::Text(t.to_owned()))
                 .or_else(|| int_literal(v).cloned());
             let (line, default) = if let Some(lit) = literal {
                 let marker = marker_name(&e.name, &v.name, module);
                 markers.push((marker.clone(), lit));
-                (format!("{vname}({marker}),"), format!("{type_name}::{vname}({marker})"))
+                (
+                    format!("{vname}({marker}),"),
+                    format!("{type_name}::{vname}({marker})"),
+                )
             } else {
                 match &v.ty {
-                    TypeRef::Primitive(Primitive::Null) => (format!("{vname},"), format!("{type_name}::{vname}")),
+                    TypeRef::Primitive(Primitive::Null) => {
+                        (format!("{vname},"), format!("{type_name}::{vname}"))
+                    }
                     TypeRef::Primitive(p) => {
                         let rt = primitive_to_rust(p, false);
                         let di = match p {
                             Primitive::Uint => "0u64".to_owned(),
-                            Primitive::Int  => "0i64".to_owned(),
+                            Primitive::Int => "0i64".to_owned(),
                             Primitive::Bool => "false".to_owned(),
                             Primitive::Tstr => "String::new()".to_owned(),
                             Primitive::Bstr => "Vec::new()".to_owned(),
                             _ => "Default::default()".to_owned(),
                         };
                         let attr = match byte_shape(&v.ty, module) {
-                            Some(shape) => format!("#[serde(with = {:?})] ", bytes_with(shape, &Occurrence::Required).0),
+                            Some(shape) => format!(
+                                "#[serde(with = {:?})] ",
+                                bytes_with(shape, &Occurrence::Required).0
+                            ),
                             None => String::new(),
                         };
-                        (format!("{vname}({attr}{rt}),"), format!("{type_name}::{vname}({di})"))
+                        (
+                            format!("{vname}({attr}{rt}),"),
+                            format!("{type_name}::{vname}({di})"),
+                        )
                     }
                     TypeRef::Named(n) => {
                         let tn = to_pascal_case(n);
                         let attr = match byte_shape(&v.ty, module) {
-                            Some(shape) => format!("#[serde(with = {:?})] ", bytes_with(shape, &Occurrence::Required).0),
+                            Some(shape) => format!(
+                                "#[serde(with = {:?})] ",
+                                bytes_with(shape, &Occurrence::Required).0
+                            ),
                             None => String::new(),
                         };
                         if is_boxed(&e.name, &v.ty, module) {
-                            (format!("{vname}({attr}Box<{tn}>),"), format!("{type_name}::{vname}(Box::new({tn}::default()))"))
+                            (
+                                format!("{vname}({attr}Box<{tn}>),"),
+                                format!("{type_name}::{vname}(Box::new({tn}::default()))"),
+                            )
                         } else {
-                            (format!("{vname}({attr}{tn}),"), format!("{type_name}::{vname}({tn}::default())"))
+                            (
+                                format!("{vname}({attr}{tn}),"),
+                                format!("{type_name}::{vname}({tn}::default())"),
+                            )
                         }
                     }
                     _ => (format!("{vname},"), format!("{type_name}::{vname}")),
@@ -3630,11 +4263,13 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
 
 fn emit_array_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, module: &IrModule) {
     emit_doc(w, a.doc.as_deref());
-    if a.deprecated { w.line("#[deprecated]"); }
+    if a.deprecated {
+        w.line("#[deprecated]");
+    }
 
     let type_name = to_pascal_case(&a.name);
-    let elem_ty   = typeref_to_rust(&a.element, opts);
-    let bytes     = byte_shape(&a.element, module) == Some(ByteShape::One);
+    let elem_ty = typeref_to_rust(&a.element, opts);
+    let bytes = byte_shape(&a.element, module) == Some(ByteShape::One);
     if let Some(TypeDef::Struct(rec)) = match (&a.element, a.flat) {
         (TypeRef::Named(n), true) => module.get(n),
         _ => None,
@@ -3645,7 +4280,9 @@ fn emit_array_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
 
     w.line(&format!("pub type {type_name} = Vec<{elem_ty}>;"));
     w.blank();
-    w.line(&format!("pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"));
+    w.line(&format!(
+        "pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"
+    ));
     w.indent();
     if bytes {
         w.line("let items: Vec<_> = val.iter().map(|b| base64url_serde::BytesRef(b)).collect();");
@@ -3656,7 +4293,9 @@ fn emit_array_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions, mo
     w.dedent();
     w.line("}");
     w.blank();
-    w.line(&format!("pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"));
+    w.line(&format!(
+        "pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"
+    ));
     w.indent();
     if bytes {
         w.line("let items: Vec<base64url_serde::Bytes> = serde_json::from_slice(data)?;");
@@ -3676,7 +4315,9 @@ fn emit_flat_array_json(w: &mut IndentWriter, a: &ArrayDef, elem_ty: &str, width
     let snake = to_snake_case(&a.name);
     w.line(&format!("pub type {type_name} = Vec<{elem_ty}>;"));
     w.blank();
-    w.line(&format!("/// `{type_name}` in JSON: each `{elem_ty}`'s {width} members, inline, in one array."));
+    w.line(&format!(
+        "/// `{type_name}` in JSON: each `{elem_ty}`'s {width} members, inline, in one array."
+    ));
     w.line(&format!("pub mod {snake}_flat {{"));
     w.indent();
     w.line("use super::*;");
@@ -3688,7 +4329,10 @@ fn emit_flat_array_json(w: &mut IndentWriter, a: &ArrayDef, elem_ty: &str, width
     w.indent();
     w.line("match serde_json::to_value(item).map_err(CddlcS::Error::custom)? {");
     w.line("    serde_json::Value::Array(m) => items.extend(m),");
-    w.line(&format!("    _ => return Err(CddlcS::Error::custom(\"{}: a record that isn't an array\")),", a.name));
+    w.line(&format!(
+        "    _ => return Err(CddlcS::Error::custom(\"{}: a record that isn't an array\")),",
+        a.name
+    ));
     w.line("}");
     w.dedent();
     w.line("}");
@@ -3728,15 +4372,21 @@ fn emit_flat_array_json(w: &mut IndentWriter, a: &ArrayDef, elem_ty: &str, width
     w.dedent();
     w.line("}");
     w.blank();
-    w.line(&format!("pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"));
+    w.line(&format!(
+        "pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"
+    ));
     w.line("    let mut out = Vec::new();");
     w.line(&format!("    {snake}_flat::serialize(val, &mut serde_json::Serializer::new(&mut out)).expect(\"encode\");"));
     w.line("    out");
     w.line("}");
     w.blank();
-    w.line(&format!("pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"));
+    w.line(&format!(
+        "pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"
+    ));
     w.line("    let mut de = serde_json::Deserializer::from_slice(data);");
-    w.line(&format!("    let val = {snake}_flat::deserialize(&mut de)?;"));
+    w.line(&format!(
+        "    let val = {snake}_flat::deserialize(&mut de)?;"
+    ));
     w.line("    de.end()?;");
     w.line("    Ok(val)");
     w.line("}");
@@ -3744,17 +4394,21 @@ fn emit_flat_array_json(w: &mut IndentWriter, a: &ArrayDef, elem_ty: &str, width
 
 fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     emit_doc(w, a.doc.as_deref());
-    if a.deprecated { w.line("#[deprecated]"); }
+    if a.deprecated {
+        w.line("#[deprecated]");
+    }
 
     let type_name = to_pascal_case(&a.name);
-    let inner_ty  = typeref_to_rust(&a.ty, opts);
-    let is_bytes  = is_bytes_type(&a.ty);
+    let inner_ty = typeref_to_rust(&a.ty, opts);
+    let is_bytes = is_bytes_type(&a.ty);
 
     // Simple alias without constraints or tag
     if a.constraints.is_empty() && a.tagged.is_none() {
         w.line(&format!("pub type {type_name} = {inner_ty};"));
         w.blank();
-        w.line(&format!("pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"));
+        w.line(&format!(
+            "pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"
+        ));
         w.indent();
         if is_bytes {
             w.line("use base64::Engine;");
@@ -3766,13 +4420,17 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
         w.blank();
-        w.line(&format!("pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"));
+        w.line(&format!(
+            "pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"
+        ));
         w.indent();
         if is_bytes {
             w.line("use base64::Engine;");
             w.line("let s: String = serde_json::from_slice(data)?;");
             w.line("base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&s)");
-            w.line("    .map_err(|e| <serde_json::Error as serde::de::Error>::custom(e.to_string()))");
+            w.line(
+                "    .map_err(|e| <serde_json::Error as serde::de::Error>::custom(e.to_string()))",
+            );
         } else {
             w.line("serde_json::from_slice(data)");
         }
@@ -3796,7 +4454,9 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
         w.blank();
-        w.line(&format!("impl<'de> serde::Deserialize<'de> for {type_name} {{"));
+        w.line(&format!(
+            "impl<'de> serde::Deserialize<'de> for {type_name} {{"
+        ));
         w.indent();
         w.line("fn deserialize<CddlcD: serde::Deserializer<'de>>(d: CddlcD) -> Result<Self, CddlcD::Error> {");
         w.indent();
@@ -3806,7 +4466,10 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
     } else {
-        w.line(&format!("#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize{})]", newtype_ord(&a.ty)));
+        w.line(&format!(
+            "#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize{})]",
+            newtype_ord(&a.ty)
+        ));
         w.line(&format!("pub struct {type_name}(pub {inner_ty});"));
     }
 
@@ -3815,7 +4478,9 @@ fn emit_alias_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.blank();
         w.line(&format!("impl {type_name} {{"));
         w.indent();
-        w.line(&format!("pub fn new(val: impl Into<{inner_ty}>) -> Result<Self, String> {{"));
+        w.line(&format!(
+            "pub fn new(val: impl Into<{inner_ty}>) -> Result<Self, String> {{"
+        ));
         w.indent();
         w.line("let inner = val.into();");
         for c in &a.constraints {
@@ -3865,10 +4530,10 @@ fn emit_roundtrip_tests_json(module: &IrModule, opts: &CodegenOptions) -> String
     for (_, def) in &module.types {
         match def {
             TypeDef::Struct(s) => emit_struct_roundtrip_json(&mut w, s, opts, module),
-            TypeDef::Enum(e)   => emit_enum_roundtrip_json(&mut w, e, module),
-            TypeDef::Alias(a)  => emit_alias_roundtrip_json(&mut w, a, opts),
-            TypeDef::Array(a)  => emit_array_roundtrip_json(&mut w, a),
-            TypeDef::Map(m)    => emit_map_roundtrip_json(&mut w, m, opts, module),
+            TypeDef::Enum(e) => emit_enum_roundtrip_json(&mut w, e, module),
+            TypeDef::Alias(a) => emit_alias_roundtrip_json(&mut w, a, opts),
+            TypeDef::Array(a) => emit_array_roundtrip_json(&mut w, a),
+            TypeDef::Map(m) => emit_map_roundtrip_json(&mut w, m, opts, module),
         }
         w.blank();
     }
@@ -3884,7 +4549,12 @@ fn emit_cbor_roundtrip(w: &mut IndentWriter, type_name: &str) {
     w.line("assert_eq!(original, decoded);");
 }
 
-fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions, module: &IrModule) {
+fn emit_struct_roundtrip_json(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    opts: &CodegenOptions,
+    module: &IrModule,
+) {
     let type_name = to_pascal_case(&s.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&s.name));
 
@@ -3894,7 +4564,9 @@ fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &Codege
         w.indent();
         w.line(&format!("let original = {type_name}::default();"));
         w.line("let buf = original.encode();");
-        w.line(&format!("let decoded = {type_name}::decode(&buf).expect(\"decode\");"));
+        w.line(&format!(
+            "let decoded = {type_name}::decode(&buf).expect(\"decode\");"
+        ));
         w.line("assert_eq!(original, decoded);");
         emit_cbor_roundtrip(w, &type_name);
         w.dedent();
@@ -3912,7 +4584,10 @@ fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &Codege
         let val = if field_literal(f).is_some() {
             "Default::default()".to_owned()
         } else if f.occurrence.is_required() && is_boxed(&s.name, &f.ty, module) {
-            format!("Box::new({})", default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts))
+            format!(
+                "Box::new({})",
+                default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts)
+            )
         } else {
             default_value_expr(plain_alias(&f.ty, Some(module)), &f.occurrence, opts)
         };
@@ -3928,7 +4603,9 @@ fn emit_struct_roundtrip_json(w: &mut IndentWriter, s: &StructDef, opts: &Codege
     w.dedent();
     w.line("};");
     w.line("let buf = original.encode();");
-    w.line(&format!("let decoded = {type_name}::decode(&buf).expect(\"decode\");"));
+    w.line(&format!(
+        "let decoded = {type_name}::decode(&buf).expect(\"decode\");"
+    ));
     w.line("assert_eq!(original, decoded);");
     emit_cbor_roundtrip(w, &type_name);
     w.dedent();
@@ -3945,36 +4622,48 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
     w.indent();
     w.line(&format!("let original = {type_name}::default();"));
     w.line("let buf = original.encode();");
-    w.line(&format!("let decoded = {type_name}::decode(&buf).expect(\"decode\");"));
+    w.line(&format!(
+        "let decoded = {type_name}::decode(&buf).expect(\"decode\");"
+    ));
     w.line("assert_eq!(original, decoded);");
     emit_cbor_roundtrip(w, &type_name);
     w.dedent();
     w.line("}");
 
-    let all_unit = e.variants.iter().all(|v| {
-        matches!(&v.ty, TypeRef::Primitive(Primitive::Null)) || text_literal(v).is_some()
-    });
+    let all_unit = e
+        .variants
+        .iter()
+        .all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null)) || text_literal(v).is_some());
     for v in &e.variants {
-        let vname    = to_pascal_case(&v.name);
+        let vname = to_pascal_case(&v.name);
         let construct = match &v.ty {
             _ if text_literal(v).is_some() && all_unit => format!("{type_name}::{vname}"),
             _ if text_literal(v).is_some() || int_literal(v).is_some() => {
-                format!("{type_name}::{vname}({})", marker_name(&e.name, &v.name, module))
+                format!(
+                    "{type_name}::{vname}({})",
+                    marker_name(&e.name, &v.name, module)
+                )
             }
             TypeRef::Primitive(Primitive::Tstr) => {
                 format!("{}::{}({:?}.to_string())", type_name, vname, "hello")
             }
             TypeRef::Primitive(Primitive::Uint) => format!("{}::{}(0u64)", type_name, vname),
-            TypeRef::Primitive(Primitive::Int)  => format!("{}::{}(0i64)", type_name, vname),
+            TypeRef::Primitive(Primitive::Int) => format!("{}::{}(0i64)", type_name, vname),
             TypeRef::Primitive(Primitive::Bool) => format!("{}::{}(false)", type_name, vname),
             TypeRef::Primitive(Primitive::Null) => format!("{}::{}", type_name, vname),
             // A variant of a map type (dgtlrift/cddlc#102).
-            TypeRef::Named(n) if is_map_struct(n, module) =>
+            TypeRef::Named(n) if is_map_struct(n, module) => {
                 if is_boxed(&e.name, &v.ty, module) {
-                    format!("{}::{}(Box::new({}::default()))", type_name, vname, to_pascal_case(n))
+                    format!(
+                        "{}::{}(Box::new({}::default()))",
+                        type_name,
+                        vname,
+                        to_pascal_case(n)
+                    )
                 } else {
                     format!("{}::{}({}::default())", type_name, vname, to_pascal_case(n))
-                },
+                }
+            }
             _ => continue,
         };
 
@@ -3986,12 +4675,16 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
         w.indent();
         w.line(&format!("let original = {construct};"));
         w.line("let buf = original.encode();");
-        w.line(&format!("let decoded = {type_name}::decode(&buf).expect(\"decode\");"));
+        w.line(&format!(
+            "let decoded = {type_name}::decode(&buf).expect(\"decode\");"
+        ));
         // A map variant with the same members as an earlier one can't be told
         // apart from it on the wire (WebDriver BiDi's `PrintResult` and
         // `CaptureScreenshotResult`, both `{ data: text }`): it decodes as the
         // earlier one, to the same encoding (dgtlrift/cddlc#157).
-        let ambiguous = e.variants.iter()
+        let ambiguous = e
+            .variants
+            .iter()
             .take_while(|x| x.name != v.name)
             .any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module));
         if ambiguous {
@@ -4005,7 +4698,9 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
 }
 
 fn emit_alias_roundtrip_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
-    if a.constraints.is_empty() && a.tagged.is_none() { return; }
+    if a.constraints.is_empty() && a.tagged.is_none() {
+        return;
+    }
 
     let type_name = to_pascal_case(&a.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&a.name));
@@ -4015,7 +4710,9 @@ fn emit_alias_roundtrip_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenO
     w.indent();
     w.line(&format!("let original = {type_name}::default();"));
     w.line("let buf = original.encode();");
-    w.line(&format!("let decoded = {type_name}::decode(&buf).expect(\"decode\");"));
+    w.line(&format!(
+        "let decoded = {type_name}::decode(&buf).expect(\"decode\");"
+    ));
     w.line("assert_eq!(original, decoded);");
     emit_cbor_roundtrip(w, &type_name);
     w.dedent();
@@ -4027,22 +4724,35 @@ fn emit_alias_roundtrip_json(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenO
 /// A table in JSON: an object, through serde (dgtlrift/cddlc#82).
 fn emit_map_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     emit_doc(w, m.doc.as_deref());
-    if m.deprecated { w.line("#[deprecated]"); }
+    if m.deprecated {
+        w.line("#[deprecated]");
+    }
     let type_name = to_pascal_case(&m.name);
     let key = typeref_to_rust(&m.key_ty, opts);
     let val = typeref_to_rust(&m.val_ty, opts);
-    w.line(&format!("pub type {type_name} = std::collections::BTreeMap<{key}, {val}>;"));
+    w.line(&format!(
+        "pub type {type_name} = std::collections::BTreeMap<{key}, {val}>;"
+    ));
     w.blank();
-    w.line(&format!("pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"));
+    w.line(&format!(
+        "pub fn encode_{type_name}(val: &{type_name}) -> Vec<u8> {{"
+    ));
     w.line("    serde_json::to_vec(val).expect(\"encode\")");
     w.line("}");
     w.blank();
-    w.line(&format!("pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"));
+    w.line(&format!(
+        "pub fn decode_{type_name}(data: &[u8]) -> Result<{type_name}, serde_json::Error> {{"
+    ));
     w.line("    serde_json::from_slice(data)");
     w.line("}");
 }
 
-fn emit_map_roundtrip_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions, module: &IrModule) {
+fn emit_map_roundtrip_json(
+    w: &mut IndentWriter,
+    m: &MapDef,
+    opts: &CodegenOptions,
+    module: &IrModule,
+) {
     let type_name = to_pascal_case(&m.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&m.name));
     w.line("#[test]");
@@ -4053,9 +4763,20 @@ fn emit_map_roundtrip_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptio
     // text`) gets a text key, which reads back as the same variant.
     let text_key = match &m.key_ty {
         TypeRef::Named(n) => match module.get(n) {
-            Some(TypeDef::Enum(e)) => e.variants.iter()
-                .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && literal_eq(&v.constraints).is_none())
-                .map(|v| format!("{}::{}(\"k\".to_string())", to_pascal_case(n), to_pascal_case(&v.name))),
+            Some(TypeDef::Enum(e)) => e
+                .variants
+                .iter()
+                .find(|v| {
+                    matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr))
+                        && literal_eq(&v.constraints).is_none()
+                })
+                .map(|v| {
+                    format!(
+                        "{}::{}(\"k\".to_string())",
+                        to_pascal_case(n),
+                        to_pascal_case(&v.name)
+                    )
+                }),
             _ => None,
         },
         _ => None,
@@ -4066,7 +4787,9 @@ fn emit_map_roundtrip_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptio
         primitive_default_expr(&m.val_ty, opts)
     ));
     w.line(&format!("let buf = encode_{type_name}(&original);"));
-    w.line(&format!("let decoded = decode_{type_name}(&buf).expect(\"decode\");"));
+    w.line(&format!(
+        "let decoded = decode_{type_name}(&buf).expect(\"decode\");"
+    ));
     w.line("assert_eq!(original, decoded);");
     w.dedent();
     w.line("}");
@@ -4075,8 +4798,8 @@ fn emit_map_roundtrip_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptio
 fn emit_array_roundtrip_json(w: &mut IndentWriter, a: &ArrayDef) {
     let type_name = to_pascal_case(&a.name);
     let test_name = format!("roundtrip_{}", to_snake_case(&a.name));
-    let fn_enc    = format!("encode_{type_name}");
-    let fn_dec    = format!("decode_{type_name}");
+    let fn_enc = format!("encode_{type_name}");
+    let fn_dec = format!("decode_{type_name}");
 
     w.line("#[test]");
     w.line(&format!("fn {test_name}_empty() {{"));

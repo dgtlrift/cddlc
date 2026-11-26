@@ -29,7 +29,7 @@ impl Type {
 pub struct Type1 {
     pub base: Spanned<Type2>,
     /// Chained operators — usually 0 or 1, but may be more for control ops.
-    pub ops:  Vec<TypeOp>,
+    pub ops: Vec<TypeOp>,
 }
 
 impl Type1 {
@@ -44,13 +44,13 @@ impl Type1 {
 pub enum TypeOp {
     /// Range operator: `lo..hi`  (inclusive) or `lo...hi` (exclusive upper)
     Range {
-        upper:     Spanned<Type2>,
+        upper: Spanned<Type2>,
         inclusive: bool,
     },
 
     /// Control operator: `.size`, `.regexp`, `.cbor`, etc.
     Control {
-        op:      Spanned<CtlOp>,
+        op: Spanned<CtlOp>,
         operand: Spanned<Type2>,
     },
 }
@@ -80,7 +80,12 @@ pub enum CtlOp {
     And,
 
     /// `.lt`, `.le`, `.gt`, `.ge`, `.eq`, `.ne`
-    Lt, Le, Gt, Ge, Eq, Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
 
     /// `.default` — default value if key is absent
     Default,
@@ -92,21 +97,21 @@ pub enum CtlOp {
 impl CtlOp {
     pub fn from_str(s: &str) -> Self {
         match s {
-            "size"    => CtlOp::Size,
-            "bits"    => CtlOp::Bits,
-            "regexp"  => CtlOp::Regexp,
-            "cbor"    => CtlOp::Cbor,
+            "size" => CtlOp::Size,
+            "bits" => CtlOp::Bits,
+            "regexp" => CtlOp::Regexp,
+            "cbor" => CtlOp::Cbor,
             "cborseq" => CtlOp::CborSeq,
-            "within"  => CtlOp::Within,
-            "and"     => CtlOp::And,
-            "lt"      => CtlOp::Lt,
-            "le"      => CtlOp::Le,
-            "gt"      => CtlOp::Gt,
-            "ge"      => CtlOp::Ge,
-            "eq"      => CtlOp::Eq,
-            "ne"      => CtlOp::Ne,
+            "within" => CtlOp::Within,
+            "and" => CtlOp::And,
+            "lt" => CtlOp::Lt,
+            "le" => CtlOp::Le,
+            "gt" => CtlOp::Gt,
+            "ge" => CtlOp::Ge,
+            "eq" => CtlOp::Eq,
+            "ne" => CtlOp::Ne,
             "default" => CtlOp::Default,
-            other     => CtlOp::Other(other.to_owned()),
+            other => CtlOp::Other(other.to_owned()),
         }
     }
 }
@@ -122,8 +127,8 @@ pub enum Type2 {
     /// Reference to another rule, possibly with generic arguments:
     /// `my-type`, `labeled<uint>`
     Typename {
-        name:    Spanned<Ident>,
-        args:    Vec<Spanned<Type>>,   // empty if not generic
+        name: Spanned<Ident>,
+        args: Vec<Spanned<Type>>, // empty if not generic
     },
 
     /// A map type: `{ group }`
@@ -139,10 +144,7 @@ pub enum Type2 {
     Group(Spanned<GroupEntry>),
 
     /// A tagged type: `#6.NN(type)`
-    Tagged {
-        tag:    u64,
-        inner:  Box<Spanned<Type>>,
-    },
+    Tagged { tag: u64, inner: Box<Spanned<Type>> },
 
     /// Major type, and optionally its additional information: `#0` (an
     /// unsigned integer), `#7.25` (a half-precision float). RFC 8610 §3.6.
@@ -176,9 +178,9 @@ pub enum Type2 {
 /// - Immediately before a group member (member-level)
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pragma {
-    pub span:    super::Span,
+    pub span: super::Span,
     pub keyword: String,
-    pub value:   PragmaValue,
+    pub value: PragmaValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]

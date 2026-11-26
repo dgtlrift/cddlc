@@ -6,7 +6,6 @@
 ///
 /// Tests skip gracefully when a required toolchain is not installed, and say how
 /// to install it (see [`toolchain`]).
-
 pub mod toolchain;
 
 use toolchain::Lang;
@@ -22,32 +21,56 @@ use cddlc_parser::parse_cddl;
 
 /// All reference schemas bundled with this crate.
 pub const SCHEMAS: &[(&str, &str)] = &[
-    ("primitives",  include_str!("../schemas/primitives.cddl")),
-    ("structs",     include_str!("../schemas/structs.cddl")),
-    ("enums",       include_str!("../schemas/enums.cddl")),
-    ("arrays",      include_str!("../schemas/arrays.cddl")),
-    ("aliases",     include_str!("../schemas/aliases.cddl")),
-    ("tagged",      include_str!("../schemas/tagged.cddl")),
-    ("iot-sensor",  include_str!("../schemas/iot_sensor.cddl")),
-    ("simple-values", include_str!("../schemas/simple_values.cddl")),
-    ("choices",     include_str!("../schemas/choices.cddl")),
-    ("prelude",     include_str!("../schemas/prelude.cddl")),
-    ("records",     include_str!("../schemas/records.cddl")),
-    ("maps",        include_str!("../schemas/maps.cddl")),
-    ("groups",      include_str!("../schemas/groups.cddl")),
-    ("inline-enum", include_str!("../schemas/inline-enum-in-group-after-comment.cddl")),
-    ("names",       include_str!("../schemas/names.cddl")),
-    ("bits",        include_str!("../schemas/bits.cddl")),
-    ("repeated-groups", include_str!("../schemas/repeated_groups.cddl")),
-    ("int-keys",    include_str!("../schemas/int_keys.cddl")),
-    ("other-keys",  include_str!("../schemas/other_keys.cddl")),
-    ("reserved-names", include_str!("../schemas/reserved_names.cddl")),
-    ("tagged-literals", include_str!("../schemas/tagged_literals.cddl")),
-    ("alias-members", include_str!("../schemas/alias_members.cddl")),
-    ("record-repeats", include_str!("../schemas/record_repeats.cddl")),
-    ("choice-shapes", include_str!("../schemas/choice_shapes.cddl")),
-    ("recursive",   include_str!("../schemas/recursive.cddl")),
-    ("any",         include_str!("../schemas/any.cddl")),
+    ("primitives", include_str!("../schemas/primitives.cddl")),
+    ("structs", include_str!("../schemas/structs.cddl")),
+    ("enums", include_str!("../schemas/enums.cddl")),
+    ("arrays", include_str!("../schemas/arrays.cddl")),
+    ("aliases", include_str!("../schemas/aliases.cddl")),
+    ("tagged", include_str!("../schemas/tagged.cddl")),
+    ("iot-sensor", include_str!("../schemas/iot_sensor.cddl")),
+    (
+        "simple-values",
+        include_str!("../schemas/simple_values.cddl"),
+    ),
+    ("choices", include_str!("../schemas/choices.cddl")),
+    ("prelude", include_str!("../schemas/prelude.cddl")),
+    ("records", include_str!("../schemas/records.cddl")),
+    ("maps", include_str!("../schemas/maps.cddl")),
+    ("groups", include_str!("../schemas/groups.cddl")),
+    (
+        "inline-enum",
+        include_str!("../schemas/inline-enum-in-group-after-comment.cddl"),
+    ),
+    ("names", include_str!("../schemas/names.cddl")),
+    ("bits", include_str!("../schemas/bits.cddl")),
+    (
+        "repeated-groups",
+        include_str!("../schemas/repeated_groups.cddl"),
+    ),
+    ("int-keys", include_str!("../schemas/int_keys.cddl")),
+    ("other-keys", include_str!("../schemas/other_keys.cddl")),
+    (
+        "reserved-names",
+        include_str!("../schemas/reserved_names.cddl"),
+    ),
+    (
+        "tagged-literals",
+        include_str!("../schemas/tagged_literals.cddl"),
+    ),
+    (
+        "alias-members",
+        include_str!("../schemas/alias_members.cddl"),
+    ),
+    (
+        "record-repeats",
+        include_str!("../schemas/record_repeats.cddl"),
+    ),
+    (
+        "choice-shapes",
+        include_str!("../schemas/choice_shapes.cddl"),
+    ),
+    ("recursive", include_str!("../schemas/recursive.cddl")),
+    ("any", include_str!("../schemas/any.cddl")),
 ];
 
 /// Reference schemas only some backends can generate yet: each with the
@@ -64,7 +87,9 @@ const LIMITED_SCHEMAS: &[(&str, &[&str], bool)] = &[
 /// Whether a reference schema is built with this backend and format.
 pub fn schema_applies(schema: &str, backend: &dyn Backend, opts: &CodegenOptions) -> bool {
     match LIMITED_SCHEMAS.iter().find(|(n, _, _)| *n == schema) {
-        Some((_, exts, cbor_only)) => !(*cbor_only && opts.is_json()) && exts.contains(&backend.file_extension()),
+        Some((_, exts, cbor_only)) => {
+            !(*cbor_only && opts.is_json()) && exts.contains(&backend.file_extension())
+        }
         None => true,
     }
 }
@@ -76,9 +101,18 @@ pub enum BuildOutcome {
     /// Toolchain not found — test skipped.
     Skipped { reason: String },
     /// Code generated and build succeeded.
-    Built { schema: String, files: usize, build_ms: u64 },
+    Built {
+        schema: String,
+        files: usize,
+        build_ms: u64,
+    },
     /// Code generated but build failed.
-    Failed { schema: String, stdout: String, stderr: String, exit_code: Option<i32> },
+    Failed {
+        schema: String,
+        stdout: String,
+        stderr: String,
+        exit_code: Option<i32>,
+    },
     /// Code generation itself failed.
     CodegenError { schema: String, error: String },
     /// The build couldn't fetch its dependencies: a package registry was
@@ -89,7 +123,12 @@ pub enum BuildOutcome {
 
 impl BuildOutcome {
     pub fn is_ok(&self) -> bool {
-        matches!(self, BuildOutcome::Skipped { .. } | BuildOutcome::Built { .. } | BuildOutcome::Unavailable { .. })
+        matches!(
+            self,
+            BuildOutcome::Skipped { .. }
+                | BuildOutcome::Built { .. }
+                | BuildOutcome::Unavailable { .. }
+        )
     }
 
     pub fn is_unavailable(&self) -> bool {
@@ -130,16 +169,16 @@ pub fn require_tools(tools: &[&str]) -> Result<(), String> {
 /// Generate files for one schema using the given backend.
 pub fn generate_schema(
     schema_name: &str,
-    schema_src:  &str,
-    backend:     &dyn Backend,
-    opts:        &CodegenOptions,
+    schema_src: &str,
+    backend: &dyn Backend,
+    opts: &CodegenOptions,
 ) -> Result<Vec<GeneratedFile>, String> {
-    let path   = PathBuf::from(format!("{schema_name}.cddl"));
-    let parsed = parse_cddl(schema_src, path)
-        .map_err(|e| format!("parse error: {e}"))?;
+    let path = PathBuf::from(format!("{schema_name}.cddl"));
+    let parsed = parse_cddl(schema_src, path).map_err(|e| format!("parse error: {e}"))?;
     let lowered = lower(&parsed.value, opts.max_array, opts.max_str)
         .map_err(|e| format!("lower error: {e}"))?;
-    backend.generate(&lowered.module, opts)
+    backend
+        .generate(&lowered.module, opts)
         .map(|out| out.files)
         .map_err(|e| format!("codegen error: {e}"))
 }
@@ -175,14 +214,14 @@ fn format_output(out: &Output) -> (String, String) {
 fn build_result(schema: &str, out: Output, file_count: usize, ms: u64) -> BuildOutcome {
     if out.status.success() {
         BuildOutcome::Built {
-            schema:   schema.into(),
-            files:    file_count,
+            schema: schema.into(),
+            files: file_count,
             build_ms: ms,
         }
     } else {
         let (stdout, stderr) = format_output(&out);
         BuildOutcome::Failed {
-            schema:    schema.into(),
+            schema: schema.into(),
             stdout,
             stderr,
             exit_code: out.status.code(),
@@ -196,11 +235,7 @@ fn build_result(schema: &str, out: Output, file_count: usize, ms: u64) -> BuildO
 ///
 /// Writes a workspace `Cargo.toml` wrapper so we don't need a registry
 /// dependency on minicbor — it resolves from the parent workspace.
-pub fn build_rust(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_rust(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::Rust) {
         return BuildOutcome::Skipped { reason };
     }
@@ -209,17 +244,18 @@ pub fn build_rust(
 
     // The generated crate is in a subdirectory e.g. work_dir/primitives-cbor/
     // Find it by locating the Cargo.toml
-    let crate_dir = files.iter()
+    let crate_dir = files
+        .iter()
         .find(|f| f.path.ends_with("Cargo.toml"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
 
-    let t0  = std::time::Instant::now();
+    let t0 = std::time::Instant::now();
     let out = run_cmd(
         Command::new("cargo")
             .arg("test")
             .current_dir(&crate_dir)
-            .env("CARGO_NET_OFFLINE", "false")
+            .env("CARGO_NET_OFFLINE", "false"),
     );
     let ms = t0.elapsed().as_millis() as u64;
 
@@ -229,8 +265,8 @@ pub fn build_rust(
 /// Build a `--no-std` crate as `#![no_std]` (`--no-default-features --features
 /// no-std`), then run its tests with the default features.
 pub fn build_rust_no_std(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
+    work_dir: &Path,
+    files: &[GeneratedFile],
     schema_name: &str,
 ) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::Rust) {
@@ -239,7 +275,8 @@ pub fn build_rust_no_std(
 
     write_files(work_dir, files).expect("write files");
 
-    let crate_dir = files.iter()
+    let crate_dir = files
+        .iter()
         .find(|f| f.path.ends_with("Cargo.toml"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
@@ -248,13 +285,13 @@ pub fn build_rust_no_std(
     let build = run_cmd(
         Command::new("cargo")
             .args(["build", "--no-default-features", "--features", "no-std"])
-            .current_dir(&crate_dir)
+            .current_dir(&crate_dir),
     );
     if !build.status.success() {
         let (stdout, stderr) = format_output(&build);
         return BuildOutcome::Failed {
-            schema:    schema_name.into(),
-            stdout:    format!("[cargo build --features no-std]\n{stdout}"),
+            schema: schema_name.into(),
+            stdout: format!("[cargo build --features no-std]\n{stdout}"),
             stderr,
             exit_code: build.status.code(),
         };
@@ -267,11 +304,7 @@ pub fn build_rust_no_std(
 
 // ── C build ───────────────────────────────────────────────────────────────────
 
-pub fn build_c(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_c(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::C) {
         return BuildOutcome::Skipped { reason };
     }
@@ -279,15 +312,12 @@ pub fn build_c(
 }
 
 /// Configure, build and test a generated CMake project (C or C++).
-fn build_cmake(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+fn build_cmake(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     write_files(work_dir, files).expect("write files");
 
     // Find the CMakeLists.txt directory
-    let cmake_dir = files.iter()
+    let cmake_dir = files
+        .iter()
         .find(|f| f.path.ends_with("CMakeLists.txt"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
@@ -302,7 +332,7 @@ fn build_cmake(
         Command::new("cmake")
             .arg("..")
             .arg("-DCMAKE_BUILD_TYPE=Debug")
-            .current_dir(&build_dir)
+            .current_dir(&build_dir),
     );
     if !cfg.status.success() {
         let (stdout, stderr) = format_output(&cfg);
@@ -318,13 +348,13 @@ fn build_cmake(
     let build = run_cmd(
         Command::new("cmake")
             .args(["--build", ".", "--parallel"])
-            .current_dir(&build_dir)
+            .current_dir(&build_dir),
     );
     if !build.status.success() {
         let (stdout, stderr) = format_output(&build);
         return BuildOutcome::Failed {
-            schema:    schema_name.into(),
-            stdout:    format!("[cmake build]\n{stdout}"),
+            schema: schema_name.into(),
+            stdout: format!("[cmake build]\n{stdout}"),
             stderr,
             exit_code: build.status.code(),
         };
@@ -334,7 +364,7 @@ fn build_cmake(
     let test = run_cmd(
         Command::new("ctest")
             .arg("--output-on-failure")
-            .current_dir(&build_dir)
+            .current_dir(&build_dir),
     );
     let ms = t0.elapsed().as_millis() as u64;
     build_result(schema_name, test, files.len(), ms)
@@ -342,11 +372,7 @@ fn build_cmake(
 
 // ── C++ build ─────────────────────────────────────────────────────────────────
 
-pub fn build_cpp(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_cpp(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::Cpp) {
         return BuildOutcome::Skipped { reason };
     }
@@ -356,29 +382,27 @@ pub fn build_cpp(
 
 // ── C# build ──────────────────────────────────────────────────────────────────
 
-pub fn build_csharp(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_csharp(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::CSharp) {
         return BuildOutcome::Skipped { reason };
     }
 
     write_files(work_dir, files).expect("write files");
 
-    let csproj_dir = files.iter()
+    let csproj_dir = files
+        .iter()
         .find(|f| f.path.ends_with(".csproj"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
 
-    let t0  = std::time::Instant::now();
+    let t0 = std::time::Instant::now();
     let out = run_cmd(
         Command::new("dotnet")
             .arg("test")
             .arg("--nologo")
-            .arg("-v").arg("quiet")
-            .current_dir(&csproj_dir)
+            .arg("-v")
+            .arg("quiet")
+            .current_dir(&csproj_dir),
     );
     let ms = t0.elapsed().as_millis() as u64;
     build_result(schema_name, out, files.len(), ms)
@@ -386,18 +410,15 @@ pub fn build_csharp(
 
 // ── Node.js / TypeScript build ────────────────────────────────────────────────
 
-pub fn build_nodejs(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_nodejs(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::NodeJs) {
         return BuildOutcome::Skipped { reason };
     }
 
     write_files(work_dir, files).expect("write files");
 
-    let pkg_dir = files.iter()
+    let pkg_dir = files
+        .iter()
         .find(|f| f.path.ends_with("package.json"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
@@ -408,13 +429,13 @@ pub fn build_nodejs(
     let install = run_cmd(
         Command::new("npm")
             .args(["install", "--prefer-offline"])
-            .current_dir(&pkg_dir)
+            .current_dir(&pkg_dir),
     );
     if !install.status.success() {
         let (stdout, stderr) = format_output(&install);
         return BuildOutcome::Failed {
-            schema:    schema_name.into(),
-            stdout:    format!("[npm install]\n{stdout}"),
+            schema: schema_name.into(),
+            stdout: format!("[npm install]\n{stdout}"),
             stderr,
             exit_code: install.status.code(),
         };
@@ -424,35 +445,27 @@ pub fn build_nodejs(
     let build = run_cmd(
         Command::new("npm")
             .args(["run", "build"])
-            .current_dir(&pkg_dir)
+            .current_dir(&pkg_dir),
     );
     if !build.status.success() {
         let (stdout, stderr) = format_output(&build);
         return BuildOutcome::Failed {
-            schema:    schema_name.into(),
-            stdout:    format!("[npm run build]\n{stdout}"),
+            schema: schema_name.into(),
+            stdout: format!("[npm run build]\n{stdout}"),
             stderr,
             exit_code: build.status.code(),
         };
     }
 
     // npm test (Jest + ts-jest)
-    let test = run_cmd(
-        Command::new("npm")
-            .arg("test")
-            .current_dir(&pkg_dir)
-    );
+    let test = run_cmd(Command::new("npm").arg("test").current_dir(&pkg_dir));
     let ms = t0.elapsed().as_millis() as u64;
     build_result(schema_name, test, files.len(), ms)
 }
 
 // ── Python build (compile + pytest) ──────────────────────────────────────────
 
-pub fn build_python(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_python(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     // `CDDLC_PYTHON` picks the interpreter (e.g. a venv's python); otherwise
     // python3, then python. It needs cbor2 >= 6.0 (`semantic_decoders`) and
     // pytest; without them nothing meaningful can run, so it's a skip.
@@ -460,12 +473,15 @@ pub fn build_python(
         return BuildOutcome::Skipped { reason };
     }
     let Some(python) = toolchain::python() else {
-        return BuildOutcome::Skipped { reason: "no Python interpreter".into() };
+        return BuildOutcome::Skipped {
+            reason: "no Python interpreter".into(),
+        };
     };
 
     write_files(work_dir, files).expect("write files");
 
-    let pkg_dir = files.iter()
+    let pkg_dir = files
+        .iter()
         .find(|f| f.path.ends_with("pyproject.toml"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
@@ -483,13 +499,13 @@ pub fn build_python(
             Command::new(&python)
                 .args(&args)
                 .current_dir(&pkg_dir)
-                .env("PYTHONPATH", &src_dir)
+                .env("PYTHONPATH", &src_dir),
         );
         if !out.status.success() {
             let (stdout, stderr) = format_output(&out);
             return BuildOutcome::Failed {
-                schema:    schema_name.into(),
-                stdout:    format!("[{label}]\n{stdout}"),
+                schema: schema_name.into(),
+                stdout: format!("[{label}]\n{stdout}"),
                 stderr,
                 exit_code: out.status.code(),
             };
@@ -497,43 +513,51 @@ pub fn build_python(
     }
 
     let ms = t0.elapsed().as_millis() as u64;
-    BuildOutcome::Built { schema: schema_name.into(), files: files.len(), build_ms: ms }
+    BuildOutcome::Built {
+        schema: schema_name.into(),
+        files: files.len(),
+        build_ms: ms,
+    }
 }
 
 // ── Go build (go mod tidy + vet + test) ───────────────────────────────────────
 
 /// Build and test a generated Go module: `go mod tidy` (fetches fxamacker/cbor
 /// and writes go.sum), `go vet`, then `go test`.
-pub fn build_go(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_go(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::Go) {
         return BuildOutcome::Skipped { reason };
     }
 
     write_files(work_dir, files).expect("write files");
 
-    let mod_dir = files.iter()
+    let mod_dir = files
+        .iter()
         .find(|f| f.path.ends_with("go.mod"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
 
     let t0 = std::time::Instant::now();
-    for (label, args) in [("go mod tidy", vec!["mod", "tidy"]), ("go vet", vec!["vet", "./..."])] {
+    for (label, args) in [
+        ("go mod tidy", vec!["mod", "tidy"]),
+        ("go vet", vec!["vet", "./..."]),
+    ] {
         let out = run_cmd(Command::new("go").args(&args).current_dir(&mod_dir));
         if !out.status.success() {
             let (stdout, stderr) = format_output(&out);
             return BuildOutcome::Failed {
-                schema:    schema_name.into(),
-                stdout:    format!("[{label}]\n{stdout}"),
+                schema: schema_name.into(),
+                stdout: format!("[{label}]\n{stdout}"),
                 stderr,
                 exit_code: out.status.code(),
             };
         }
     }
-    let out = run_cmd(Command::new("go").args(["test", "./..."]).current_dir(&mod_dir));
+    let out = run_cmd(
+        Command::new("go")
+            .args(["test", "./..."])
+            .current_dir(&mod_dir),
+    );
     let ms = t0.elapsed().as_millis() as u64;
     build_result(schema_name, out, files.len(), ms)
 }
@@ -542,90 +566,117 @@ pub fn build_go(
 
 /// Build and test a generated Maven project with `mvn test` (compiles the
 /// sources and runs the JUnit tests). The first run downloads dependencies.
-pub fn build_java(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_java(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::Java) {
         return BuildOutcome::Skipped { reason };
     }
 
     write_files(work_dir, files).expect("write files");
 
-    let project_dir = files.iter()
+    let project_dir = files
+        .iter()
         .find(|f| f.path.ends_with("pom.xml"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
 
     let t0 = std::time::Instant::now();
-    let out = run_cmd(Command::new("mvn").args(["-B", "-ntp", "-q", "test"]).current_dir(&project_dir));
+    let out = run_cmd(
+        Command::new("mvn")
+            .args(["-B", "-ntp", "-q", "test"])
+            .current_dir(&project_dir),
+    );
     let ms = t0.elapsed().as_millis() as u64;
     build_result(schema_name, out, files.len(), ms)
 }
 
 // ── Lua build (busted) ────────────────────────────────────────────────────────
 
-
 /// Check and test a generated Dart package: `dart pub get`, then `dart analyze`
 /// (errors fail it, warnings don't), then `dart test` when the package has tests;
 /// the backend writes them for structs and enums only, and `dart test` fails on none.
-pub fn build_dart(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_dart(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::Dart) {
         return BuildOutcome::Skipped { reason };
     }
     let Some(dart) = toolchain::find("dart") else {
-        return BuildOutcome::Skipped { reason: "dart not found".into() };
+        return BuildOutcome::Skipped {
+            reason: "dart not found".into(),
+        };
     };
 
     write_files(work_dir, files).expect("write files");
 
-    let pkg_dir = files.iter()
+    let pkg_dir = files
+        .iter()
         .find(|f| f.path.ends_with("pubspec.yaml"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
-    let has_tests = files.iter()
+    let has_tests = files
+        .iter()
         .any(|f| f.path.ends_with("_test.dart") && f.content.contains("test('"));
 
     let t0 = std::time::Instant::now();
-    let get = run_cmd(Command::new(&dart).args(["pub", "get"]).current_dir(&pkg_dir));
+    let get = run_cmd(
+        Command::new(&dart)
+            .args(["pub", "get"])
+            .current_dir(&pkg_dir),
+    );
     if !get.status.success() {
-        return build_result(schema_name, get, files.len(), t0.elapsed().as_millis() as u64);
+        return build_result(
+            schema_name,
+            get,
+            files.len(),
+            t0.elapsed().as_millis() as u64,
+        );
     }
-    let analyze = run_cmd(Command::new(&dart).args(["analyze", "--no-fatal-warnings"]).current_dir(&pkg_dir));
+    let analyze = run_cmd(
+        Command::new(&dart)
+            .args(["analyze", "--no-fatal-warnings"])
+            .current_dir(&pkg_dir),
+    );
     if !analyze.status.success() || !has_tests {
-        return build_result(schema_name, analyze, files.len(), t0.elapsed().as_millis() as u64);
+        return build_result(
+            schema_name,
+            analyze,
+            files.len(),
+            t0.elapsed().as_millis() as u64,
+        );
     }
     let out = run_cmd(Command::new(&dart).arg("test").current_dir(&pkg_dir));
-    build_result(schema_name, out, files.len(), t0.elapsed().as_millis() as u64)
+    build_result(
+        schema_name,
+        out,
+        files.len(),
+        t0.elapsed().as_millis() as u64,
+    )
 }
 
 /// Test a generated Lua package with busted (which loads `src/` and runs `spec/`).
-pub fn build_lua(
-    work_dir:    &Path,
-    files:       &[GeneratedFile],
-    schema_name: &str,
-) -> BuildOutcome {
+pub fn build_lua(work_dir: &Path, files: &[GeneratedFile], schema_name: &str) -> BuildOutcome {
     if let Err(reason) = toolchain::check(Lang::Lua) {
         return BuildOutcome::Skipped { reason };
     }
     let Some(busted) = toolchain::busted() else {
-        return BuildOutcome::Skipped { reason: "busted not found".into() };
+        return BuildOutcome::Skipped {
+            reason: "busted not found".into(),
+        };
     };
 
     write_files(work_dir, files).expect("write files");
 
-    let pkg_dir = files.iter()
+    let pkg_dir = files
+        .iter()
         .find(|f| f.path.ends_with(".rockspec"))
         .map(|f| work_dir.join(Path::new(&f.path).parent().unwrap_or(Path::new("."))))
         .unwrap_or_else(|| work_dir.to_path_buf());
 
     let t0 = std::time::Instant::now();
-    let out = run_cmd(Command::new(&busted).arg("-o").arg("TAP").current_dir(&pkg_dir));
+    let out = run_cmd(
+        Command::new(&busted)
+            .arg("-o")
+            .arg("TAP")
+            .current_dir(&pkg_dir),
+    );
     let ms = t0.elapsed().as_millis() as u64;
     build_result(schema_name, out, files.len(), ms)
 }
@@ -637,9 +688,9 @@ pub fn build_lua(
 /// Returns a vec of outcomes, one per schema.
 /// Prints progress to stderr as tests run.
 pub fn run_build_tests<B, F>(
-    backend:   &B,
-    build_fn:  F,
-    opts:      &CodegenOptions,
+    backend: &B,
+    build_fn: F,
+    opts: &CodegenOptions,
     work_root: &Path,
 ) -> Vec<BuildOutcome>
 where
@@ -664,7 +715,7 @@ where
                 eprintln!("CODEGEN ERROR");
                 outcomes.push(BuildOutcome::CodegenError {
                     schema: schema_name.to_string(),
-                    error:  e,
+                    error: e,
                 });
                 continue;
             }
@@ -674,19 +725,20 @@ where
         std::fs::create_dir_all(&schema_work_dir).expect("create work dir");
 
         eprint!("  [{schema_name}] building  ... ");
-        let outcome = build_with_retries(&schema_work_dir, &files, schema_name, &build_fn, &outcomes);
+        let outcome =
+            build_with_retries(&schema_work_dir, &files, schema_name, &build_fn, &outcomes);
 
         match &outcome {
-            BuildOutcome::Built { build_ms, .. } =>
-                eprintln!("OK ({build_ms}ms)"),
-            BuildOutcome::Skipped { reason } =>
-                eprintln!("SKIP ({reason})"),
-            BuildOutcome::Failed { exit_code, stderr, .. } =>
-                eprintln!("FAIL (exit={exit_code:?})\n    stderr: {}", stderr.lines().next().unwrap_or("")),
-            BuildOutcome::CodegenError { error, .. } =>
-                eprintln!("CODEGEN ERROR: {error}"),
-            BuildOutcome::Unavailable { reason, .. } =>
-                eprintln!("UNAVAILABLE ({reason})"),
+            BuildOutcome::Built { build_ms, .. } => eprintln!("OK ({build_ms}ms)"),
+            BuildOutcome::Skipped { reason } => eprintln!("SKIP ({reason})"),
+            BuildOutcome::Failed {
+                exit_code, stderr, ..
+            } => eprintln!(
+                "FAIL (exit={exit_code:?})\n    stderr: {}",
+                stderr.lines().next().unwrap_or("")
+            ),
+            BuildOutcome::CodegenError { error, .. } => eprintln!("CODEGEN ERROR: {error}"),
+            BuildOutcome::Unavailable { reason, .. } => eprintln!("UNAVAILABLE ({reason})"),
         }
 
         outcomes.push(outcome);
@@ -701,11 +753,11 @@ where
 /// Once a schema in this run was unavailable, later ones get no retries, so a
 /// registry that stays down doesn't add minutes per schema.
 fn build_with_retries<F>(
-    dir:      &Path,
-    files:    &Vec<GeneratedFile>,
-    schema:   &str,
+    dir: &Path,
+    files: &Vec<GeneratedFile>,
+    schema: &str,
     build_fn: &F,
-    earlier:  &[BuildOutcome],
+    earlier: &[BuildOutcome],
 ) -> BuildOutcome
 where
     F: Fn(&Path, &Vec<GeneratedFile>, &str) -> BuildOutcome,
@@ -713,19 +765,22 @@ where
     let retries: u64 = if earlier.iter().any(BuildOutcome::is_unavailable) {
         0
     } else {
-        std::env::var("CDDLC_NETWORK_RETRIES").ok().and_then(|v| v.parse().ok()).unwrap_or(2)
+        std::env::var("CDDLC_NETWORK_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2)
     };
     retry_build(dir, files, schema, build_fn, retries, 20)
 }
 
 /// [`build_with_retries`], with the retry count and the wait unit given.
 fn retry_build<F>(
-    dir:      &Path,
-    files:    &Vec<GeneratedFile>,
-    schema:   &str,
+    dir: &Path,
+    files: &Vec<GeneratedFile>,
+    schema: &str,
     build_fn: &F,
-    retries:  u64,
-    wait_s:   u64,
+    retries: u64,
+    wait_s: u64,
 ) -> BuildOutcome
 where
     F: Fn(&Path, &Vec<GeneratedFile>, &str) -> BuildOutcome,
@@ -733,12 +788,17 @@ where
     let mut attempt = 0;
     loop {
         let outcome = build_fn(dir, files, schema);
-        let BuildOutcome::Failed { stdout, stderr, .. } = &outcome else { return outcome };
+        let BuildOutcome::Failed { stdout, stderr, .. } = &outcome else {
+            return outcome;
+        };
         let Some(reason) = toolchain::registry_unavailable(&format!("{stdout}\n{stderr}")) else {
             return outcome;
         };
         if attempt >= retries {
-            return BuildOutcome::Unavailable { schema: schema.into(), reason };
+            return BuildOutcome::Unavailable {
+                schema: schema.into(),
+                reason,
+            };
         }
         attempt += 1;
         let wait = wait_s * attempt;
@@ -753,7 +813,11 @@ where
 /// too, so a missing toolchain can't pass for a tested one.
 pub fn assert_all_ok(outcomes: &[BuildOutcome]) {
     let set = |var: &str| std::env::var_os(var).is_some_and(|v| !v.is_empty());
-    assert_outcomes(outcomes, set("CDDLC_REQUIRE_TOOLS"), set("CDDLC_REQUIRE_REGISTRIES"));
+    assert_outcomes(
+        outcomes,
+        set("CDDLC_REQUIRE_TOOLS"),
+        set("CDDLC_REQUIRE_REGISTRIES"),
+    );
 }
 
 /// [`assert_all_ok`], with `CDDLC_REQUIRE_TOOLS` and `CDDLC_REQUIRE_REGISTRIES`
@@ -763,7 +827,8 @@ fn assert_outcomes(outcomes: &[BuildOutcome], require_tools: bool, require_regis
     // annotation in CI) rather than fail, so it can't block a pull request,
     // unless CDDLC_REQUIRE_REGISTRIES is set (CI sets it on release PRs): a
     // release must not go out with a language that couldn't be tested.
-    let unavailable: Vec<(&String, &String)> = outcomes.iter()
+    let unavailable: Vec<(&String, &String)> = outcomes
+        .iter()
         .filter_map(|o| match o {
             BuildOutcome::Unavailable { schema, reason } => Some((schema, reason)),
             _ => None,
@@ -773,18 +838,23 @@ fn assert_outcomes(outcomes: &[BuildOutcome], require_tools: bool, require_regis
         let names: Vec<&str> = unavailable.iter().map(|(s, _)| s.as_str()).collect();
         let msg = format!(
             "{} schema(s) not built because a package registry was unavailable ({}): {reason}",
-            unavailable.len(), names.join(", ")
+            unavailable.len(),
+            names.join(", ")
         );
         if require_registries {
             panic!("\n{msg}\nCDDLC_REQUIRE_REGISTRIES is set (a release): every schema must be built. Re-run when the registry is back.\n");
         }
         eprintln!("\nWARNING: {msg}\n");
         if std::env::var_os("GITHUB_ACTIONS").is_some() {
-            println!("::warning title=Package registry unavailable::{}", msg.replace('\n', " "));
+            println!(
+                "::warning title=Package registry unavailable::{}",
+                msg.replace('\n', " ")
+            );
         }
     }
     if require_tools {
-        let skipped: Vec<String> = outcomes.iter()
+        let skipped: Vec<String> = outcomes
+            .iter()
             .filter_map(|o| match o {
                 BuildOutcome::Skipped { reason } => Some(reason.clone()),
                 _ => None,
@@ -799,15 +869,18 @@ fn assert_outcomes(outcomes: &[BuildOutcome], require_tools: bool, require_regis
         }
     }
 
-    let failures: Vec<&BuildOutcome> = outcomes.iter()
-        .filter(|o| !o.is_ok())
-        .collect();
+    let failures: Vec<&BuildOutcome> = outcomes.iter().filter(|o| !o.is_ok()).collect();
 
     if !failures.is_empty() {
         let mut msg = format!("\n{} build(s) failed:\n", failures.len());
         for f in &failures {
             match f {
-                BuildOutcome::Failed { schema, stdout, stderr, exit_code } => {
+                BuildOutcome::Failed {
+                    schema,
+                    stdout,
+                    stderr,
+                    exit_code,
+                } => {
                     msg.push_str(&format!(
                         "\n  Schema: {schema} (exit={exit_code:?})\n  stdout:\n{stdout}\n  stderr:\n{stderr}\n"
                     ));
@@ -828,7 +901,12 @@ mod tests {
     use std::cell::Cell;
 
     fn failed(stderr: &str) -> BuildOutcome {
-        BuildOutcome::Failed { schema: "s".into(), stdout: String::new(), stderr: stderr.into(), exit_code: Some(1) }
+        BuildOutcome::Failed {
+            schema: "s".into(),
+            stdout: String::new(),
+            stderr: stderr.into(),
+            exit_code: Some(1),
+        }
     }
 
     const RATE_LIMITED: &str = "[ERROR] Could not transfer artifact a:b:pom:1 from/to central: status code: 429, reason phrase: Too Many Requests (429)";
@@ -836,7 +914,10 @@ mod tests {
     #[test]
     fn a_registry_failure_is_retried_then_unavailable() {
         let calls = Cell::new(0);
-        let build = |_: &Path, _: &Vec<GeneratedFile>, _: &str| { calls.set(calls.get() + 1); failed(RATE_LIMITED) };
+        let build = |_: &Path, _: &Vec<GeneratedFile>, _: &str| {
+            calls.set(calls.get() + 1);
+            failed(RATE_LIMITED)
+        };
         let out = retry_build(Path::new("."), &vec![], "s", &build, 2, 0);
         assert!(matches!(out, BuildOutcome::Unavailable { .. }), "{out:?}");
         assert_eq!(calls.get(), 3);
@@ -847,23 +928,47 @@ mod tests {
         let calls = Cell::new(0);
         let build = |_: &Path, _: &Vec<GeneratedFile>, _: &str| {
             calls.set(calls.get() + 1);
-            if calls.get() == 1 { failed(RATE_LIMITED) } else { BuildOutcome::Built { schema: "s".into(), files: 1, build_ms: 0 } }
+            if calls.get() == 1 {
+                failed(RATE_LIMITED)
+            } else {
+                BuildOutcome::Built {
+                    schema: "s".into(),
+                    files: 1,
+                    build_ms: 0,
+                }
+            }
         };
-        assert!(matches!(retry_build(Path::new("."), &vec![], "s", &build, 2, 0), BuildOutcome::Built { .. }));
+        assert!(matches!(
+            retry_build(Path::new("."), &vec![], "s", &build, 2, 0),
+            BuildOutcome::Built { .. }
+        ));
     }
 
     #[test]
     fn a_code_failure_is_not_retried() {
         let calls = Cell::new(0);
-        let build = |_: &Path, _: &Vec<GeneratedFile>, _: &str| { calls.set(calls.get() + 1); failed("error[E0308]: mismatched types") };
-        assert!(matches!(retry_build(Path::new("."), &vec![], "s", &build, 2, 0), BuildOutcome::Failed { .. }));
+        let build = |_: &Path, _: &Vec<GeneratedFile>, _: &str| {
+            calls.set(calls.get() + 1);
+            failed("error[E0308]: mismatched types")
+        };
+        assert!(matches!(
+            retry_build(Path::new("."), &vec![], "s", &build, 2, 0),
+            BuildOutcome::Failed { .. }
+        ));
         assert_eq!(calls.get(), 1);
     }
 
     fn unavailable() -> Vec<BuildOutcome> {
         vec![
-            BuildOutcome::Built { schema: "a".into(), files: 1, build_ms: 0 },
-            BuildOutcome::Unavailable { schema: "b".into(), reason: "429".into() },
+            BuildOutcome::Built {
+                schema: "a".into(),
+                files: 1,
+                build_ms: 0,
+            },
+            BuildOutcome::Unavailable {
+                schema: "b".into(),
+                reason: "429".into(),
+            },
         ]
     }
 
@@ -877,7 +982,6 @@ mod tests {
     fn unavailable_schemas_fail_a_release() {
         assert_outcomes(&unavailable(), true, true);
     }
-
 
     #[test]
     #[should_panic(expected = "build(s) failed")]

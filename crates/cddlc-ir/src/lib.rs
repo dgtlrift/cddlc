@@ -34,7 +34,7 @@ pub mod types;
 pub use error::{IrError, IrWarning, IrWarningKind, LowerResult};
 pub use lower::lower;
 pub use types::{
-    AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
-    FieldDef, FieldKey, IrModule, LiteralValue, MapDef, Occurrence, Primitive,
-    MapRest, SourceRef, Sources, StructDef, StructEncoding, TextEncoding, TypeDef, TypeRef,
+    AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant, FieldDef, FieldKey,
+    IrModule, LiteralValue, MapDef, MapRest, Occurrence, Primitive, SourceRef, Sources, StructDef,
+    StructEncoding, TextEncoding, TypeDef, TypeRef,
 };

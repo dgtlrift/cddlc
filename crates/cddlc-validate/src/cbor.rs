@@ -10,7 +10,11 @@ use crate::value::Value;
 
 /// The one data item in `bytes`. Trailing bytes are an error.
 pub fn decode(bytes: &[u8]) -> Result<Value, String> {
-    let mut d = Decoder { bytes, pos: 0, depth: 0 };
+    let mut d = Decoder {
+        bytes,
+        pos: 0,
+        depth: 0,
+    };
     let v = d.item()?;
     if d.pos != bytes.len() {
         return Err(format!("{} bytes after the data item", bytes.len() - d.pos));
@@ -20,7 +24,11 @@ pub fn decode(bytes: &[u8]) -> Result<Value, String> {
 
 /// The data items in `bytes`, one after another (a CBOR sequence, RFC 8742).
 pub fn decode_seq(bytes: &[u8]) -> Result<Vec<Value>, String> {
-    let mut d = Decoder { bytes, pos: 0, depth: 0 };
+    let mut d = Decoder {
+        bytes,
+        pos: 0,
+        depth: 0,
+    };
     let mut out = Vec::new();
     while d.pos < bytes.len() {
         out.push(d.item().map_err(|e| format!("item {}: {e}", out.len()))?);
@@ -33,13 +41,16 @@ const MAX_DEPTH: usize = 512;
 
 struct Decoder<'a> {
     bytes: &'a [u8],
-    pos:   usize,
+    pos: usize,
     depth: usize,
 }
 
 impl Decoder<'_> {
     fn take(&mut self, n: usize) -> Result<&[u8], String> {
-        let end = self.pos.checked_add(n).filter(|&e| e <= self.bytes.len())
+        let end = self
+            .pos
+            .checked_add(n)
+            .filter(|&e| e <= self.bytes.len())
             .ok_or_else(|| format!("truncated at byte {}", self.pos))?;
         let s = &self.bytes[self.pos..end];
         self.pos = end;
@@ -60,12 +71,19 @@ impl Decoder<'_> {
             26 => u32::from_be_bytes(self.take(4)?.try_into().unwrap()) as u64,
             27 => u64::from_be_bytes(self.take(8)?.try_into().unwrap()),
             31 => return Ok(None),
-            _ => return Err(format!("reserved additional information {ai} at byte {}", self.pos - 1)),
+            _ => {
+                return Err(format!(
+                    "reserved additional information {ai} at byte {}",
+                    self.pos - 1
+                ))
+            }
         }))
     }
 
     fn len(&mut self, n: u64) -> Result<usize, String> {
-        usize::try_from(n).ok().filter(|&n| n <= self.bytes.len())
+        usize::try_from(n)
+            .ok()
+            .filter(|&n| n <= self.bytes.len())
             .ok_or_else(|| format!("length {n} is longer than the input"))
     }
 
@@ -94,7 +112,10 @@ impl Decoder<'_> {
                 // Below i64: approximate, as the IR can't name such a value.
                 Err(_) => Value::Float(-1.0 - n as f64),
             }),
-            (2, Some(n)) => { let n = self.len(n)?; Ok(Value::Bytes(self.take(n)?.to_vec())) }
+            (2, Some(n)) => {
+                let n = self.len(n)?;
+                Ok(Value::Bytes(self.take(n)?.to_vec()))
+            }
             (3, Some(n)) => {
                 let n = self.len(n)?;
                 String::from_utf8(self.take(n)?.to_vec())
@@ -107,7 +128,10 @@ impl Decoder<'_> {
                 .map_err(|_| format!("text at byte {at} is not UTF-8")),
             (4, Some(n)) => {
                 let n = self.len(n)?;
-                (0..n).map(|_| self.item()).collect::<Result<_, _>>().map(Value::Array)
+                (0..n)
+                    .map(|_| self.item())
+                    .collect::<Result<_, _>>()
+                    .map(Value::Array)
             }
             (4, None) => {
                 let mut items = Vec::new();
@@ -128,7 +152,10 @@ impl Decoder<'_> {
                     let key_at = self.pos;
                     let k = self.item()?;
                     if entries.iter().any(|(e, _)| same_key(e, &k)) {
-                        return Err(format!("duplicate map key {} at byte {key_at}", describe(&k)));
+                        return Err(format!(
+                            "duplicate map key {} at byte {key_at}",
+                            describe(&k)
+                        ));
                     }
                     let v = self.item()?;
                     entries.push((k, v));
@@ -137,7 +164,9 @@ impl Decoder<'_> {
                 Ok(Value::Map(entries))
             }
             (6, Some(t)) => Ok(Value::Tag(t, Box::new(self.item()?))),
-            _ => Err(format!("indefinite length not allowed for major type {major} at byte {at}")),
+            _ => Err(format!(
+                "indefinite length not allowed for major type {major} at byte {at}"
+            )),
         }
     }
 
@@ -153,8 +182,14 @@ impl Decoder<'_> {
                 n if n < 32 => return Err(format!("simple value {n} in two bytes at byte {at}")),
                 n => Value::Simple(n),
             },
-            25 => Value::SizedFloat(f16_to_f64(u16::from_be_bytes(self.take(2)?.try_into().unwrap())), 16),
-            26 => Value::SizedFloat(f32::from_be_bytes(self.take(4)?.try_into().unwrap()) as f64, 32),
+            25 => Value::SizedFloat(
+                f16_to_f64(u16::from_be_bytes(self.take(2)?.try_into().unwrap())),
+                16,
+            ),
+            26 => Value::SizedFloat(
+                f32::from_be_bytes(self.take(4)?.try_into().unwrap()) as f64,
+                32,
+            ),
             27 => Value::SizedFloat(f64::from_be_bytes(self.take(8)?.try_into().unwrap()), 64),
             31 => return Err(format!("unexpected break at byte {at}")),
             _ => return Err(format!("reserved simple value {ai} at byte {at}")),
@@ -164,7 +199,10 @@ impl Decoder<'_> {
     /// The break code ends an indefinite-length item.
     fn at_break(&mut self) -> Result<bool, String> {
         match self.bytes.get(self.pos) {
-            Some(0xff) => { self.pos += 1; Ok(true) }
+            Some(0xff) => {
+                self.pos += 1;
+                Ok(true)
+            }
             Some(_) => Ok(false),
             None => Err("truncated: indefinite-length item has no break".into()),
         }
@@ -180,7 +218,8 @@ impl Decoder<'_> {
             if head >> 5 != major {
                 return Err(format!("a chunk of another type at byte {at}"));
             }
-            let n = self.argument(head & 0x1f)?
+            let n = self
+                .argument(head & 0x1f)?
                 .ok_or_else(|| format!("a nested indefinite-length chunk at byte {at}"))?;
             let n = self.len(n)?;
             out.extend_from_slice(self.take(n)?);
@@ -232,9 +271,18 @@ fn head(major: u8, n: u64, out: &mut Vec<u8>) {
     match n {
         0..=23 => out.push(m | n as u8),
         24..=0xff => out.extend([m | 24, n as u8]),
-        0x100..=0xffff => { out.push(m | 25); out.extend((n as u16).to_be_bytes()); }
-        0x1_0000..=0xffff_ffff => { out.push(m | 26); out.extend((n as u32).to_be_bytes()); }
-        _ => { out.push(m | 27); out.extend(n.to_be_bytes()); }
+        0x100..=0xffff => {
+            out.push(m | 25);
+            out.extend((n as u16).to_be_bytes());
+        }
+        0x1_0000..=0xffff_ffff => {
+            out.push(m | 26);
+            out.extend((n as u32).to_be_bytes());
+        }
+        _ => {
+            out.push(m | 27);
+            out.extend(n.to_be_bytes());
+        }
     }
 }
 
@@ -243,23 +291,47 @@ fn write(v: &Value, out: &mut Vec<u8>) {
         Value::Uint(n) => head(0, *n, out),
         Value::Int(n) if *n >= 0 => head(0, *n as u64, out),
         Value::Int(n) => head(1, (-1 - *n) as u64, out),
-        Value::Bytes(b) => { head(2, b.len() as u64, out); out.extend(b); }
-        Value::Text(t) => { head(3, t.len() as u64, out); out.extend(t.as_bytes()); }
-        Value::Array(a) => { head(4, a.len() as u64, out); a.iter().for_each(|x| write(x, out)); }
+        Value::Bytes(b) => {
+            head(2, b.len() as u64, out);
+            out.extend(b);
+        }
+        Value::Text(t) => {
+            head(3, t.len() as u64, out);
+            out.extend(t.as_bytes());
+        }
+        Value::Array(a) => {
+            head(4, a.len() as u64, out);
+            a.iter().for_each(|x| write(x, out));
+        }
         Value::Map(m) => {
             head(5, m.len() as u64, out);
-            for (k, x) in m { write(k, out); write(x, out); }
+            for (k, x) in m {
+                write(k, out);
+                write(x, out);
+            }
         }
-        Value::Tag(t, inner) => { head(6, *t, out); write(inner, out); }
+        Value::Tag(t, inner) => {
+            head(6, *t, out);
+            write(inner, out);
+        }
         Value::Bool(false) => out.push(0xf4),
         Value::Bool(true) => out.push(0xf5),
         Value::Null => out.push(0xf6),
         Value::Undefined => out.push(0xf7),
         Value::Simple(n) if *n < 24 => out.push(0xe0 | n),
         Value::Simple(n) => out.extend([0xf8, *n]),
-        Value::SizedFloat(x, 16) => { out.push(0xf9); out.extend(f64_to_f16(*x).to_be_bytes()); }
-        Value::SizedFloat(x, 32) => { out.push(0xfa); out.extend((*x as f32).to_be_bytes()); }
-        Value::SizedFloat(x, _) | Value::Float(x) => { out.push(0xfb); out.extend(x.to_be_bytes()); }
+        Value::SizedFloat(x, 16) => {
+            out.push(0xf9);
+            out.extend(f64_to_f16(*x).to_be_bytes());
+        }
+        Value::SizedFloat(x, 32) => {
+            out.push(0xfa);
+            out.extend((*x as f32).to_be_bytes());
+        }
+        Value::SizedFloat(x, _) | Value::Float(x) => {
+            out.push(0xfb);
+            out.extend(x.to_be_bytes());
+        }
     }
 }
 
@@ -278,17 +350,23 @@ fn f64_to_f16(x: f64) -> u16 {
         return sign | 0x7c00;
     }
     if e <= 0 {
-        if e < -10 { return sign; }
+        if e < -10 {
+            return sign;
+        }
         let m = man | 0x80_0000;
         let shift = (14 - e) as u32;
         let half = 1 << (shift - 1);
         let mut r = m >> shift;
         let rem = m & ((1 << shift) - 1);
-        if rem > half || (rem == half && r & 1 == 1) { r += 1; }
+        if rem > half || (rem == half && r & 1 == 1) {
+            r += 1;
+        }
         return sign | r as u16;
     }
     let mut r = ((e as u32) << 10) | (man >> 13);
     let rem = man & 0x1fff;
-    if rem > 0x1000 || (rem == 0x1000 && r & 1 == 1) { r += 1; }
+    if rem > 0x1000 || (rem == 0x1000 && r & 1 == 1) {
+        r += 1;
+    }
     sign | r as u16
 }

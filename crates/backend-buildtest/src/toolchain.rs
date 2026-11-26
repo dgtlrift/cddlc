@@ -14,20 +14,46 @@ use std::sync::{Mutex, OnceLock};
 // ── Languages ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Lang { Rust, C, Cpp, CSharp, NodeJs, Python, Go, Java, Lua, Dart }
+pub enum Lang {
+    Rust,
+    C,
+    Cpp,
+    CSharp,
+    NodeJs,
+    Python,
+    Go,
+    Java,
+    Lua,
+    Dart,
+}
 
 impl Lang {
     pub const ALL: [Lang; 10] = [
-        Lang::Rust, Lang::C, Lang::Cpp, Lang::CSharp, Lang::NodeJs,
-        Lang::Python, Lang::Go, Lang::Java, Lang::Lua, Lang::Dart,
+        Lang::Rust,
+        Lang::C,
+        Lang::Cpp,
+        Lang::CSharp,
+        Lang::NodeJs,
+        Lang::Python,
+        Lang::Go,
+        Lang::Java,
+        Lang::Lua,
+        Lang::Dart,
     ];
 
     /// The name `scripts/interop.sh` and `cddlc generate -l` use.
     pub fn name(self) -> &'static str {
         match self {
-            Lang::Rust => "rust", Lang::C => "c", Lang::Cpp => "cpp", Lang::CSharp => "csharp",
-            Lang::NodeJs => "nodejs", Lang::Python => "python", Lang::Go => "go",
-            Lang::Java => "java", Lang::Lua => "lua", Lang::Dart => "dart",
+            Lang::Rust => "rust",
+            Lang::C => "c",
+            Lang::Cpp => "cpp",
+            Lang::CSharp => "csharp",
+            Lang::NodeJs => "nodejs",
+            Lang::Python => "python",
+            Lang::Go => "go",
+            Lang::Java => "java",
+            Lang::Lua => "lua",
+            Lang::Dart => "dart",
         }
     }
 
@@ -37,9 +63,16 @@ impl Lang {
 
     fn display(self) -> &'static str {
         match self {
-            Lang::Rust => "Rust", Lang::C => "C", Lang::Cpp => "C++", Lang::CSharp => "C#",
-            Lang::NodeJs => "Node.js", Lang::Python => "Python", Lang::Go => "Go",
-            Lang::Java => "Java", Lang::Lua => "Lua", Lang::Dart => "Dart",
+            Lang::Rust => "Rust",
+            Lang::C => "C",
+            Lang::Cpp => "C++",
+            Lang::CSharp => "C#",
+            Lang::NodeJs => "Node.js",
+            Lang::Python => "Python",
+            Lang::Go => "Go",
+            Lang::Java => "Java",
+            Lang::Lua => "Lua",
+            Lang::Dart => "Dart",
         }
     }
 }
@@ -48,13 +81,26 @@ impl Lang {
 
 /// The package manager install hints are written for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Host { Apt, Dnf, Zypper, Pacman, Apk, Brew, Choco, Unknown }
+pub enum Host {
+    Apt,
+    Dnf,
+    Zypper,
+    Pacman,
+    Apk,
+    Brew,
+    Choco,
+    Unknown,
+}
 
 impl Host {
     fn from_name(name: &str) -> Option<Host> {
         Some(match name {
-            "apt" => Host::Apt, "dnf" | "yum" | "rpm" => Host::Dnf, "zypper" => Host::Zypper,
-            "pacman" => Host::Pacman, "apk" => Host::Apk, "brew" => Host::Brew,
+            "apt" => Host::Apt,
+            "dnf" | "yum" | "rpm" => Host::Dnf,
+            "zypper" => Host::Zypper,
+            "pacman" => Host::Pacman,
+            "apk" => Host::Apk,
+            "brew" => Host::Brew,
             "choco" | "chocolatey" => Host::Choco,
             _ => return None,
         })
@@ -66,7 +112,11 @@ impl Host {
 /// Chocolatey on Windows, and on Linux the distribution in `/etc/os-release`
 /// (its `ID`, then `ID_LIKE`), or failing that whichever manager is on PATH.
 pub fn host() -> Host {
-    if let Some(h) = std::env::var("CDDLC_PKG_MANAGER").ok().as_deref().and_then(Host::from_name) {
+    if let Some(h) = std::env::var("CDDLC_PKG_MANAGER")
+        .ok()
+        .as_deref()
+        .and_then(Host::from_name)
+    {
         return h;
     }
     if cfg!(target_os = "macos") {
@@ -80,8 +130,14 @@ pub fn host() -> Host {
             return h;
         }
     }
-    for (tool, h) in [("apt-get", Host::Apt), ("dnf", Host::Dnf), ("zypper", Host::Zypper),
-                      ("pacman", Host::Pacman), ("apk", Host::Apk), ("brew", Host::Brew)] {
+    for (tool, h) in [
+        ("apt-get", Host::Apt),
+        ("dnf", Host::Dnf),
+        ("zypper", Host::Zypper),
+        ("pacman", Host::Pacman),
+        ("apk", Host::Apk),
+        ("brew", Host::Brew),
+    ] {
         if find(tool).is_some() {
             return h;
         }
@@ -91,14 +147,19 @@ pub fn host() -> Host {
 
 /// The package manager for an `/etc/os-release`, from its `ID` and `ID_LIKE`.
 pub fn host_from_os_release(release: &str) -> Option<Host> {
-    let field = |key: &str| release.lines()
-        .find_map(|l| l.strip_prefix(key).and_then(|v| v.strip_prefix('=')))
-        .map(|v| v.trim_matches('"').to_ascii_lowercase())
-        .unwrap_or_default();
+    let field = |key: &str| {
+        release
+            .lines()
+            .find_map(|l| l.strip_prefix(key).and_then(|v| v.strip_prefix('=')))
+            .map(|v| v.trim_matches('"').to_ascii_lowercase())
+            .unwrap_or_default()
+    };
     let ids = format!("{} {}", field("ID"), field("ID_LIKE"));
     for id in ids.split_whitespace() {
         let h = match id {
-            "debian" | "ubuntu" | "linuxmint" | "pop" | "elementary" | "raspbian" | "kali" => Host::Apt,
+            "debian" | "ubuntu" | "linuxmint" | "pop" | "elementary" | "raspbian" | "kali" => {
+                Host::Apt
+            }
             "fedora" | "rhel" | "centos" | "rocky" | "almalinux" | "ol" | "amzn" => Host::Dnf,
             "suse" | "sles" | "opensuse" | "opensuse-leap" | "opensuse-tumbleweed" => Host::Zypper,
             "arch" | "manjaro" | "endeavouros" => Host::Pacman,
@@ -115,8 +176,22 @@ pub fn host_from_os_release(release: &str) -> Option<Host> {
 /// One thing a build test needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Need {
-    Cargo, Cmake, CCompiler, CxxCompiler, Git, DotnetSdk8, Node18, Npm,
-    Python3, PythonModules, Go, Jdk17, Maven, Lua, Busted, Dart,
+    Cargo,
+    Cmake,
+    CCompiler,
+    CxxCompiler,
+    Git,
+    DotnetSdk8,
+    Node18,
+    Npm,
+    Python3,
+    PythonModules,
+    Go,
+    Jdk17,
+    Maven,
+    Lua,
+    Busted,
+    Dart,
 }
 
 impl Need {
@@ -241,10 +316,18 @@ pub fn install_commands(needs: &[Need], host: Host) -> Vec<String> {
     let mut commands: Vec<String> = Vec::new();
     for need in needs {
         match install(*need, host) {
-            Install::Packages(ps) => for p in ps {
-                if !packages.contains(p) { packages.push(p); }
-            },
-            Install::Command(c) => if !commands.iter().any(|x| x == c) { commands.push(c.to_owned()); },
+            Install::Packages(ps) => {
+                for p in ps {
+                    if !packages.contains(p) {
+                        packages.push(p);
+                    }
+                }
+            }
+            Install::Command(c) => {
+                if !commands.iter().any(|x| x == c) {
+                    commands.push(c.to_owned());
+                }
+            }
         }
     }
     let mut out = Vec::new();
@@ -271,18 +354,22 @@ pub fn install_commands(needs: &[Need], host: Host) -> Vec<String> {
 /// install it here.
 #[derive(Clone, Debug)]
 pub struct Missing {
-    pub lang:    Lang,
-    pub needs:   Vec<Need>,
+    pub lang: Lang,
+    pub needs: Vec<Need>,
     /// Why each need failed (`node v16.20.0 is older than 18`).
     pub details: Vec<String>,
-    pub host:    Host,
+    pub host: Host,
 }
 
 impl Missing {
     /// The short form, for one schema's skip reason.
     pub fn short(&self) -> String {
         let what: Vec<&str> = self.needs.iter().map(|n| n.describe()).collect();
-        format!("{} toolchain incomplete: {}", self.lang.display(), what.join(", "))
+        format!(
+            "{} toolchain incomplete: {}",
+            self.lang.display(),
+            what.join(", ")
+        )
     }
 }
 
@@ -308,8 +395,18 @@ impl fmt::Display for Missing {
 
 /// The path of `tool` on PATH.
 pub fn find(tool: &str) -> Option<String> {
-    let out = Command::new(if cfg!(windows) { "where" } else { "which" }).arg(tool).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").trim().to_owned())
+    let out = Command::new(if cfg!(windows) { "where" } else { "which" })
+        .arg(tool)
+        .output()
+        .ok()?;
+    out.status.success().then(|| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_owned()
+    })
 }
 
 fn first_of(tools: &[&str]) -> Option<String> {
@@ -319,7 +416,11 @@ fn first_of(tools: &[&str]) -> Option<String> {
 /// The output of `tool args...`, stdout and stderr together.
 fn version_output(tool: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(tool).args(args).output().ok()?;
-    Some(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    Some(format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    ))
 }
 
 /// The first number after `prefix` in `text` (`v18.19.1` → 18 with prefix `v`).
@@ -360,24 +461,40 @@ pub fn probe(lang: Lang) -> Result<(), Missing> {
     };
     let missing = |n: Need| format!("{}: not found", n.describe());
     match lang {
-        Lang::Rust => if find("cargo").is_none() { need(Need::Cargo, missing(Need::Cargo)) },
+        Lang::Rust => {
+            if find("cargo").is_none() {
+                need(Need::Cargo, missing(Need::Cargo))
+            }
+        }
         Lang::C | Lang::Cpp => {
-            if find("cmake").is_none() { need(Need::Cmake, missing(Need::Cmake)) }
+            if find("cmake").is_none() {
+                need(Need::Cmake, missing(Need::Cmake))
+            }
             if lang == Lang::C && first_of(&["cc", "gcc", "clang"]).is_none() {
                 need(Need::CCompiler, missing(Need::CCompiler))
             }
             if lang == Lang::Cpp && first_of(&["c++", "g++", "clang++"]).is_none() {
                 need(Need::CxxCompiler, missing(Need::CxxCompiler))
             }
-            if find("git").is_none() { need(Need::Git, missing(Need::Git)) }
+            if find("git").is_none() {
+                need(Need::Git, missing(Need::Git))
+            }
         }
         Lang::CSharp => match find("dotnet") {
             None => need(Need::DotnetSdk8, missing(Need::DotnetSdk8)),
             Some(d) => {
                 let sdks = version_output(&d, &["--list-sdks"]).unwrap_or_default();
-                let ok = sdks.lines().any(|l| major_after(l, "").is_some_and(|m| m >= 8));
+                let ok = sdks
+                    .lines()
+                    .any(|l| major_after(l, "").is_some_and(|m| m >= 8));
                 if !ok {
-                    need(Need::DotnetSdk8, format!("{}: no SDK 8 or later in `dotnet --list-sdks`", Need::DotnetSdk8.describe()))
+                    need(
+                        Need::DotnetSdk8,
+                        format!(
+                            "{}: no SDK 8 or later in `dotnet --list-sdks`",
+                            Need::DotnetSdk8.describe()
+                        ),
+                    )
                 }
             }
         },
@@ -387,48 +504,88 @@ pub fn probe(lang: Lang) -> Result<(), Missing> {
                 Some(n) => {
                     let v = version_output(&n, &["--version"]).unwrap_or_default();
                     if !major_after(&v, "v").is_some_and(|m| m >= 18) {
-                        need(Need::Node18, format!("{}: found {} (Node 22 from https://nodejs.org or NodeSource)", Need::Node18.describe(), v.trim()))
+                        need(
+                            Need::Node18,
+                            format!(
+                                "{}: found {} (Node 22 from https://nodejs.org or NodeSource)",
+                                Need::Node18.describe(),
+                                v.trim()
+                            ),
+                        )
                     }
                 }
             }
-            if find("npm").is_none() { need(Need::Npm, missing(Need::Npm)) }
+            if find("npm").is_none() {
+                need(Need::Npm, missing(Need::Npm))
+            }
         }
         Lang::Python => match python() {
             None => need(Need::Python3, missing(Need::Python3)),
             Some(py) => {
                 let ok = Command::new(&py)
-                    .args(["-c", "import cbor2, pytest, importlib.metadata as m; \
-                                  assert int(m.version('cbor2').split('.')[0]) >= 6"])
+                    .args([
+                        "-c",
+                        "import cbor2, pytest, importlib.metadata as m; \
+                                  assert int(m.version('cbor2').split('.')[0]) >= 6",
+                    ])
                     .output()
                     .is_ok_and(|o| o.status.success());
                 if !ok {
-                    need(Need::PythonModules, format!("{}: missing from {py} (CDDLC_PYTHON picks another interpreter)", Need::PythonModules.describe()))
+                    need(
+                        Need::PythonModules,
+                        format!(
+                            "{}: missing from {py} (CDDLC_PYTHON picks another interpreter)",
+                            Need::PythonModules.describe()
+                        ),
+                    )
                 }
             }
         },
-        Lang::Go => if find("go").is_none() { need(Need::Go, missing(Need::Go)) },
+        Lang::Go => {
+            if find("go").is_none() {
+                need(Need::Go, missing(Need::Go))
+            }
+        }
         Lang::Java => {
             match find("javac") {
                 None => need(Need::Jdk17, missing(Need::Jdk17)),
                 Some(j) => {
                     let v = version_output(&j, &["-version"]).unwrap_or_default();
                     if !major_after(&v, "javac ").is_some_and(|m| m >= 17) {
-                        need(Need::Jdk17, format!("{}: found {}", Need::Jdk17.describe(), v.trim()))
+                        need(
+                            Need::Jdk17,
+                            format!("{}: found {}", Need::Jdk17.describe(), v.trim()),
+                        )
                     }
                 }
             }
-            if find("mvn").is_none() { need(Need::Maven, missing(Need::Maven)) }
+            if find("mvn").is_none() {
+                need(Need::Maven, missing(Need::Maven))
+            }
         }
         Lang::Lua => {
-            if first_of(&["lua5.4", "lua54", "lua5.3", "lua"]).is_none() { need(Need::Lua, missing(Need::Lua)) }
-            if busted().is_none() { need(Need::Busted, missing(Need::Busted)) }
+            if first_of(&["lua5.4", "lua54", "lua5.3", "lua"]).is_none() {
+                need(Need::Lua, missing(Need::Lua))
+            }
+            if busted().is_none() {
+                need(Need::Busted, missing(Need::Busted))
+            }
         }
-        Lang::Dart => if find("dart").is_none() { need(Need::Dart, missing(Need::Dart)) },
+        Lang::Dart => {
+            if find("dart").is_none() {
+                need(Need::Dart, missing(Need::Dart))
+            }
+        }
     }
     if needs.is_empty() {
         Ok(())
     } else {
-        Err(Missing { lang, needs, details, host: host() })
+        Err(Missing {
+            lang,
+            needs,
+            details,
+            host: host(),
+        })
     }
 }
 
@@ -439,11 +596,17 @@ pub fn check(lang: Lang) -> Result<(), String> {
     static CACHE: OnceLock<Mutex<HashMap<Lang, Result<(), Missing>>>> = OnceLock::new();
     static REPORTED: OnceLock<Mutex<HashSet<Lang>>> = OnceLock::new();
     let result = {
-        let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = CACHE
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         cache.entry(lang).or_insert_with(|| probe(lang)).clone()
     };
     result.map_err(|m| {
-        let mut reported = REPORTED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        let mut reported = REPORTED
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if reported.insert(lang) {
             eprintln!("\n{m}");
         }
@@ -458,17 +621,38 @@ pub fn check(lang: Lang) -> Result<(), String> {
 /// the line that says so.
 pub fn registry_unavailable(output: &str) -> Option<String> {
     const SIGNS: &[&str] = &[
-        "status code: 429", "Too Many Requests", "429 Too Many", "Could not transfer artifact",
-        "503 Service Unavailable", "502 Bad Gateway", "504 Gateway",
-        "Could not resolve host", "Temporary failure in name resolution", "Name or service not known",
-        "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENOTFOUND", "socket hang up",
-        "npm ERR! network", "npm error network",
-        "i/o timeout", "TLS handshake timeout", "connection reset by peer", "dial tcp",
-        "Unable to load the service index", "NU1301",
-        "Got socket error trying to find package", "Connection closed before full header",
-        "Connection timed out", "Failed to connect to", "fatal: unable to access",
+        "status code: 429",
+        "Too Many Requests",
+        "429 Too Many",
+        "Could not transfer artifact",
+        "503 Service Unavailable",
+        "502 Bad Gateway",
+        "504 Gateway",
+        "Could not resolve host",
+        "Temporary failure in name resolution",
+        "Name or service not known",
+        "ETIMEDOUT",
+        "ECONNRESET",
+        "ECONNREFUSED",
+        "EAI_AGAIN",
+        "ENOTFOUND",
+        "socket hang up",
+        "npm ERR! network",
+        "npm error network",
+        "i/o timeout",
+        "TLS handshake timeout",
+        "connection reset by peer",
+        "dial tcp",
+        "Unable to load the service index",
+        "NU1301",
+        "Got socket error trying to find package",
+        "Connection closed before full header",
+        "Connection timed out",
+        "Failed to connect to",
+        "fatal: unable to access",
     ];
-    output.lines()
+    output
+        .lines()
         .find(|l| SIGNS.iter().any(|s| l.contains(s)))
         .map(|l| l.trim().chars().take(300).collect())
 }
@@ -479,10 +663,19 @@ mod tests {
 
     #[test]
     fn hosts_from_os_release() {
-        assert_eq!(host_from_os_release("ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n"), Some(Host::Apt));
+        assert_eq!(
+            host_from_os_release("ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n"),
+            Some(Host::Apt)
+        );
         assert_eq!(host_from_os_release("ID=fedora\n"), Some(Host::Dnf));
-        assert_eq!(host_from_os_release("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n"), Some(Host::Dnf));
-        assert_eq!(host_from_os_release("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"), Some(Host::Zypper));
+        assert_eq!(
+            host_from_os_release("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n"),
+            Some(Host::Dnf)
+        );
+        assert_eq!(
+            host_from_os_release("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"),
+            Some(Host::Zypper)
+        );
         assert_eq!(host_from_os_release("ID=alpine\n"), Some(Host::Apk));
         assert_eq!(host_from_os_release("ID=arch\n"), Some(Host::Pacman));
         assert_eq!(host_from_os_release("ID=plan9\n"), None);
@@ -493,23 +686,64 @@ mod tests {
         let apt = install_commands(&[Need::Jdk17, Need::Maven], Host::Apt);
         assert_eq!(apt, ["sudo apt install openjdk-17-jdk maven"]);
         let brew = install_commands(&[Need::Lua, Need::Busted], Host::Brew);
-        assert_eq!(brew, ["brew install lua luarocks", "luarocks --lua-version 5.4 --local install busted"]);
+        assert_eq!(
+            brew,
+            [
+                "brew install lua luarocks",
+                "luarocks --lua-version 5.4 --local install busted"
+            ]
+        );
         let choco = install_commands(&[Need::Go], Host::Choco);
-        assert_eq!(choco, ["choco install -y golang   (in an administrator shell)"]);
-        let apk = install_commands(&[Need::CCompiler, Need::CxxCompiler, Need::Cmake], Host::Apk);
+        assert_eq!(
+            choco,
+            ["choco install -y golang   (in an administrator shell)"]
+        );
+        let apk = install_commands(
+            &[Need::CCompiler, Need::CxxCompiler, Need::Cmake],
+            Host::Apk,
+        );
         assert_eq!(apk, ["sudo apk add build-base cmake"]);
         // A need with no package gets its own command.
-        assert!(install_commands(&[Need::Dart], Host::Apt).iter().any(|c| c.contains("download.dartlang.org")));
+        assert!(install_commands(&[Need::Dart], Host::Apt)
+            .iter()
+            .any(|c| c.contains("download.dartlang.org")));
     }
 
     #[test]
     fn every_need_has_an_install_on_every_host() {
-        let needs = [Need::Cargo, Need::Cmake, Need::CCompiler, Need::CxxCompiler, Need::Git,
-                     Need::DotnetSdk8, Need::Node18, Need::Npm, Need::Python3, Need::PythonModules,
-                     Need::Go, Need::Jdk17, Need::Maven, Need::Lua, Need::Busted, Need::Dart];
-        for host in [Host::Apt, Host::Dnf, Host::Zypper, Host::Pacman, Host::Apk, Host::Brew, Host::Choco, Host::Unknown] {
+        let needs = [
+            Need::Cargo,
+            Need::Cmake,
+            Need::CCompiler,
+            Need::CxxCompiler,
+            Need::Git,
+            Need::DotnetSdk8,
+            Need::Node18,
+            Need::Npm,
+            Need::Python3,
+            Need::PythonModules,
+            Need::Go,
+            Need::Jdk17,
+            Need::Maven,
+            Need::Lua,
+            Need::Busted,
+            Need::Dart,
+        ];
+        for host in [
+            Host::Apt,
+            Host::Dnf,
+            Host::Zypper,
+            Host::Pacman,
+            Host::Apk,
+            Host::Brew,
+            Host::Choco,
+            Host::Unknown,
+        ] {
             for n in needs {
-                assert!(!install_commands(&[n], host).is_empty(), "{n:?} on {host:?}");
+                assert!(
+                    !install_commands(&[n], host).is_empty(),
+                    "{n:?} on {host:?}"
+                );
             }
         }
     }
@@ -518,7 +752,10 @@ mod tests {
     fn registry_failures_are_recognized() {
         let maven = "[ERROR] Could not transfer artifact x:y:pom:3.4.0 from/to central (https://repo.maven.apache.org/maven2): status code: 429, reason phrase: Too Many Requests (429)";
         assert!(registry_unavailable(maven).is_some());
-        assert!(registry_unavailable("npm error network request to https://registry.npmjs.org failed").is_some());
+        assert!(registry_unavailable(
+            "npm error network request to https://registry.npmjs.org failed"
+        )
+        .is_some());
         assert!(registry_unavailable("error[E0308]: mismatched types").is_none());
         assert!(registry_unavailable("AssertionError: expected 1, got 2").is_none());
     }

@@ -20,6 +20,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    # cddlc's sources are as rustfmt writes them: `cargo fmt --all` fixes a
+    # failure (dgtlrift/cddlc#231).
+    - name: Check formatting
+      run: cargo fmt --all --check
     - name: Build
       run: cargo build --verbose
     - name: Run tests

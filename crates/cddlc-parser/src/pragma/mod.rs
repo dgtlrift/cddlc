@@ -8,7 +8,6 @@
 ///
 /// This module is responsible only for *recognising and parsing* pragma lines.
 /// Attaching them to rules is done in the main parser.
-
 use crate::ast::{Pragma, PragmaValue, Span};
 use crate::error::{ParseWarning, WarningKind};
 use std::path::PathBuf;
@@ -22,9 +21,9 @@ use std::path::PathBuf;
 /// continues.
 pub fn parse_pragma(
     comment_body: &str,
-    span:         Span,
-    path:         &PathBuf,
-    line:         usize,
+    span: Span,
+    path: &PathBuf,
+    line: usize,
 ) -> Option<Result<Pragma, ParseWarning>> {
     let body = comment_body.trim();
     if !body.starts_with('@') {
@@ -35,38 +34,54 @@ pub fn parse_pragma(
     let rest = &body[1..];
     let (keyword, value_str) = match rest.find(|c: char| c.is_whitespace()) {
         Some(pos) => (&rest[..pos], rest[pos..].trim()),
-        None      => (rest, ""),
+        None => (rest, ""),
     };
 
     let pragma_value = match keyword {
-        "import" => {
-            match parse_quoted_string(value_str) {
-                Some(s) => PragmaValue::Import(s),
-                None    => return Some(Err(bad_pragma(path, line, keyword,
-                    "expected a quoted string, e.g. @import \"path/to/file.cddl\""))),
+        "import" => match parse_quoted_string(value_str) {
+            Some(s) => PragmaValue::Import(s),
+            None => {
+                return Some(Err(bad_pragma(
+                    path,
+                    line,
+                    keyword,
+                    "expected a quoted string, e.g. @import \"path/to/file.cddl\"",
+                )))
             }
-        }
+        },
 
-        "capacity" => {
-            match value_str.parse::<u64>() {
-                Ok(n)  => PragmaValue::Capacity(n),
-                Err(_) => return Some(Err(bad_pragma(path, line, keyword,
-                    "expected a non-negative integer, e.g. @capacity 32"))),
+        "capacity" => match value_str.parse::<u64>() {
+            Ok(n) => PragmaValue::Capacity(n),
+            Err(_) => {
+                return Some(Err(bad_pragma(
+                    path,
+                    line,
+                    keyword,
+                    "expected a non-negative integer, e.g. @capacity 32",
+                )))
             }
-        }
+        },
 
-        "str-capacity" => {
-            match value_str.parse::<u64>() {
-                Ok(n)  => PragmaValue::StrCapacity(n),
-                Err(_) => return Some(Err(bad_pragma(path, line, keyword,
-                    "expected a non-negative integer, e.g. @str-capacity 128"))),
+        "str-capacity" => match value_str.parse::<u64>() {
+            Ok(n) => PragmaValue::StrCapacity(n),
+            Err(_) => {
+                return Some(Err(bad_pragma(
+                    path,
+                    line,
+                    keyword,
+                    "expected a non-negative integer, e.g. @str-capacity 128",
+                )))
             }
-        }
+        },
 
         "regex-hook" => {
             if value_str.is_empty() {
-                return Some(Err(bad_pragma(path, line, keyword,
-                    "expected a C/Rust identifier, e.g. @regex-hook validate_serial")));
+                return Some(Err(bad_pragma(
+                    path,
+                    line,
+                    keyword,
+                    "expected a C/Rust identifier, e.g. @regex-hook validate_serial",
+                )));
             }
             PragmaValue::RegexHook(value_str.to_owned())
         }
@@ -75,18 +90,22 @@ pub fn parse_pragma(
             match parse_quoted_string(value_str) {
                 Some(s) => PragmaValue::Doc(s),
                 // Also accept unquoted trailing text as doc comment
-                None    => PragmaValue::Doc(value_str.to_owned()),
+                None => PragmaValue::Doc(value_str.to_owned()),
             }
         }
 
-        "deprecated"       => PragmaValue::Deprecated,
-        "skip-validation"  => PragmaValue::SkipValidation,
-        "opaque"           => PragmaValue::Opaque,
+        "deprecated" => PragmaValue::Deprecated,
+        "skip-validation" => PragmaValue::SkipValidation,
+        "opaque" => PragmaValue::Opaque,
 
         "default" => {
             if value_str.is_empty() {
-                return Some(Err(bad_pragma(path, line, keyword,
-                    "expected a value expression, e.g. @default 0")));
+                return Some(Err(bad_pragma(
+                    path,
+                    line,
+                    keyword,
+                    "expected a value expression, e.g. @default 0",
+                )));
             }
             PragmaValue::Default(value_str.to_owned())
         }
@@ -105,7 +124,7 @@ pub fn parse_pragma(
             let pragma = Pragma {
                 span,
                 keyword: other.to_owned(),
-                value:   PragmaValue::Unknown(value_str.to_owned()),
+                value: PragmaValue::Unknown(value_str.to_owned()),
             };
             // We return Ok here (not an error) but the warning is communicated
             // via the ParseResult warning list at the call site.
@@ -121,31 +140,26 @@ pub fn parse_pragma(
     Some(Ok(Pragma {
         span,
         keyword: keyword.to_owned(),
-        value:   pragma_value,
+        value: pragma_value,
     }))
 }
 
 fn parse_quoted_string(s: &str) -> Option<String> {
     let s = s.trim();
     if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-        Some(s[1..s.len()-1].to_owned())
+        Some(s[1..s.len() - 1].to_owned())
     } else {
         None
     }
 }
 
-fn bad_pragma(
-    path:    &PathBuf,
-    line:    usize,
-    keyword: &str,
-    reason:  &str,
-) -> ParseWarning {
+fn bad_pragma(path: &PathBuf, line: usize, keyword: &str, reason: &str) -> ParseWarning {
     ParseWarning {
-        path:    path.clone(),
+        path: path.clone(),
         line,
-        col:     0,
+        col: 0,
         message: format!("pragma '@{keyword}': {reason}"),
-        kind:    WarningKind::UnknownPragma,
+        kind: WarningKind::UnknownPragma,
     }
 }
 
@@ -153,8 +167,12 @@ fn bad_pragma(
 mod tests {
     use super::*;
 
-    fn span() -> Span { Span::new(0, 0) }
-    fn path() -> PathBuf { PathBuf::from("test.cddl") }
+    fn span() -> Span {
+        Span::new(0, 0)
+    }
+    fn path() -> PathBuf {
+        PathBuf::from("test.cddl")
+    }
 
     #[test]
     fn test_not_a_pragma() {
@@ -167,7 +185,10 @@ mod tests {
         let result = parse_pragma(r#"@import "common/types.cddl""#, span(), &path(), 1);
         let pragma = result.unwrap().unwrap();
         assert_eq!(pragma.keyword, "import");
-        assert_eq!(pragma.value, PragmaValue::Import("common/types.cddl".into()));
+        assert_eq!(
+            pragma.value,
+            PragmaValue::Import("common/types.cddl".into())
+        );
     }
 
     #[test]

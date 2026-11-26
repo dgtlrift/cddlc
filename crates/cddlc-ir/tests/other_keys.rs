@@ -40,10 +40,20 @@ fn named_choice_of_integers_and_text() {
 fn parenthesised_choice_becomes_an_enum() {
     // RFC 9203's OSCORE_Input_Material.
     let m = lower_src("m = { ? 0 => bstr, * (int / tstr) => any }").unwrap();
-    let TypeRef::Named(n) = rest_key(&m, "m") else { panic!("expected a named key type") };
-    let Some(TypeDef::Enum(e)) = m.get(&n) else { panic!("{n}: expected an enum") };
+    let TypeRef::Named(n) = rest_key(&m, "m") else {
+        panic!("expected a named key type")
+    };
+    let Some(TypeDef::Enum(e)) = m.get(&n) else {
+        panic!("{n}: expected an enum")
+    };
     let tys: Vec<_> = e.variants.iter().map(|v| v.ty.clone()).collect();
-    assert_eq!(tys, vec![TypeRef::Primitive(Primitive::Int), TypeRef::Primitive(Primitive::Tstr)]);
+    assert_eq!(
+        tys,
+        vec![
+            TypeRef::Primitive(Primitive::Int),
+            TypeRef::Primitive(Primitive::Tstr)
+        ]
+    );
 }
 
 #[test]
@@ -56,7 +66,8 @@ fn alias_of_text_is_text() {
 fn byte_string_keys_are_refused() {
     let e = lower_src("m = { a: uint, * bstr => uint }").unwrap_err();
     assert!(
-        e.to_string().contains("a computed key other than text or integers alongside named members"),
+        e.to_string()
+            .contains("a computed key other than text or integers alongside named members"),
         "{e}"
     );
 }

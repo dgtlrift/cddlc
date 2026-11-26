@@ -6,28 +6,29 @@
 ///     include/<module>.hpp    ← types in namespace, std::optional, std::variant
 ///     src/<module>.cpp        ← encode/decode implementations
 ///     test/test_roundtrip.cpp ← roundtrip tests
-
 use cddlc_codegen::{
-    capacity_value, constraint_to_cpp_check,
-    to_pascal_case, to_screaming_snake, to_snake_case,
-    Backend, CodegenError, CodegenOptions, CodegenOutput, GeneratedFile,
-    IndentWriter,
+    capacity_value, constraint_to_cpp_check, to_pascal_case, to_screaming_snake, to_snake_case,
+    Backend, CodegenError, CodegenOptions, CodegenOutput, GeneratedFile, IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Capacity, Constraint, EnumDef, EnumVariant,
-    IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    AliasDef, ArrayDef, Capacity, Constraint, EnumDef, EnumVariant, IrModule, LiteralValue, MapDef,
+    Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct CppBackend;
 
 impl Backend for CppBackend {
-    fn language_name(&self) -> &str { "C++" }
-    fn file_extension(&self) -> &str { "hpp" }
+    fn language_name(&self) -> &str {
+        "C++"
+    }
+    fn file_extension(&self) -> &str {
+        "hpp"
+    }
 
     fn generate(
         &self,
         module: &IrModule,
-        opts:   &CodegenOptions,
+        opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "C++", true)?;
         if let Some(msg) = unsupported_recursion(module, opts) {
@@ -35,27 +36,27 @@ impl Backend for CppBackend {
         }
         // The members and variants held in a `Box` (dgtlrift/cddlc#156).
         BOXED.with(|b| *b.borrow_mut() = boxed_items(module, opts));
-        let name      = module.name.as_str();
-        let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
+        let name = module.name.as_str();
+        let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}-cpp");
 
         if opts.is_json() {
             return Ok(CodegenOutput {
                 files: vec![
                     GeneratedFile {
-                        path:    format!("{crate_dir}/CMakeLists.txt"),
+                        path: format!("{crate_dir}/CMakeLists.txt"),
                         content: emit_cmake_json_cpp(name, opts),
                     },
                     GeneratedFile {
-                        path:    format!("{crate_dir}/include/{name}.hpp"),
+                        path: format!("{crate_dir}/include/{name}.hpp"),
                         content: emit_header_json_cpp(module, opts),
                     },
                     GeneratedFile {
-                        path:    format!("{crate_dir}/src/{name}.cpp"),
+                        path: format!("{crate_dir}/src/{name}.cpp"),
                         content: emit_source_json_cpp(module, opts),
                     },
                     GeneratedFile {
-                        path:    format!("{crate_dir}/test/test_roundtrip.cpp"),
+                        path: format!("{crate_dir}/test/test_roundtrip.cpp"),
                         content: emit_tests_json_cpp(module, opts),
                     },
                 ],
@@ -65,23 +66,23 @@ impl Backend for CppBackend {
         Ok(CodegenOutput {
             files: vec![
                 GeneratedFile {
-                    path:    format!("{crate_dir}/CMakeLists.txt"),
+                    path: format!("{crate_dir}/CMakeLists.txt"),
                     content: emit_cmake(name, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/include/{name}.hpp"),
+                    path: format!("{crate_dir}/include/{name}.hpp"),
                     content: emit_header(module, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/compat/endian.h"),
+                    path: format!("{crate_dir}/compat/endian.h"),
                     content: nanocbor_macos_compat_h(opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/src/{name}.cpp"),
+                    path: format!("{crate_dir}/src/{name}.cpp"),
                     content: emit_source(module, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/test/test_roundtrip.cpp"),
+                    path: format!("{crate_dir}/test/test_roundtrip.cpp"),
                     content: emit_tests(module, opts),
                 },
             ],
@@ -118,7 +119,8 @@ const NANOCBOR_MACOS_COMPAT_H: &str = r#"/* macOS stand-in for Linux's <endian.h
 
 fn emit_cmake(name: &str, opts: &CodegenOptions) -> String {
     let header = cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Hash);
-    format!(r#"{header}cmake_minimum_required(VERSION 3.17)
+    format!(
+        r#"{header}cmake_minimum_required(VERSION 3.17)
 project({name}_cbor_cpp C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -153,16 +155,17 @@ enable_testing()
 add_executable(test_roundtrip test/test_roundtrip.cpp)
 target_link_libraries(test_roundtrip {name}_cbor_cpp)
 add_test(NAME roundtrip COMMAND test_roundtrip)
-"#)
+"#
+    )
 }
 
 // ── Header file ───────────────────────────────────────────────────────────────
 
 fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name    = module.name.as_str();
-    let guard   = format!("{}_HPP", to_screaming_snake(&name));
-    let ns      = to_snake_case(name);
-    let mut w   = IndentWriter::new(4);
+    let name = module.name.as_str();
+    let guard = format!("{}_HPP", to_screaming_snake(&name));
+    let ns = to_snake_case(name);
+    let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
         w.line(&l);
@@ -246,7 +249,11 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     let boxes = BOXED.with(|b| !b.borrow().is_empty());
     if boxes {
         for line in BOX_TEMPLATE.lines() {
-            if line.is_empty() { w.blank() } else { w.line(line) }
+            if line.is_empty() {
+                w.blank()
+            } else {
+                w.line(line)
+            }
         }
         w.blank();
     }
@@ -254,7 +261,9 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     // ── Type declarations ─────────────────────────────────────────────────────
     // After what each holds by value.
     for tname in cddlc_codegen::inline_decl_order(module) {
-        let Some(def) = module.get(&tname) else { continue };
+        let Some(def) = module.get(&tname) else {
+            continue;
+        };
         emit_type_decl_hpp(&mut w, def, opts);
         w.blank();
     }
@@ -300,10 +309,10 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
 fn emit_type_decl_hpp(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct_hpp(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum_hpp(w, e, opts),
-        TypeDef::Array(a)  => emit_array_hpp(w, a, opts),
-        TypeDef::Alias(a)  => emit_alias_hpp(w, a, opts),
-        TypeDef::Map(m)    => emit_map_hpp(w, m, opts),
+        TypeDef::Enum(e) => emit_enum_hpp(w, e, opts),
+        TypeDef::Array(a) => emit_array_hpp(w, a, opts),
+        TypeDef::Alias(a) => emit_alias_hpp(w, a, opts),
+        TypeDef::Map(m) => emit_map_hpp(w, m, opts),
     }
 }
 
@@ -321,7 +330,7 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         } else {
             cpp_field_type(&f.ty, &f.occurrence, opts)
         };
-        let fname  = to_snake_case(&f.name);
+        let fname = to_snake_case(&f.name);
         w.line(&format!("{ty_str} {fname}{{}};"));
         // A fixed-capacity repeated member says how many items it holds
         // (dgtlrift/cddlc#134).
@@ -343,14 +352,20 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         .collect();
     if let Some(r) = &s.rest {
         let rname = to_snake_case(&r.name);
-        let entry = format!("std::pair<{}, {}>", rest_key_cpp(r, opts), cpp_typeref(&r.val_ty, opts));
+        let entry = format!(
+            "std::pair<{}, {}>",
+            rest_key_cpp(r, opts),
+            cpp_typeref(&r.val_ty, opts)
+        );
         w.line("/// The map's other entries.");
         if is_heap(opts) {
             w.line(&format!("std::vector<{entry}> {rname}{{}};"));
             eqs.push(format!("{rname} == o.{rname}"));
         } else {
             let cap = capacity_value(
-                r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                r.occurrence
+                    .capacity()
+                    .unwrap_or(&Capacity::Bounded(opts.max_array)),
                 opts.max_array,
             );
             w.line(&format!("std::array<{entry}, {cap}> {rname}{{}};"));
@@ -361,7 +376,9 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         }
     }
     w.blank();
-    w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{"));
+    w.line(&format!(
+        "bool operator==(const {type_name} &o) const noexcept {{"
+    ));
     w.indent();
     if eqs.is_empty() {
         w.line("return true;");
@@ -396,7 +413,10 @@ fn emit_enum_hpp(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     w.indent();
     w.line("/// Which variant this value is.");
     w.line(&format!("enum class Kind {{ {} }};", kinds.join(", ")));
-    w.line(&format!("using Variant = std::variant<{}>;", alternatives.join(", ")));
+    w.line(&format!(
+        "using Variant = std::variant<{}>;",
+        alternatives.join(", ")
+    ));
     w.blank();
     let first = e.variants.first();
     let first_kind = first.map(|v| to_pascal_case(&v.name));
@@ -478,11 +498,13 @@ fn cpp_text_literal(v: &EnumVariant) -> Option<&str> {
 /// The integer literal of an integer variant (the `2` in `1 / 2 / 3`).
 fn cpp_int_literal(v: &EnumVariant) -> Option<i128> {
     match &v.ty {
-        TypeRef::Primitive(Primitive::Uint | Primitive::Int) => v.constraints.iter().find_map(|c| match c {
-            Constraint::Eq(LiteralValue::Uint(n)) => Some(*n as i128),
-            Constraint::Eq(LiteralValue::Int(n)) => Some(*n as i128),
-            _ => None,
-        }),
+        TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
+            v.constraints.iter().find_map(|c| match c {
+                Constraint::Eq(LiteralValue::Uint(n)) => Some(*n as i128),
+                Constraint::Eq(LiteralValue::Int(n)) => Some(*n as i128),
+                _ => None,
+            })
+        }
         _ => None,
     }
 }
@@ -495,9 +517,11 @@ fn cpp_str_lit(s: &str) -> (String, usize) {
 fn emit_array_hpp(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
     let type_name = to_pascal_case(&a.name);
-    let elem_ty   = cpp_typeref(&a.element, opts);
-    let cap       = capacity_value(
-        a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+    let elem_ty = cpp_typeref(&a.element, opts);
+    let cap = capacity_value(
+        a.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     w.line(&format!("struct {type_name} {{"));
@@ -506,7 +530,9 @@ fn emit_array_hpp(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
         // `--alloc heap`: no capacity limit (dgtlrift/cddlc#50).
         w.line(&format!("std::vector<{elem_ty}> items{{}};"));
         w.blank();
-        w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{ return items == o.items; }}"));
+        w.line(&format!(
+            "bool operator==(const {type_name} &o) const noexcept {{ return items == o.items; }}"
+        ));
         w.dedent();
         w.line("};");
         return;
@@ -514,7 +540,9 @@ fn emit_array_hpp(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.line(&format!("std::array<{elem_ty}, {cap}> items{{}};"));
     w.line("std::size_t count{0};");
     w.blank();
-    w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{"));
+    w.line(&format!(
+        "bool operator==(const {type_name} &o) const noexcept {{"
+    ));
     w.indent();
     w.line("if (count != o.count) return false;");
     w.line("for (std::size_t i = 0; i < count; i++) {");
@@ -534,7 +562,11 @@ fn emit_array_hpp(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
 fn emit_map_hpp(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
     let type_name = to_pascal_case(&m.name);
-    let entry = format!("std::pair<{}, {}>", cpp_typeref(&m.key_ty, opts), cpp_typeref(&m.val_ty, opts));
+    let entry = format!(
+        "std::pair<{}, {}>",
+        cpp_typeref(&m.key_ty, opts),
+        cpp_typeref(&m.val_ty, opts)
+    );
     w.line(&format!("struct {type_name} {{"));
     w.indent();
     if is_heap(opts) {
@@ -546,13 +578,17 @@ fn emit_map_hpp(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
         return;
     }
     let cap = capacity_value(
-        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        m.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     w.line(&format!("std::array<{entry}, {cap}> entries{{}};"));
     w.line("std::size_t count{0};");
     w.blank();
-    w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{"));
+    w.line(&format!(
+        "bool operator==(const {type_name} &o) const noexcept {{"
+    ));
     w.indent();
     w.line("if (count != o.count) return false;");
     w.line("for (std::size_t i = 0; i < count; i++) {");
@@ -597,7 +633,9 @@ fn emit_alias_hpp(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
             _ => "value{}".into(),
         };
         w.line(&format!("{inner} {value_default};"));
-        w.line(&format!("bool operator==(const {type_name} &o) const noexcept {{ return value == o.value; }}"));
+        w.line(&format!(
+            "bool operator==(const {type_name} &o) const noexcept {{ return value == o.value; }}"
+        ));
         w.dedent();
         w.line("};");
     }
@@ -606,8 +644,8 @@ fn emit_alias_hpp(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
 // ── Source file ───────────────────────────────────────────────────────────────
 
 fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name  = module.name.as_str();
-    let ns    = to_snake_case(name);
+    let name = module.name.as_str();
+    let ns = to_snake_case(name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
@@ -643,11 +681,27 @@ fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m cddlc_ir::S
 }
 
 /// Reads one array element into `dest`: for a repeated group, each member in turn.
-fn emit_cpp_array_item_decode(w: &mut IndentWriter, a: &ArrayDef, module: &IrModule, dest: &str, opts: &CodegenOptions) {
+fn emit_cpp_array_item_decode(
+    w: &mut IndentWriter,
+    a: &ArrayDef,
+    module: &IrModule,
+    dest: &str,
+    opts: &CodegenOptions,
+) {
     match flat_record(a, module) {
-        Some(r) => for f in &r.fields {
-            emit_cpp_decode_field(w, &f.ty, &format!("{dest}.{}", to_snake_case(&f.name)), &f.constraints, &f.name, "&arr", opts);
-        },
+        Some(r) => {
+            for f in &r.fields {
+                emit_cpp_decode_field(
+                    w,
+                    &f.ty,
+                    &format!("{dest}.{}", to_snake_case(&f.name)),
+                    &f.constraints,
+                    &f.name,
+                    "&arr",
+                    opts,
+                );
+            }
+        }
         None => emit_cpp_decode_field(w, &a.element, dest, &[], "item", "&arr", opts),
     }
 }
@@ -661,7 +715,11 @@ fn cpp_bytes_view(b: &[u8]) -> String {
 /// A repeated member's item count, in `obj` (`val`, `out`).
 fn repeat_len(f: &cddlc_ir::FieldDef, obj: &str, opts: &CodegenOptions) -> String {
     let n = to_snake_case(&f.name);
-    if is_heap(opts) { format!("{obj}.{n}.size()") } else { format!("{obj}.{n}_count") }
+    if is_heap(opts) {
+        format!("{obj}.{n}.size()")
+    } else {
+        format!("{obj}.{n}_count")
+    }
 }
 
 /// Fails (returns -1) unless a repeated member's item count, `n`, is within
@@ -669,10 +727,16 @@ fn repeat_len(f: &cddlc_ir::FieldDef, obj: &str, opts: &CodegenOptions) -> Strin
 fn emit_cpp_repeat_check(w: &mut IndentWriter, f: &cddlc_ir::FieldDef, n: &str) {
     let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
     if min > 0 {
-        w.line(&format!("if ({n} < {min}) return -1; // too few '{}' items", f.name));
+        w.line(&format!(
+            "if ({n} < {min}) return -1; // too few '{}' items",
+            f.name
+        ));
     }
     if let Some(max) = max {
-        w.line(&format!("if ({n} > {max}) return -1; // too many '{}' items", f.name));
+        w.line(&format!(
+            "if ({n} > {max}) return -1; // too many '{}' items",
+            f.name
+        ));
     }
 }
 
@@ -686,23 +750,32 @@ thread_local! {
 
 /// Each member and variant that holds its owner again, inline: held in a
 /// `Box`, as a type can't contain itself.
-fn boxed_items(module: &IrModule, opts: &CodegenOptions) -> std::collections::HashSet<(String, String)> {
+fn boxed_items(
+    module: &IrModule,
+    opts: &CodegenOptions,
+) -> std::collections::HashSet<(String, String)> {
     let mut out = std::collections::HashSet::new();
     for (name, def) in &module.types {
         match def {
-            TypeDef::Struct(s) => for f in &s.fields {
-                if matches!(f.occurrence, Occurrence::Required | Occurrence::Optional)
-                    && boxed_named(&f.ty, opts).is_some()
-                    && cddlc_codegen::is_indirect(name, &f.ty, module)
-                {
-                    out.insert((name.to_string(), f.name.to_string()));
+            TypeDef::Struct(s) => {
+                for f in &s.fields {
+                    if matches!(f.occurrence, Occurrence::Required | Occurrence::Optional)
+                        && boxed_named(&f.ty, opts).is_some()
+                        && cddlc_codegen::is_indirect(name, &f.ty, module)
+                    {
+                        out.insert((name.to_string(), f.name.to_string()));
+                    }
                 }
-            },
-            TypeDef::Enum(e) => for v in &e.variants {
-                if matches!(v.ty, TypeRef::Named(_)) && cddlc_codegen::is_indirect(name, &v.ty, module) {
-                    out.insert((name.to_string(), v.name.to_string()));
+            }
+            TypeDef::Enum(e) => {
+                for v in &e.variants {
+                    if matches!(v.ty, TypeRef::Named(_))
+                        && cddlc_codegen::is_indirect(name, &v.ty, module)
+                    {
+                        out.insert((name.to_string(), v.name.to_string()));
+                    }
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -716,10 +789,12 @@ fn boxed_items(module: &IrModule, opts: &CodegenOptions) -> std::collections::Ha
 fn boxed_named<'a>(ty: &'a TypeRef, opts: &CodegenOptions) -> Option<&'a str> {
     match ty {
         TypeRef::Named(n) => Some(n.as_str()),
-        TypeRef::Choice(cs) if !opts.is_json() && prim_choice(cs, opts).is_none() => match cs.first() {
-            Some(TypeRef::Named(n)) => Some(n.as_str()),
-            _ => None,
-        },
+        TypeRef::Choice(cs) if !opts.is_json() && prim_choice(cs, opts).is_none() => {
+            match cs.first() {
+                Some(TypeRef::Named(n)) => Some(n.as_str()),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -756,7 +831,9 @@ fn unsupported_recursion(module: &IrModule, opts: &CodegenOptions) -> Option<Str
             }
             TypeDef::Enum(e) => {
                 for v in &e.variants {
-                    if cddlc_codegen::is_indirect(name, &v.ty, module) && !matches!(v.ty, TypeRef::Named(_)) {
+                    if cddlc_codegen::is_indirect(name, &v.ty, module)
+                        && !matches!(v.ty, TypeRef::Named(_))
+                    {
                         return Some(format!("'{name}': C++ can't hold a recursive alternative that isn't a named type yet (dgtlrift/cddlc#156)"));
                     }
                 }
@@ -831,13 +908,25 @@ private:
 /// (dgtlrift/cddlc#156).
 fn cpp_filled(name: &str, module: &IrModule) -> String {
     let t = to_pascal_case(name);
-    let Some(TypeDef::Struct(s)) = module.get(name) else { return format!("{t}{{}}") };
-    let sets: Vec<String> = s.fields.iter()
+    let Some(TypeDef::Struct(s)) = module.get(name) else {
+        return format!("{t}{{}}");
+    };
+    let sets: Vec<String> = s
+        .fields
+        .iter()
         .filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name))
         .filter_map(|f| match &f.ty {
-            TypeRef::Named(n) => Some(format!("v.{} = {}{{}};", to_snake_case(&f.name), to_pascal_case(n))),
+            TypeRef::Named(n) => Some(format!(
+                "v.{} = {}{{}};",
+                to_snake_case(&f.name),
+                to_pascal_case(n)
+            )),
             TypeRef::Choice(cs) => match cs.first() {
-                Some(TypeRef::Named(n)) => Some(format!("v.{} = {}{{}};", to_snake_case(&f.name), to_pascal_case(n))),
+                Some(TypeRef::Named(n)) => Some(format!(
+                    "v.{} = {}{{}};",
+                    to_snake_case(&f.name),
+                    to_pascal_case(n)
+                )),
                 _ => None,
             },
             _ => None,
@@ -854,19 +943,29 @@ fn cpp_filled(name: &str, module: &IrModule) -> String {
 /// JSON, which can't be declared ahead, so the `Box` names the type it
 /// stands for (`std::vector<Node>`), which needs no complete `Node` yet.
 fn json_box_target(ty: &TypeRef, module: &IrModule, opts: &CodegenOptions) -> String {
-    let mut n = match ty { TypeRef::Named(n) => n.as_str(), _ => return cpp_json_field_type(ty, opts) };
+    let mut n = match ty {
+        TypeRef::Named(n) => n.as_str(),
+        _ => return cpp_json_field_type(ty, opts),
+    };
     for _ in 0..16 {
         match module.get(n) {
             Some(TypeDef::Alias(a)) => match &a.ty {
-                TypeRef::Named(t) if a.constraints.is_empty() && a.tagged.is_none() => n = t.as_str(),
+                TypeRef::Named(t) if a.constraints.is_empty() && a.tagged.is_none() => {
+                    n = t.as_str()
+                }
                 _ => break,
             },
             _ => break,
         }
     }
     match module.get(n) {
-        Some(TypeDef::Array(a)) => format!("std::vector<{}>", cpp_json_field_type(&a.element, opts)),
-        Some(TypeDef::Map(m)) => format!("std::map<std::string, {}>", cpp_json_field_type(&m.val_ty, opts)),
+        Some(TypeDef::Array(a)) => {
+            format!("std::vector<{}>", cpp_json_field_type(&a.element, opts))
+        }
+        Some(TypeDef::Map(m)) => format!(
+            "std::map<std::string, {}>",
+            cpp_json_field_type(&m.val_ty, opts)
+        ),
         _ => cpp_json_field_type(ty, opts),
     }
 }
@@ -875,7 +974,11 @@ fn json_box_target(ty: &TypeRef, module: &IrModule, opts: &CodegenOptions) -> St
 /// (dgtlrift/cddlc#156).
 fn json_member(owner: &str, f: &cddlc_ir::FieldDef) -> String {
     let fname = to_snake_case(&f.name);
-    if is_boxed(owner, &f.name) { format!("this->{fname}.value()") } else { format!("this->{fname}") }
+    if is_boxed(owner, &f.name) {
+        format!("this->{fname}.value()")
+    } else {
+        format!("this->{fname}")
+    }
 }
 
 /// Whether a choice has a `nil` alternative.
@@ -900,7 +1003,9 @@ fn emit_boxed_choice_decode(w: &mut IndentWriter, ty: &TypeRef, dest: &str, dec:
     if choice_has_null(ty) {
         w.line(&format!("if (nanocbor_get_null({dec}) < 0) {{ if (decode({dec}, {dest}, cb, ctx) < 0) return -1; }}"));
     } else {
-        w.line(&format!("if (decode({dec}, {dest}, cb, ctx) < 0) return -1;"));
+        w.line(&format!(
+            "if (decode({dec}, {dest}, cb, ctx) < 0) return -1;"
+        ));
     }
 }
 
@@ -922,7 +1027,11 @@ fn text_rest(r: &cddlc_ir::MapRest) -> bool {
 
 /// The C++ type of a map's other entries' keys.
 fn rest_key_cpp(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
-    if text_rest(r) { "std::string_view".into() } else { cpp_typeref(&r.key_ty, opts) }
+    if text_rest(r) {
+        "std::string_view".into()
+    } else {
+        cpp_typeref(&r.key_ty, opts)
+    }
 }
 
 /// Writes a map member's key: its text, or an integer key as an integer
@@ -938,7 +1047,9 @@ fn cpp_key_write(key: &cddlc_ir::FieldKey) -> String {
 
 fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(def.name());
-    w.line(&format!("int encode(nanocbor_encoder_t *enc, const {type_name} &val) {{"));
+    w.line(&format!(
+        "int encode(nanocbor_encoder_t *enc, const {type_name} &val) {{"
+    ));
     w.indent();
 
     match def {
@@ -953,10 +1064,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             } else {
                 s.fields.iter().collect()
             };
-            let req_count = fields.iter()
+            let req_count = fields
+                .iter()
                 .filter(|f| !matches!(f.occurrence, Occurrence::Optional))
                 .count();
-            let opt_fields: Vec<_> = fields.iter()
+            let opt_fields: Vec<_> = fields
+                .iter()
                 .filter(|f| matches!(f.occurrence, Occurrence::Optional))
                 .collect();
             // A record (RFC 8610 §3.4) is an array of the members' values, in
@@ -967,10 +1080,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 for pair in opt_fields.windows(2) {
                     w.line(&format!(
                         "if (val.{}.has_value() && !val.{}.has_value()) return -1;",
-                        to_snake_case(&pair[1].name), to_snake_case(&pair[0].name)
+                        to_snake_case(&pair[1].name),
+                        to_snake_case(&pair[0].name)
                     ));
                 }
-                let opt_sum: String = opt_fields.iter()
+                let opt_sum: String = opt_fields
+                    .iter()
                     .map(|f| format!(" + (val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
                 // A repeated member's items go inline (dgtlrift/cddlc#134).
@@ -979,7 +1094,10 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                         let rf = &s.fields[ri];
                         let n = repeat_len(rf, "val", opts);
                         emit_cpp_repeat_check(w, rf, &n);
-                        w.line(&format!("nanocbor_fmt_array(enc, {}u + {n});", req_count - 1));
+                        w.line(&format!(
+                            "nanocbor_fmt_array(enc, {}u + {n});",
+                            req_count - 1
+                        ));
                     }
                     None => w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});")),
                 }
@@ -989,32 +1107,60 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                     Some(r) => format!(" + val.{}_count", to_snake_case(&r.name)),
                     None => String::new(),
                 };
-                let opt_sum: String = opt_fields.iter()
+                let opt_sum: String = opt_fields
+                    .iter()
                     .map(|f| format!(" + (val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
-                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u{opt_sum}{rest_count});"));
+                w.line(&format!(
+                    "nanocbor_fmt_map(enc, {req_count}u{opt_sum}{rest_count});"
+                ));
             }
             for f in &fields {
                 let fname = to_snake_case(&f.name);
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (val.{fname}.has_value()) {{"));
                     w.indent();
-                    if !record { w.line(&cpp_key_write(&f.key)); }
-                    emit_cpp_encode_field(w, &f.ty, &format!("(*val.{fname})"), &f.occurrence, opts);
+                    if !record {
+                        w.line(&cpp_key_write(&f.key));
+                    }
+                    emit_cpp_encode_field(
+                        w,
+                        &f.ty,
+                        &format!("(*val.{fname})"),
+                        &f.occurrence,
+                        opts,
+                    );
                     w.dedent();
                     w.line("}");
                 } else if record && f.occurrence.is_repeated() {
-                    w.line(&format!("for (std::size_t i = 0; i < {}; i++) {{", repeat_len(f, "val", opts)));
+                    w.line(&format!(
+                        "for (std::size_t i = 0; i < {}; i++) {{",
+                        repeat_len(f, "val", opts)
+                    ));
                     w.indent();
-                    emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}[i]"), &Occurrence::Required, opts);
+                    emit_cpp_encode_field(
+                        w,
+                        &f.ty,
+                        &format!("val.{fname}[i]"),
+                        &Occurrence::Required,
+                        opts,
+                    );
                     w.dedent();
                     w.line("}");
                 } else {
-                    if !record { w.line(&cpp_key_write(&f.key)); }
+                    if !record {
+                        w.line(&cpp_key_write(&f.key));
+                    }
                     if is_boxed(&s.name, &f.name) && matches!(f.ty, TypeRef::Choice(_)) {
                         emit_boxed_choice_encode(w, &f.ty, &format!("val.{fname}"));
                     } else {
-                        emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}"), &f.occurrence, opts);
+                        emit_cpp_encode_field(
+                            w,
+                            &f.ty,
+                            &format!("val.{fname}"),
+                            &f.occurrence,
+                            opts,
+                        );
                     }
                 }
             }
@@ -1023,7 +1169,9 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 if is_heap(opts) {
                     w.line(&format!("for (const auto &e : val.{rname}) {{"));
                 } else {
-                    w.line(&format!("for (std::size_t i = 0; i < val.{rname}_count; i++) {{"));
+                    w.line(&format!(
+                        "for (std::size_t i = 0; i < val.{rname}_count; i++) {{"
+                    ));
                     w.line(&format!("    const auto &e = val.{rname}[i];"));
                 }
                 w.indent();
@@ -1067,18 +1215,30 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                         let (lit, len) = cpp_str_lit(&cddlc_codegen::enum_variant_text(v));
                         w.line(&format!("nanocbor_put_tstrn(enc, {lit}, {len});"));
                     }
-                    (TypeRef::Primitive(Primitive::Uint), Some(t)) => w.line(&format!("nanocbor_fmt_uint(enc, {});", get(t))),
-                    (TypeRef::Primitive(Primitive::Int), Some(t)) => w.line(&format!("nanocbor_fmt_int(enc, {});", get(t))),
-                    (TypeRef::Primitive(Primitive::Bool), Some(t)) => w.line(&format!("nanocbor_fmt_bool(enc, {});", get(t))),
-                    (TypeRef::Primitive(Primitive::Float32 | Primitive::Float16), Some(t)) => w.line(&format!("nanocbor_fmt_float(enc, {});", get(t))),
-                    (TypeRef::Primitive(Primitive::Float64 | Primitive::Float), Some(t)) => w.line(&format!("nanocbor_fmt_double(enc, {});", get(t))),
+                    (TypeRef::Primitive(Primitive::Uint), Some(t)) => {
+                        w.line(&format!("nanocbor_fmt_uint(enc, {});", get(t)))
+                    }
+                    (TypeRef::Primitive(Primitive::Int), Some(t)) => {
+                        w.line(&format!("nanocbor_fmt_int(enc, {});", get(t)))
+                    }
+                    (TypeRef::Primitive(Primitive::Bool), Some(t)) => {
+                        w.line(&format!("nanocbor_fmt_bool(enc, {});", get(t)))
+                    }
+                    (TypeRef::Primitive(Primitive::Float32 | Primitive::Float16), Some(t)) => {
+                        w.line(&format!("nanocbor_fmt_float(enc, {});", get(t)))
+                    }
+                    (TypeRef::Primitive(Primitive::Float64 | Primitive::Float), Some(t)) => {
+                        w.line(&format!("nanocbor_fmt_double(enc, {});", get(t)))
+                    }
                     (TypeRef::Primitive(Primitive::Tstr), Some(t)) => {
                         w.line(&format!("{{ const auto &s = {}; nanocbor_put_tstrn(enc, s.data(), s.size()); }}", get(t)));
                     }
                     (TypeRef::Primitive(Primitive::Bstr | Primitive::Any), Some(t)) => {
                         w.line(&format!("{{ const auto &b = {}; nanocbor_put_bstr(enc, reinterpret_cast<const uint8_t*>(b.data()), b.size()); }}", get(t)));
                     }
-                    (TypeRef::Named(_), Some(t)) => w.line(&format!("return encode(enc, {});", get(t))),
+                    (TypeRef::Named(_), Some(t)) => {
+                        w.line(&format!("return encode(enc, {});", get(t)))
+                    }
                     _ => w.line("return -1; // unsupported variant type"),
                 }
                 w.line("return NANOCBOR_OK;");
@@ -1095,7 +1255,9 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             let rec = flat_record(a, module);
             let width = rec.map_or(String::new(), |r| format!(" * {}", r.fields.len()));
             let item = if is_heap(opts) {
-                w.line(&format!("nanocbor_fmt_array(enc, val.items.size(){width});"));
+                w.line(&format!(
+                    "nanocbor_fmt_array(enc, val.items.size(){width});"
+                ));
                 w.line("for (const auto &item : val.items) {");
                 "item"
             } else {
@@ -1105,9 +1267,17 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             };
             w.indent();
             match rec {
-                Some(r) => for f in &r.fields {
-                    emit_cpp_encode_field(w, &f.ty, &format!("{item}.{}", to_snake_case(&f.name)), &Occurrence::Required, opts);
-                },
+                Some(r) => {
+                    for f in &r.fields {
+                        emit_cpp_encode_field(
+                            w,
+                            &f.ty,
+                            &format!("{item}.{}", to_snake_case(&f.name)),
+                            &Occurrence::Required,
+                            opts,
+                        );
+                    }
+                }
                 None => emit_cpp_encode_field(w, &a.element, item, &Occurrence::Required, opts),
             }
             w.dedent();
@@ -1147,8 +1317,8 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
 }
 
 fn emit_cpp_encode_field(
-    w:    &mut IndentWriter,
-    ty:   &TypeRef,
+    w: &mut IndentWriter,
+    ty: &TypeRef,
     expr: &str,
     _occ: &Occurrence,
     opts: &CodegenOptions,
@@ -1172,7 +1342,9 @@ fn emit_cpp_encode_field(
             Some(alts) => {
                 for (i, (p, t)) in alts.iter().enumerate() {
                     let kw = if i == 0 { "if" } else { "else if" };
-                    w.line(&format!("{kw} (const auto *_c = std::get_if<{t}>(&{expr})) {{"));
+                    w.line(&format!(
+                        "{kw} (const auto *_c = std::get_if<{t}>(&{expr})) {{"
+                    ));
                     w.indent();
                     w.line(&format!("{};", cpp_encode_call(p, "(*_c)")));
                     w.dedent();
@@ -1222,7 +1394,11 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 // (dgtlrift/cddlc#134).
                 let before = cddlc_codegen::record_optionals_before(s);
                 let repeated = cddlc_codegen::record_repeated(s);
-                let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+                let required = s
+                    .fields
+                    .iter()
+                    .filter(|f| f.occurrence.is_required())
+                    .count();
                 if before.is_some() || repeated.is_some() {
                     w.line("std::size_t count = 0;");
                     w.line("{ nanocbor_value_t probe = arr; while (!nanocbor_at_end(&probe)) { if (nanocbor_skip(&probe) < 0) return -1; count++; } }");
@@ -1230,11 +1406,20 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 // A repeated member holds the items the others leave.
                 if let Some(ri) = repeated {
                     let rf = &s.fields[ri];
-                    w.line(&format!("if (count < {required}) return -1; /* too few items */"));
+                    w.line(&format!(
+                        "if (count < {required}) return -1; /* too few items */"
+                    ));
                     w.line(&format!("std::size_t reps = count - {required};"));
                     if !is_heap(opts) {
-                        let cap = capacity_value(rf.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)), opts.max_array);
-                        w.line(&format!("if (reps > {cap}) return -1; /* more items than its capacity */"));
+                        let cap = capacity_value(
+                            rf.occurrence
+                                .capacity()
+                                .unwrap_or(&Capacity::Bounded(opts.max_array)),
+                            opts.max_array,
+                        );
+                        w.line(&format!(
+                            "if (reps > {cap}) return -1; /* more items than its capacity */"
+                        ));
                     }
                     emit_cpp_repeat_check(w, rf, "reps");
                 }
@@ -1248,7 +1433,15 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                         }
                         w.line("for (std::size_t i = 0; i < reps; i++) {");
                         w.indent();
-                        emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}[i]"), &f.constraints, &f.name, "&arr", opts);
+                        emit_cpp_decode_field(
+                            w,
+                            &f.ty,
+                            &format!("out.{fname}[i]"),
+                            &f.constraints,
+                            &f.name,
+                            "&arr",
+                            opts,
+                        );
                         w.dedent();
                         w.line("}");
                     } else if matches!(f.occurrence, Occurrence::Optional) {
@@ -1259,13 +1452,29 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                         }
                         w.indent();
                         w.line(&format!("{} _v{{}};", member_temp_type(s, f, opts)));
-                        emit_cpp_decode_field(w, &f.ty, "_v", &f.constraints, &f.name, "&arr", opts);
+                        emit_cpp_decode_field(
+                            w,
+                            &f.ty,
+                            "_v",
+                            &f.constraints,
+                            &f.name,
+                            "&arr",
+                            opts,
+                        );
                         w.line(&format!("out.{fname} = std::move(_v);"));
                         w.dedent();
                         w.line("}");
                     } else {
                         w.line("if (nanocbor_at_end(&arr)) return -1; /* missing item */");
-                        emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}"), &f.constraints, &f.name, "&arr", opts);
+                        emit_cpp_decode_field(
+                            w,
+                            &f.ty,
+                            &format!("out.{fname}"),
+                            &f.constraints,
+                            &f.name,
+                            "&arr",
+                            opts,
+                        );
                     }
                 }
                 w.line("if (!nanocbor_at_end(&arr)) return -1; /* too many items */");
@@ -1307,12 +1516,16 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             w.line("std::string_view key(reinterpret_cast<const char*>(key_ptr), key_len);");
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
-                let fkey  = f.name.as_str();
+                let fkey = f.name.as_str();
                 let cond = match &f.key {
-                    cddlc_ir::FieldKey::Text(t) if int_keys => format!("!key_is_int && key == {:?}", t.as_str()),
+                    cddlc_ir::FieldKey::Text(t) if int_keys => {
+                        format!("!key_is_int && key == {:?}", t.as_str())
+                    }
                     cddlc_ir::FieldKey::Text(t) => format!("key == {:?}", t.as_str()),
                     cddlc_ir::FieldKey::Int(n) => format!("key_is_int && key_int == {n}LL"),
-                    cddlc_ir::FieldKey::Uint(n) => format!("key_is_int && key_int == {}LL", (*n).min(i64::MAX as u64)),
+                    cddlc_ir::FieldKey::Uint(n) => {
+                        format!("key_is_int && key_int == {}LL", (*n).min(i64::MAX as u64))
+                    }
                 };
                 w.line(&format!("if ({cond}) {{"));
                 w.indent();
@@ -1330,7 +1543,15 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 } else if is_boxed(&s.name, &f.name) && matches!(f.ty, TypeRef::Choice(_)) {
                     emit_boxed_choice_decode(w, &f.ty, &format!("out.{fname}"), "&map");
                 } else {
-                    emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}"), &f.constraints, fkey, "&map", opts);
+                    emit_cpp_decode_field(
+                        w,
+                        &f.ty,
+                        &format!("out.{fname}"),
+                        &f.constraints,
+                        fkey,
+                        "&map",
+                        opts,
+                    );
                 }
                 if f.occurrence.is_required() {
                     w.line(&format!("have_{fname} = true;"));
@@ -1345,21 +1566,32 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 Some(r) => {
                     let rname = to_snake_case(&r.name);
                     if typed_rest {
-                        w.line(&format!("std::pair<{}, {}> e{{}};", rest_key_cpp(r, opts), cpp_typeref(&r.val_ty, opts)));
+                        w.line(&format!(
+                            "std::pair<{}, {}> e{{}};",
+                            rest_key_cpp(r, opts),
+                            cpp_typeref(&r.val_ty, opts)
+                        ));
                         w.line("nanocbor_value_t kd = key_start;");
                         emit_cpp_decode_field(w, &r.key_ty, "e.first", &[], &r.name, "&kd", opts);
                     } else {
                         if int_keys {
-                            w.line("if (key_is_int) return -1; // the other entries have text keys");
+                            w.line(
+                                "if (key_is_int) return -1; // the other entries have text keys",
+                            );
                         }
-                        w.line(&format!("std::pair<std::string_view, {}> e{{key, {{}}}};", cpp_typeref(&r.val_ty, opts)));
+                        w.line(&format!(
+                            "std::pair<std::string_view, {}> e{{key, {{}}}};",
+                            cpp_typeref(&r.val_ty, opts)
+                        ));
                     }
                     emit_cpp_decode_field(w, &r.val_ty, "e.second", &[], &r.name, "&map", opts);
                     if is_heap(opts) {
                         w.line(&format!("out.{rname}.push_back(e);"));
                     } else {
                         let cap = capacity_value(
-                            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                            r.occurrence
+                                .capacity()
+                                .unwrap_or(&Capacity::Bounded(opts.max_array)),
                             opts.max_array,
                         );
                         w.line(&format!("if (out.{rname}_count >= {cap}) return -1;"));
@@ -1378,7 +1610,10 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             w.dedent();
             w.line("}");
             for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
-                w.line(&format!("if (!have_{}) return -1; /* missing member */", to_snake_case(&f.name)));
+                w.line(&format!(
+                    "if (!have_{}) return -1; /* missing member */",
+                    to_snake_case(&f.name)
+                ));
             }
             w.line("nanocbor_leave_container(dec, &map);");
             w.line("return NANOCBOR_OK;");
@@ -1398,7 +1633,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 w.line(&format!("  if (tag != {}) return -1; }}", tag.0));
             }
             let cap = capacity_value(
-                a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                a.occurrence
+                    .capacity()
+                    .unwrap_or(&Capacity::Bounded(opts.max_array)),
                 opts.max_array,
             );
             w.line("nanocbor_value_t arr;");
@@ -1419,7 +1656,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 return;
             }
             w.line("out.count = 0;");
-            w.line(&format!("while (!nanocbor_at_end(&arr) && out.count < {cap}) {{"));
+            w.line(&format!(
+                "while (!nanocbor_at_end(&arr) && out.count < {cap}) {{"
+            ));
             w.indent();
             emit_cpp_array_item_decode(w, a, module, "out.items[out.count]", opts);
             w.line("out.count++;");
@@ -1443,7 +1682,11 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 w.line("  if (nanocbor_get_tag(dec, &tag) < 0) return -1;");
                 w.line(&format!("  if (tag != {}) return -1; }}", tag.0));
             }
-            let entry = format!("std::pair<{}, {}>", cpp_typeref(&m.key_ty, opts), cpp_typeref(&m.val_ty, opts));
+            let entry = format!(
+                "std::pair<{}, {}>",
+                cpp_typeref(&m.key_ty, opts),
+                cpp_typeref(&m.val_ty, opts)
+            );
             w.line("nanocbor_value_t map;");
             w.line("if (nanocbor_enter_map(dec, &map) < 0) return -1;");
             if is_heap(opts) {
@@ -1455,7 +1698,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
             w.indent();
             if !is_heap(opts) {
                 let cap = capacity_value(
-                    m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                    m.occurrence
+                        .capacity()
+                        .unwrap_or(&Capacity::Bounded(opts.max_array)),
                     opts.max_array,
                 );
                 w.line(&format!("if (out.count >= {cap}) return -1;"));
@@ -1486,8 +1731,15 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
     let t = to_pascal_case(&e.name);
     let make = |v: &EnumVariant, arg: &str| {
         // A payload is moved in (a `Box` is, not copied; dgtlrift/cddlc#156).
-        let arg = if arg.is_empty() { String::new() } else { format!("std::move({arg})") };
-        format!("out = {t}::make_{}({arg}); return NANOCBOR_OK;", to_pascal_case(&v.name))
+        let arg = if arg.is_empty() {
+            String::new()
+        } else {
+            format!("std::move({arg})")
+        };
+        format!(
+            "out = {t}::make_{}({arg}); return NANOCBOR_OK;",
+            to_pascal_case(&v.name)
+        )
     };
     let payload_is = |v: &EnumVariant, f: &dyn Fn(&Primitive) -> bool| {
         cpp_variant_payload(v, opts).is_some() && matches!(&v.ty, TypeRef::Primitive(p) if f(p))
@@ -1502,12 +1754,21 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
     w.line("if (nanocbor_get_tstr(dec, &s, &slen) < 0) return -1;");
     w.line("std::string_view sv(reinterpret_cast<const char*>(s), slen);");
     for v in &e.variants {
-        if cpp_variant_payload(v, opts).is_none() && matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
+        if cpp_variant_payload(v, opts).is_none()
+            && matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr))
+        {
             let text = cddlc_codegen::enum_variant_text(v);
-            w.line(&format!("if (sv == std::string_view({text:?})) {{ {} }}", make(v, "")));
+            w.line(&format!(
+                "if (sv == std::string_view({text:?})) {{ {} }}",
+                make(v, "")
+            ));
         }
     }
-    if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Tstr))) {
+    if let Some(v) = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Tstr)))
+    {
         w.line(&make(v, "sv"));
     } else {
         w.line("return -1;");
@@ -1524,10 +1785,21 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
             w.line(&format!("if (u == {n}u) {{ {} }}", make(v, "")));
         }
     }
-    if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Uint))) {
+    if let Some(v) = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Uint)))
+    {
         w.line(&make(v, "u"));
-    } else if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Int))) {
-        w.line(&format!("if (u <= static_cast<uint64_t>(INT64_MAX)) {{ {} }}", make(v, "static_cast<int64_t>(u)")));
+    } else if let Some(v) = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Int)))
+    {
+        w.line(&format!(
+            "if (u <= static_cast<uint64_t>(INT64_MAX)) {{ {} }}",
+            make(v, "static_cast<int64_t>(u)")
+        ));
         w.line("return -1;");
     } else {
         w.line("return -1;");
@@ -1542,7 +1814,11 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
             w.line(&format!("if (n == {n}) {{ {} }}", make(v, "")));
         }
     }
-    if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Int))) {
+    if let Some(v) = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Int)))
+    {
         w.line(&make(v, "n"));
     } else {
         w.line("return -1;");
@@ -1551,35 +1827,68 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
     w.line("}");
 
     // Byte strings: a `bstr` payload variant.
-    if let Some(v) = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Bstr | Primitive::Any))) {
+    if let Some(v) = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Bstr | Primitive::Any)))
+    {
         w.line("case NANOCBOR_TYPE_BSTR: {");
         w.indent();
         w.line("const uint8_t *b; size_t blen;");
         w.line("if (nanocbor_get_bstr(dec, &b, &blen) < 0) return -1;");
-        w.line(&make(v, "std::string_view(reinterpret_cast<const char*>(b), blen)"));
+        w.line(&make(
+            v,
+            "std::string_view(reinterpret_cast<const char*>(b), blen)",
+        ));
         w.dedent();
         w.line("}");
     }
 
     // Major type 7: a bool, or a float.
-    let bool_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Bool)));
-    let f64_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Float64 | Primitive::Float)));
-    let f32_v = e.variants.iter().find(|v| payload_is(v, &|p| matches!(p, Primitive::Float32 | Primitive::Float16)));
-    let nil_v = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined)));
+    let bool_v = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Bool)));
+    let f64_v = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Float64 | Primitive::Float)));
+    let f32_v = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Float32 | Primitive::Float16)));
+    let nil_v = e.variants.iter().find(|v| {
+        matches!(
+            &v.ty,
+            TypeRef::Primitive(Primitive::Null | Primitive::Undefined)
+        )
+    });
     if bool_v.is_some() || f64_v.is_some() || f32_v.is_some() || nil_v.is_some() {
         w.line("case NANOCBOR_TYPE_FLOAT: {");
         w.indent();
         if let Some(v) = nil_v {
-            w.line(&format!("if (nanocbor_get_null(dec) >= 0) {{ {} }}", make(v, "")));
+            w.line(&format!(
+                "if (nanocbor_get_null(dec) >= 0) {{ {} }}",
+                make(v, "")
+            ));
         }
         if let Some(v) = bool_v {
-            w.line(&format!("{{ bool b; if (nanocbor_get_bool(dec, &b) >= 0) {{ {} }} }}", make(v, "b")));
+            w.line(&format!(
+                "{{ bool b; if (nanocbor_get_bool(dec, &b) >= 0) {{ {} }} }}",
+                make(v, "b")
+            ));
         }
         if let Some(v) = f32_v {
-            w.line(&format!("{{ float f; if (nanocbor_get_float(dec, &f) >= 0) {{ {} }} }}", make(v, "f")));
+            w.line(&format!(
+                "{{ float f; if (nanocbor_get_float(dec, &f) >= 0) {{ {} }} }}",
+                make(v, "f")
+            ));
         }
         if let Some(v) = f64_v {
-            w.line(&format!("{{ double d; if (nanocbor_get_double(dec, &d) >= 0) {{ {} }} }}", make(v, "d")));
+            w.line(&format!(
+                "{{ double d; if (nanocbor_get_double(dec, &d) >= 0) {{ {} }} }}",
+                make(v, "d")
+            ));
         }
         w.line("break;");
         w.dedent();
@@ -1614,13 +1923,13 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
 }
 
 fn emit_cpp_decode_field(
-    w:           &mut IndentWriter,
-    ty:          &TypeRef,
-    dest:        &str,
+    w: &mut IndentWriter,
+    ty: &TypeRef,
+    dest: &str,
     constraints: &[Constraint],
-    field_name:  &str,
-    dec_expr:    &str,
-    opts:        &CodegenOptions,
+    field_name: &str,
+    dec_expr: &str,
+    opts: &CodegenOptions,
 ) {
     match ty {
         TypeRef::Primitive(p) => {
@@ -1641,11 +1950,15 @@ fn emit_cpp_decode_field(
             }
         }
         TypeRef::Named(_) => {
-            w.line(&format!("if (decode({dec_expr}, {dest}, cb, ctx) < 0) return -1;"));
+            w.line(&format!(
+                "if (decode({dec_expr}, {dest}, cb, ctx) < 0) return -1;"
+            ));
         }
         TypeRef::Tagged(tag, inner) => {
             w.line("{ uint32_t tag;");
-            w.line(&format!("  if (nanocbor_get_tag({dec_expr}, &tag) < 0) return -1;"));
+            w.line(&format!(
+                "  if (nanocbor_get_tag({dec_expr}, &tag) < 0) return -1;"
+            ));
             w.line(&format!("  if (tag != {}) return -1;", tag.0));
             emit_cpp_decode_field(w, inner, dest, constraints, field_name, dec_expr, opts);
             w.line("}");
@@ -1683,8 +1996,12 @@ fn cpp_constraint_check(c: &Constraint, val_expr: &str, p: &Primitive) -> Option
     // A byte-string literal (RFC 9277's `'BOR'`), as a `string_view` of its
     // bytes (dgtlrift/cddlc#142).
     match (c, p) {
-        (Constraint::Eq(LiteralValue::Bytes(b)), Primitive::Bstr) => return Some(format!("{val_expr} == {}", cpp_bytes_view(b))),
-        (Constraint::Ne(LiteralValue::Bytes(b)), Primitive::Bstr) => return Some(format!("{val_expr} != {}", cpp_bytes_view(b))),
+        (Constraint::Eq(LiteralValue::Bytes(b)), Primitive::Bstr) => {
+            return Some(format!("{val_expr} == {}", cpp_bytes_view(b)))
+        }
+        (Constraint::Ne(LiteralValue::Bytes(b)), Primitive::Bstr) => {
+            return Some(format!("{val_expr} != {}", cpp_bytes_view(b)))
+        }
         _ => {}
     }
     match c {
@@ -1706,11 +2023,16 @@ fn cpp_constraint_check(c: &Constraint, val_expr: &str, p: &Primitive) -> Option
         // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
         Constraint::Bits(bits) => match p {
             Primitive::Uint => Some(format!(
-                "(({val_expr}) & ~{:#x}ULL) == 0", cddlc_codegen::bits_mask_u64(bits)
+                "(({val_expr}) & ~{:#x}ULL) == 0",
+                cddlc_codegen::bits_mask_u64(bits)
             )),
             Primitive::Bstr => {
                 let m = cddlc_codegen::bits_mask_bytes(bits);
-                let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+                let bytes = m
+                    .iter()
+                    .map(|b| format!("{b:#04x}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 Some(format!(
                     "[](const auto& v) {{ static const uint8_t m[] = {{{bytes}{}}}; std::size_t i = 0; \
                      for (auto b : v) {{ if (static_cast<uint8_t>(b) & static_cast<uint8_t>(~(i < {n} ? m[i] : 0))) return false; ++i; }} \
@@ -1747,14 +2069,14 @@ fn cpp_int_range_for_bytes(n: usize) -> Option<(i64, i64)> {
 
 fn cpp_decode_call(p: &Primitive, dest: &str, dec: &str) -> String {
     match p {
-        Primitive::Bool      => format!("nanocbor_get_bool({dec}, &{dest})"),
+        Primitive::Bool => format!("nanocbor_get_bool({dec}, &{dest})"),
         Primitive::Null | Primitive::Undefined => format!("nanocbor_get_null({dec})"),
-        Primitive::Uint      => format!("nanocbor_get_uint64({dec}, reinterpret_cast<uint64_t*>(&{dest}))"),
-        Primitive::Int       => format!("nanocbor_get_int64({dec}, reinterpret_cast<int64_t*>(&{dest}))"),
-        Primitive::Float32 | Primitive::Float16 =>
-            format!("nanocbor_get_float({dec}, &{dest})"),
-        Primitive::Float64 | Primitive::Float =>
-            format!("nanocbor_get_double({dec}, &{dest})"),
+        Primitive::Uint => {
+            format!("nanocbor_get_uint64({dec}, reinterpret_cast<uint64_t*>(&{dest}))")
+        }
+        Primitive::Int => format!("nanocbor_get_int64({dec}, reinterpret_cast<int64_t*>(&{dest}))"),
+        Primitive::Float32 | Primitive::Float16 => format!("nanocbor_get_float({dec}, &{dest})"),
+        Primitive::Float64 | Primitive::Float => format!("nanocbor_get_double({dec}, &{dest})"),
         Primitive::Tstr => format!(
             "({{ const uint8_t *_p; size_t _l; int _r = nanocbor_get_tstr({dec}, &_p, &_l); \
              if (_r >= 0) {dest} = std::string_view(reinterpret_cast<const char*>(_p), _l); _r; }})"
@@ -1771,8 +2093,8 @@ fn cpp_decode_call(p: &Primitive, dest: &str, dec: &str) -> String {
 /// Returns the first concrete Primitive in a TypeRef, following Tagged and Choice.
 fn effective_primitive(ty: &TypeRef) -> Option<&Primitive> {
     match ty {
-        TypeRef::Primitive(p)     => Some(p),
-        TypeRef::Choice(cs)       => cs.first().and_then(|c| effective_primitive(c)),
+        TypeRef::Primitive(p) => Some(p),
+        TypeRef::Choice(cs) => cs.first().and_then(|c| effective_primitive(c)),
         TypeRef::Tagged(_, inner) => effective_primitive(inner),
         _ => None,
     }
@@ -1793,8 +2115,8 @@ fn tstr_size_constraint_for(type_name: &str, module: &IrModule) -> Option<usize>
 }
 
 fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name  = module.name.as_str();
-    let ns    = to_snake_case(name);
+    let name = module.name.as_str();
+    let ns = to_snake_case(name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
@@ -1836,9 +2158,14 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _opts: &CodegenOptions) {
+fn emit_cpp_type_test(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    module: &IrModule,
+    _opts: &CodegenOptions,
+) {
     let type_name = to_pascal_case(def.name());
-    let fn_name   = to_snake_case(def.name());
+    let fn_name = to_snake_case(def.name());
 
     w.line(&format!("static void test_{fn_name}_roundtrip() {{"));
     w.indent();
@@ -1857,28 +2184,40 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                 match &a.ty {
                     TypeRef::Primitive(Primitive::Tstr) => {
                         let s = "a".repeat(n);
-                        w.line(&format!("{type_name} original{{ std::string_view({:?}, {n}) }};", s));
+                        w.line(&format!(
+                            "{type_name} original{{ std::string_view({:?}, {n}) }};",
+                            s
+                        ));
                     }
                     TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
                         // bstr alias: value is std::string_view over a static byte array
-                        let bytes: Vec<String> = (0..n).map(|i| format!("0x{:02x}", (i % 256) as u8)).collect();
-                        w.line(&format!("static const uint8_t _bytes[{n}] = {{{}}};", bytes.join(", ")));
+                        let bytes: Vec<String> = (0..n)
+                            .map(|i| format!("0x{:02x}", (i % 256) as u8))
+                            .collect();
+                        w.line(&format!(
+                            "static const uint8_t _bytes[{n}] = {{{}}};",
+                            bytes.join(", ")
+                        ));
                         w.line(&format!("{type_name} original{{ std::string_view(reinterpret_cast<const char*>(_bytes), {n}) }};"));
                     }
-                    _ => { w.line(&format!("{type_name} original{{}};")) }
+                    _ => w.line(&format!("{type_name} original{{}};")),
                 }
             } else {
                 // A value pinned to a literal, or with a lower bound (`40 .plus 2`,
                 // `uint .within (1..5)`; dgtlrift/cddlc#86).
                 let value = a.constraints.iter().find_map(|c| match c {
-                    cddlc_ir::Constraint::Eq(LiteralValue::Text(t)) => Some(format!("std::string_view({t:?})")),
+                    cddlc_ir::Constraint::Eq(LiteralValue::Text(t)) => {
+                        Some(format!("std::string_view({t:?})"))
+                    }
                     cddlc_ir::Constraint::Eq(LiteralValue::Bytes(b)) => Some(cpp_bytes_view(b)),
                     cddlc_ir::Constraint::Eq(LiteralValue::Uint(n)) => Some(format!("{n}u")),
                     cddlc_ir::Constraint::Eq(LiteralValue::Int(n)) => Some(format!("{n}")),
-                    cddlc_ir::Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 =>
-                        Some(format!("{}u", *lo)),
-                    cddlc_ir::Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 =>
-                        Some(format!("{}", *lo)),
+                    cddlc_ir::Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 => {
+                        Some(format!("{}u", *lo))
+                    }
+                    cddlc_ir::Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 => {
+                        Some(format!("{}", *lo))
+                    }
                     _ => None,
                 });
                 match value {
@@ -1889,55 +2228,89 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
         }
         TypeDef::Enum(e) => {
             // Roundtrip every variant (dgtlrift/cddlc#49).
-            let values: Vec<String> = e.variants.iter().map(|v| {
-                let k = to_pascal_case(&v.name);
-                let arg = match (&v.ty, cpp_variant_payload(v, _opts)) {
-                    (_, None) => String::new(),
-                    (TypeRef::Primitive(Primitive::Uint), _) => "42u".into(),
-                    (TypeRef::Primitive(Primitive::Int), _) => "-1".into(),
-                    (TypeRef::Primitive(Primitive::Bool), _) => "true".into(),
-                    (TypeRef::Primitive(Primitive::Float32 | Primitive::Float16), _) => "1.5f".into(),
-                    (TypeRef::Primitive(Primitive::Float64 | Primitive::Float), _) => "1.5".into(),
-                    (TypeRef::Primitive(Primitive::Tstr), _) => "std::string_view(\"hello\")".into(),
-                    // A map variant's members pinned to a literal (`type: "start"`) hold it.
-                    (TypeRef::Named(n), Some(t)) => match module.get(n) {
-                        Some(TypeDef::Struct(st)) => {
-                            let sets: Vec<String> = st.fields.iter()
-                                .filter(|f| f.occurrence.is_required())
-                                .filter_map(|f| f.constraints.iter().find_map(|c| match c {
-                                    cddlc_ir::Constraint::Eq(LiteralValue::Text(x)) =>
-                                        Some(format!("v.{} = std::string_view({x:?});", to_snake_case(&f.name))),
-                                    cddlc_ir::Constraint::Eq(LiteralValue::Uint(x)) =>
-                                        Some(format!("v.{} = {x}u;", to_snake_case(&f.name))),
-                                    cddlc_ir::Constraint::Eq(LiteralValue::Int(x)) =>
-                                        Some(format!("v.{} = {x};", to_snake_case(&f.name))),
-                                    _ => None,
-                                }))
-                                .collect();
-                            if sets.is_empty() {
-                                // Required boxed members hold a value
-                                // (dgtlrift/cddlc#156).
-                                cpp_filled(n, module)
-                            } else {
-                                format!("[] {{ {t} v{{}}; {} return v; }}()", sets.join(" "))
-                            }
+            let values: Vec<String> = e
+                .variants
+                .iter()
+                .map(|v| {
+                    let k = to_pascal_case(&v.name);
+                    let arg = match (&v.ty, cpp_variant_payload(v, _opts)) {
+                        (_, None) => String::new(),
+                        (TypeRef::Primitive(Primitive::Uint), _) => "42u".into(),
+                        (TypeRef::Primitive(Primitive::Int), _) => "-1".into(),
+                        (TypeRef::Primitive(Primitive::Bool), _) => "true".into(),
+                        (TypeRef::Primitive(Primitive::Float32 | Primitive::Float16), _) => {
+                            "1.5f".into()
                         }
-                        _ => format!("{t}{{}}"),
-                    },
-                    (_, Some(t)) => format!("{t}{{}}"),
-                };
-                format!("{type_name}::make_{k}({arg})")
-            }).collect();
-            w.line(&format!("for (const {type_name} &original : {{ {} }}) {{", values.join(", ")));
+                        (TypeRef::Primitive(Primitive::Float64 | Primitive::Float), _) => {
+                            "1.5".into()
+                        }
+                        (TypeRef::Primitive(Primitive::Tstr), _) => {
+                            "std::string_view(\"hello\")".into()
+                        }
+                        // A map variant's members pinned to a literal (`type: "start"`) hold it.
+                        (TypeRef::Named(n), Some(t)) => match module.get(n) {
+                            Some(TypeDef::Struct(st)) => {
+                                let sets: Vec<String> = st
+                                    .fields
+                                    .iter()
+                                    .filter(|f| f.occurrence.is_required())
+                                    .filter_map(|f| {
+                                        f.constraints.iter().find_map(|c| match c {
+                                            cddlc_ir::Constraint::Eq(LiteralValue::Text(x)) => {
+                                                Some(format!(
+                                                    "v.{} = std::string_view({x:?});",
+                                                    to_snake_case(&f.name)
+                                                ))
+                                            }
+                                            cddlc_ir::Constraint::Eq(LiteralValue::Uint(x)) => {
+                                                Some(format!(
+                                                    "v.{} = {x}u;",
+                                                    to_snake_case(&f.name)
+                                                ))
+                                            }
+                                            cddlc_ir::Constraint::Eq(LiteralValue::Int(x)) => {
+                                                Some(format!("v.{} = {x};", to_snake_case(&f.name)))
+                                            }
+                                            _ => None,
+                                        })
+                                    })
+                                    .collect();
+                                if sets.is_empty() {
+                                    // Required boxed members hold a value
+                                    // (dgtlrift/cddlc#156).
+                                    cpp_filled(n, module)
+                                } else {
+                                    format!("[] {{ {t} v{{}}; {} return v; }}()", sets.join(" "))
+                                }
+                            }
+                            _ => format!("{t}{{}}"),
+                        },
+                        (_, Some(t)) => format!("{t}{{}}"),
+                    };
+                    format!("{type_name}::make_{k}({arg})")
+                })
+                .collect();
+            w.line(&format!(
+                "for (const {type_name} &original : {{ {} }}) {{",
+                values.join(", ")
+            ));
             w.indent();
             enum_loop = true;
         }
         TypeDef::Struct(s) => {
             w.line(&format!("{type_name} original{{}};"));
             // A required boxed member holds a value (dgtlrift/cddlc#156).
-            for f in s.fields.iter().filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name)) {
+            for f in s
+                .fields
+                .iter()
+                .filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name))
+            {
                 if let Some(n) = boxed_named(&f.ty, _opts) {
-                    w.line(&format!("original.{} = {};", to_snake_case(&f.name), cpp_filled(n, module)));
+                    w.line(&format!(
+                        "original.{} = {};",
+                        to_snake_case(&f.name),
+                        cpp_filled(n, module)
+                    ));
                 }
             }
             // A repeated member gets as many (default) items as it needs
@@ -1970,7 +2343,9 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                     Constraint::Eq(LiteralValue::Bool(b)) => Some(b.to_string()),
                     Constraint::Eq(LiteralValue::Uint(n)) => Some(format!("{n}u")),
                     Constraint::Eq(LiteralValue::Int(n)) => Some(format!("{n}")),
-                    Constraint::Eq(LiteralValue::Text(t)) => Some(format!("std::string_view({t:?})")),
+                    Constraint::Eq(LiteralValue::Text(t)) => {
+                        Some(format!("std::string_view({t:?})"))
+                    }
                     _ => None,
                 }) {
                     w.line(&format!("original.{fname} = {lit};"));
@@ -1983,13 +2358,23 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                 }) {
                     match effective_ty {
                         TypeRef::Primitive(Primitive::Uint) => {
-                            w.line(&format!("original.{fname} = {:#x}ULL;", cddlc_codegen::bits_mask_u64(bits)));
+                            w.line(&format!(
+                                "original.{fname} = {:#x}ULL;",
+                                cddlc_codegen::bits_mask_u64(bits)
+                            ));
                             continue;
                         }
                         TypeRef::Primitive(Primitive::Bstr) => {
                             let m = cddlc_codegen::bits_mask_bytes(bits);
-                            let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
-                            w.line(&format!("static const uint8_t _{fname}_cbor[{}] = {{{bytes}}};", m.len().max(1)));
+                            let bytes = m
+                                .iter()
+                                .map(|b| format!("{b:#04x}"))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            w.line(&format!(
+                                "static const uint8_t _{fname}_cbor[{}] = {{{bytes}}};",
+                                m.len().max(1)
+                            ));
                             w.line(&format!("original.{fname} = std::string_view(reinterpret_cast<const char*>(_{fname}_cbor), {});", m.len()));
                             continue;
                         }
@@ -2014,25 +2399,31 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                     }
                     TypeRef::Primitive(Primitive::Tstr) => {
                         w.line(&format!("static const char _{fname}_str[] = \"hello\";"));
-                        w.line(&format!("original.{fname} = std::string_view(_{fname}_str);"));
+                        w.line(&format!(
+                            "original.{fname} = std::string_view(_{fname}_str);"
+                        ));
                     }
                     TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
-                        w.line(&format!("static const uint8_t _{fname}_cbor[1] = {{0xf6}};"));
+                        w.line(&format!(
+                            "static const uint8_t _{fname}_cbor[1] = {{0xf6}};"
+                        ));
                         w.line(&format!("original.{fname} = std::string_view(reinterpret_cast<const char*>(_{fname}_cbor), 1);"));
                     }
-                    TypeRef::Choice(_) => {
-                        match effective_primitive(effective_ty) {
-                            Some(Primitive::Tstr) => {
-                                w.line(&format!("static const char _{fname}_str[] = \"hello\";"));
-                                w.line(&format!("original.{fname} = std::string_view(_{fname}_str);"));
-                            }
-                            Some(Primitive::Bstr | Primitive::Any) => {
-                                w.line(&format!("static const uint8_t _{fname}_cbor[1] = {{0xf6}};"));
-                                w.line(&format!("original.{fname} = std::string_view(reinterpret_cast<const char*>(_{fname}_cbor), 1);"));
-                            }
-                            _ => {}
+                    TypeRef::Choice(_) => match effective_primitive(effective_ty) {
+                        Some(Primitive::Tstr) => {
+                            w.line(&format!("static const char _{fname}_str[] = \"hello\";"));
+                            w.line(&format!(
+                                "original.{fname} = std::string_view(_{fname}_str);"
+                            ));
                         }
-                    }
+                        Some(Primitive::Bstr | Primitive::Any) => {
+                            w.line(&format!(
+                                "static const uint8_t _{fname}_cbor[1] = {{0xf6}};"
+                            ));
+                            w.line(&format!("original.{fname} = std::string_view(reinterpret_cast<const char*>(_{fname}_cbor), 1);"));
+                        }
+                        _ => {}
+                    },
                     TypeRef::Named(n) => {
                         if let Some(sz) = tstr_size_constraint_for(n, module) {
                             let s = "a".repeat(sz);
@@ -2050,8 +2441,10 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
         // A value that holds the table again has no valid default (its
         // required `Box` is empty), so that table stays empty
         // (dgtlrift/cddlc#156).
-        TypeDef::Map(m) if matches!(m.key_ty, TypeRef::Primitive(Primitive::Tstr))
-            && cddlc_codegen::is_indirect(&m.name, &m.val_ty, module) => {
+        TypeDef::Map(m)
+            if matches!(m.key_ty, TypeRef::Primitive(Primitive::Tstr))
+                && cddlc_codegen::is_indirect(&m.name, &m.val_ty, module) =>
+        {
             w.line(&format!("{type_name} original{{}};"));
         }
         TypeDef::Map(m) if matches!(m.key_ty, TypeRef::Primitive(Primitive::Tstr)) => {
@@ -2106,9 +2499,15 @@ fn cpp_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Stri
     let base = cpp_typeref(ty, opts);
     match occ {
         Occurrence::Optional => format!("std::optional<{base}>"),
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. } | Occurrence::Bounded { .. }
-            if is_heap(opts) => format!("std::vector<{base}>"),
-        Occurrence::ZeroOrMore { capacity } | Occurrence::OneOrMore { capacity }
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
+        | Occurrence::Bounded { .. }
+            if is_heap(opts) =>
+        {
+            format!("std::vector<{base}>")
+        }
+        Occurrence::ZeroOrMore { capacity }
+        | Occurrence::OneOrMore { capacity }
         | Occurrence::Bounded { capacity, .. } => {
             let cap = capacity_value(capacity, opts.max_array);
             format!("std::array<{base}, {cap}>")
@@ -2119,15 +2518,19 @@ fn cpp_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Stri
 
 fn cpp_typeref(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(p)     => cpp_primitive(p, opts).to_owned(),
-        TypeRef::Named(n)         => to_pascal_case(n),
+        TypeRef::Primitive(p) => cpp_primitive(p, opts).to_owned(),
+        TypeRef::Named(n) => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => cpp_typeref(inner, opts),
         TypeRef::Choice(cs) => match prim_choice(cs, opts) {
             Some(alts) => format!(
                 "std::variant<{}>",
-                alts.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(", ")
+                alts.iter()
+                    .map(|(_, t)| t.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
-            None => cs.first()
+            None => cs
+                .first()
                 .map(|c| cpp_typeref(c, opts))
                 .unwrap_or_else(|| "std::monostate".into()),
         },
@@ -2140,10 +2543,16 @@ fn cpp_typeref(ty: &TypeRef, opts: &CodegenOptions) -> String {
 fn prim_choice(cs: &[TypeRef], opts: &CodegenOptions) -> Option<Vec<(Primitive, String)>> {
     let mut alts: Vec<(Primitive, String)> = Vec::new();
     for c in cs {
-        let TypeRef::Primitive(p) = c else { return None };
-        if matches!(p, Primitive::Any) { return None; }
+        let TypeRef::Primitive(p) = c else {
+            return None;
+        };
+        if matches!(p, Primitive::Any) {
+            return None;
+        }
         let t = cpp_primitive(p, opts).to_owned();
-        if alts.iter().any(|(_, u)| *u == t) { return None; }
+        if alts.iter().any(|(_, u)| *u == t) {
+            return None;
+        }
         alts.push((p.clone(), t));
     }
     (alts.len() > 1).then_some(alts)
@@ -2151,24 +2560,23 @@ fn prim_choice(cs: &[TypeRef], opts: &CodegenOptions) -> Option<Vec<(Primitive, 
 
 fn cpp_primitive<'a>(p: &Primitive, _opts: &CodegenOptions) -> &'a str {
     match p {
-        Primitive::Bool      => "bool",
+        Primitive::Bool => "bool",
         Primitive::Null | Primitive::Undefined => "std::monostate",
-        Primitive::Uint      => "uint64_t",
-        Primitive::Int       => "int64_t",
+        Primitive::Uint => "uint64_t",
+        Primitive::Int => "int64_t",
         Primitive::Float16 | Primitive::Float32 => "float",
-        Primitive::Float64 | Primitive::Float   => "double",
-        Primitive::Tstr      => "std::string_view",
-        Primitive::Bstr | Primitive::Any        => "std::string_view",
+        Primitive::Float64 | Primitive::Float => "double",
+        Primitive::Tstr => "std::string_view",
+        Primitive::Bstr | Primitive::Any => "std::string_view",
     }
 }
-
-
 
 // ── C++ JSON backend (nlohmann/json) ─────────────────────────────────────────
 
 fn emit_cmake_json_cpp(name: &str, opts: &CodegenOptions) -> String {
     let header = cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Hash);
-    format!(r#"{header}cmake_minimum_required(VERSION 3.16)
+    format!(
+        r#"{header}cmake_minimum_required(VERSION 3.16)
 project({name}_json CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -2192,13 +2600,14 @@ enable_testing()
 add_executable(test_roundtrip test/test_roundtrip.cpp)
 target_link_libraries(test_roundtrip PRIVATE {name}_json)
 add_test(NAME roundtrip COMMAND test_roundtrip)
-"#)
+"#
+    )
 }
 
 fn emit_header_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name  = module.name.as_str();
+    let name = module.name.as_str();
     let guard = to_screaming_snake(&name);
-    let ns    = to_snake_case(&name);
+    let ns = to_snake_case(&name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
@@ -2231,20 +2640,28 @@ fn emit_header_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     // ahead (dgtlrift/cddlc#156).
     if BOXED.with(|b| !b.borrow().is_empty()) {
         for (_, def) in &module.types {
-            if matches!(def, TypeDef::Struct(_)) || matches!(def, TypeDef::Enum(e) if !e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)))) {
+            if matches!(def, TypeDef::Struct(_))
+                || matches!(def, TypeDef::Enum(e) if !e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr))))
+            {
                 w.line(&format!("struct {};", to_pascal_case(def.name())));
             }
         }
         w.blank();
         for line in BOX_TEMPLATE.lines() {
-            if line.is_empty() { w.blank() } else { w.line(line) }
+            if line.is_empty() {
+                w.blank()
+            } else {
+                w.line(line)
+            }
         }
         w.blank();
     }
 
     // Emit type declarations, after what each holds by value
     for tname in cddlc_codegen::inline_decl_order(module) {
-        let Some(def) = module.get(&tname) else { continue };
+        let Some(def) = module.get(&tname) else {
+            continue;
+        };
         emit_cpp_json_type_decl(&mut w, def, module, opts);
         w.blank();
     }
@@ -2260,7 +2677,7 @@ fn cpp_json_field_type(ty: &TypeRef, opts: &CodegenOptions) -> String {
         TypeRef::Primitive(p) => match p {
             Primitive::Bool => "bool".into(),
             Primitive::Uint => "uint64_t".into(),
-            Primitive::Int  => "int64_t".into(),
+            Primitive::Int => "int64_t".into(),
             Primitive::Float32 | Primitive::Float16 => "float".into(),
             Primitive::Float64 | Primitive::Float => "double".into(),
             Primitive::Tstr => "std::string".into(),
@@ -2277,25 +2694,39 @@ fn cpp_json_field_type_with_occ(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOp
     let base = cpp_json_field_type(ty, opts);
     match occ {
         Occurrence::Optional => format!("std::optional<{base}>"),
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => format!("std::vector<{base}>"),
         Occurrence::Required => base,
     }
 }
 
-fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
+fn emit_cpp_json_type_decl(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    module: &IrModule,
+    opts: &CodegenOptions,
+) {
     match def {
         TypeDef::Struct(s) => {
             let ctype = to_pascal_case(&s.name);
-            cddlc_codegen::emit_doc_lines(w, s.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
+            cddlc_codegen::emit_doc_lines(
+                w,
+                s.doc.as_deref(),
+                cddlc_codegen::DocStyle::Line("///"),
+            );
             w.line(&format!("struct {ctype} {{"));
             w.indent();
             for f in &s.fields {
-                cddlc_codegen::emit_doc_lines(w, f.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
+                cddlc_codegen::emit_doc_lines(
+                    w,
+                    f.doc.as_deref(),
+                    cddlc_codegen::DocStyle::Line("///"),
+                );
                 let fname = to_snake_case(&f.name);
                 // A member that holds this type again is a `Box`, empty when
                 // an optional one is absent (dgtlrift/cddlc#156).
-                let ty    = if is_boxed(&s.name, &f.name) {
+                let ty = if is_boxed(&s.name, &f.name) {
                     format!("Box<{}>", json_box_target(&f.ty, module, opts))
                 } else {
                     cpp_json_field_type_with_occ(&f.ty, &f.occurrence, opts)
@@ -2305,31 +2736,60 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, module: &IrModul
             // The map's other entries (dgtlrift/cddlc#82).
             if let Some(r) = &s.rest {
                 w.line("/// The map's other entries.");
-                w.line(&format!("std::map<std::string, {}> {}{{}};", cpp_json_field_type(&r.val_ty, opts), to_snake_case(&r.name)));
+                w.line(&format!(
+                    "std::map<std::string, {}> {}{{}};",
+                    cpp_json_field_type(&r.val_ty, opts),
+                    to_snake_case(&r.name)
+                ));
             }
             w.blank();
-            let eq: Vec<String> = s.fields.iter().map(|f| f.name.as_str())
+            let eq: Vec<String> = s
+                .fields
+                .iter()
+                .map(|f| f.name.as_str())
                 .chain(s.rest.iter().map(|r| r.name.as_str()))
-                .map(|n| { let n = to_snake_case(n); format!("{n} == o.{n}") })
+                .map(|n| {
+                    let n = to_snake_case(n);
+                    format!("{n} == o.{n}")
+                })
                 .collect();
-            let eq = if eq.is_empty() { "true".to_owned() } else { eq.join(" && ") };
-            w.line(&format!("bool operator==(const {ctype} &o) const {{ return {eq}; }}"));
+            let eq = if eq.is_empty() {
+                "true".to_owned()
+            } else {
+                eq.join(" && ")
+            };
+            w.line(&format!(
+                "bool operator==(const {ctype} &o) const {{ return {eq}; }}"
+            ));
             w.line("std::vector<uint8_t> encode() const;");
-            w.line(&format!("static {ctype} decode(const std::vector<uint8_t>& data);"));
+            w.line(&format!(
+                "static {ctype} decode(const std::vector<uint8_t>& data);"
+            ));
             w.dedent();
             w.line("};");
         }
         TypeDef::Enum(e) => {
             let ctype = to_pascal_case(&e.name);
-            cddlc_codegen::emit_doc_lines(w, e.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
+            cddlc_codegen::emit_doc_lines(
+                w,
+                e.doc.as_deref(),
+                cddlc_codegen::DocStyle::Line("///"),
+            );
             // Emit as std::variant for mixed enums or string enum
-            let all_str = e.variants.iter().all(|v|
-                matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
+            let all_str = e
+                .variants
+                .iter()
+                .all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
             if all_str {
-                let variants: Vec<String> = e.variants.iter()
+                let variants: Vec<String> = e
+                    .variants
+                    .iter()
                     .map(|v| format!("{:?}", cddlc_codegen::enum_variant_text(v)))
                     .collect();
-                w.line(&format!("// {ctype}: string enum ({} variants)", variants.len()));
+                w.line(&format!(
+                    "// {ctype}: string enum ({} variants)",
+                    variants.len()
+                ));
                 w.line(&format!("using {ctype} = std::string;"));
             } else {
                 // Emit as tagged union via JSON
@@ -2337,32 +2797,52 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, module: &IrModul
                 w.indent();
                 w.line("nlohmann::json value;");
                 w.blank();
-                w.line(&format!("bool operator==(const {ctype} &o) const {{ return value == o.value; }}"));
+                w.line(&format!(
+                    "bool operator==(const {ctype} &o) const {{ return value == o.value; }}"
+                ));
                 w.line("std::vector<uint8_t> encode() const;");
-                w.line(&format!("static {ctype} decode(const std::vector<uint8_t>& data);"));
+                w.line(&format!(
+                    "static {ctype} decode(const std::vector<uint8_t>& data);"
+                ));
                 w.dedent();
                 w.line("};");
             }
         }
         TypeDef::Array(a) => {
-            let ctype    = to_pascal_case(&a.name);
-            cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
-            let elem_ty  = cpp_json_field_type(&a.element, opts);
+            let ctype = to_pascal_case(&a.name);
+            cddlc_codegen::emit_doc_lines(
+                w,
+                a.doc.as_deref(),
+                cddlc_codegen::DocStyle::Line("///"),
+            );
+            let elem_ty = cpp_json_field_type(&a.element, opts);
             w.line(&format!("using {ctype} = std::vector<{elem_ty}>;"));
-            w.line(&format!("std::vector<uint8_t> encode_{ctype}(const {ctype}& val);"));
-            w.line(&format!("{ctype} decode_{ctype}(const std::vector<uint8_t>& data);"));
+            w.line(&format!(
+                "std::vector<uint8_t> encode_{ctype}(const {ctype}& val);"
+            ));
+            w.line(&format!(
+                "{ctype} decode_{ctype}(const std::vector<uint8_t>& data);"
+            ));
         }
         TypeDef::Alias(a) => {
-            let ctype    = to_pascal_case(&a.name);
-            cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
+            let ctype = to_pascal_case(&a.name);
+            cddlc_codegen::emit_doc_lines(
+                w,
+                a.doc.as_deref(),
+                cddlc_codegen::DocStyle::Line("///"),
+            );
             let inner_ty = cpp_json_field_type(&a.ty, opts);
             w.line(&format!("struct {ctype} {{"));
             w.indent();
             w.line(&format!("{inner_ty} value{{}};"));
             w.blank();
-            w.line(&format!("bool operator==(const {ctype} &o) const {{ return value == o.value; }}"));
+            w.line(&format!(
+                "bool operator==(const {ctype} &o) const {{ return value == o.value; }}"
+            ));
             w.line("std::vector<uint8_t> encode() const;");
-            w.line(&format!("static {ctype} decode(const std::vector<uint8_t>& data);"));
+            w.line(&format!(
+                "static {ctype} decode(const std::vector<uint8_t>& data);"
+            ));
             w.dedent();
             w.line("};");
         }
@@ -2370,18 +2850,26 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, module: &IrModul
         // key order (dgtlrift/cddlc#82).
         TypeDef::Map(m) => {
             let ctype = to_pascal_case(&m.name);
-            cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
+            cddlc_codegen::emit_doc_lines(
+                w,
+                m.doc.as_deref(),
+                cddlc_codegen::DocStyle::Line("///"),
+            );
             let val_ty = cpp_json_field_type(&m.val_ty, opts);
             w.line(&format!("using {ctype} = std::map<std::string, {val_ty}>;"));
-            w.line(&format!("std::vector<uint8_t> encode_{ctype}(const {ctype}& val);"));
-            w.line(&format!("{ctype} decode_{ctype}(const std::vector<uint8_t>& data);"));
+            w.line(&format!(
+                "std::vector<uint8_t> encode_{ctype}(const {ctype}& val);"
+            ));
+            w.line(&format!(
+                "{ctype} decode_{ctype}(const std::vector<uint8_t>& data);"
+            ));
         }
     }
 }
 
 fn emit_source_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     let name = module.name.as_str();
-    let ns   = to_snake_case(&name);
+    let ns = to_snake_case(&name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
@@ -2451,7 +2939,9 @@ fn emit_source_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("if(a>=0&&b>=0) {");
     w.indent();
     w.line("out.push_back((a<<2)|(b>>4));");
-    w.line("if (n - i >= 3) { int c=DEC[(uint8_t)s[i+2]]; if(c>=0) out.push_back((b<<4)|(c>>2)); }");
+    w.line(
+        "if (n - i >= 3) { int c=DEC[(uint8_t)s[i+2]]; if(c>=0) out.push_back((b<<4)|(c>>2)); }",
+    );
     w.dedent();
     w.line("}");
     w.dedent();
@@ -2480,7 +2970,11 @@ fn emit_source_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
 }
 
 /// How a named type is represented in C++ JSON output.
-enum JsonNamed { TextEnum, Array, Object }
+enum JsonNamed {
+    TextEnum,
+    Array,
+    Object,
+}
 
 fn json_named_kind(n: &str, module: &IrModule) -> JsonNamed {
     match module.get(n) {
@@ -2492,19 +2986,23 @@ fn json_named_kind(n: &str, module: &IrModule) -> JsonNamed {
 
 /// A text-only enum is emitted as `using X = std::string`.
 fn json_enum_is_string(e: &EnumDef) -> bool {
-    e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)))
+    e.variants
+        .iter()
+        .all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)))
 }
 
 /// A C++ expression converting `expr` to a `nlohmann::json` value.
 fn cpp_json_to_val(ty: &TypeRef, expr: &str, module: &IrModule) -> String {
     match ty {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
-            format!("b64url_encode({expr})"),
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => format!("b64url_encode({expr})"),
         // `std::monostate` has no JSON conversion (dgtlrift/cddlc#54).
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "nullptr".into(),
         TypeRef::Named(n) => match json_named_kind(n, module) {
             JsonNamed::TextEnum => expr.to_owned(),
-            JsonNamed::Array => format!("nlohmann::json::parse(encode_{}({expr}))", to_pascal_case(n)),
+            JsonNamed::Array => format!(
+                "nlohmann::json::parse(encode_{}({expr}))",
+                to_pascal_case(n)
+            ),
             JsonNamed::Object => format!("nlohmann::json::parse({expr}.encode())"),
         },
         TypeRef::Tagged(_, inner) => cpp_json_to_val(inner, expr, module),
@@ -2516,13 +3014,18 @@ fn cpp_json_to_val(ty: &TypeRef, expr: &str, module: &IrModule) -> String {
 fn cpp_json_from_val(ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: &IrModule) -> String {
     match ty {
         TypeRef::Primitive(Primitive::Uint) => format!("{expr}.get<uint64_t>()"),
-        TypeRef::Primitive(Primitive::Int)  => format!("{expr}.get<int64_t>()"),
+        TypeRef::Primitive(Primitive::Int) => format!("{expr}.get<int64_t>()"),
         TypeRef::Primitive(Primitive::Bool) => format!("{expr}.get<bool>()"),
-        TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) => format!("{expr}.get<float>()"),
-        TypeRef::Primitive(Primitive::Float64 | Primitive::Float) => format!("{expr}.get<double>()"),
+        TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) => {
+            format!("{expr}.get<float>()")
+        }
+        TypeRef::Primitive(Primitive::Float64 | Primitive::Float) => {
+            format!("{expr}.get<double>()")
+        }
         TypeRef::Primitive(Primitive::Tstr) => format!("{expr}.get<std::string>()"),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
-            format!("b64url_decode({expr}.get<std::string>())"),
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+            format!("b64url_decode({expr}.get<std::string>())")
+        }
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "std::monostate{}".into(),
         // `json_bytes` serializes once; building a vector from `dump().begin()` and
         // `dump().end()` used iterators of two different strings (dgtlrift/cddlc#54).
@@ -2536,7 +3039,12 @@ fn cpp_json_from_val(ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: &I
     }
 }
 
-fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions, module: &IrModule) {
+fn emit_cpp_json_impl(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    opts: &CodegenOptions,
+    module: &IrModule,
+) {
     match def {
         // A record with a repeated member (`[primary, * extension, payload]`):
         // its items go inline, and the array's length says how many there
@@ -2550,10 +3058,16 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             let (min, max) = cddlc_codegen::repeat_bounds(&rf.occurrence);
             let bounds = |w: &mut IndentWriter, n: &str| {
                 if min > 0 {
-                    w.line(&format!("if ({n} < {min}) throw std::runtime_error({:?});", format!("{ctype}.{}: needs at least {min} items", rf.name)));
+                    w.line(&format!(
+                        "if ({n} < {min}) throw std::runtime_error({:?});",
+                        format!("{ctype}.{}: needs at least {min} items", rf.name)
+                    ));
                 }
                 if let Some(max) = max {
-                    w.line(&format!("if ({n} > {max}) throw std::runtime_error({:?});", format!("{ctype}.{}: has more than {max} items", rf.name)));
+                    w.line(&format!(
+                        "if ({n} > {max}) throw std::runtime_error({:?});",
+                        format!("{ctype}.{}: has more than {max} items", rf.name)
+                    ));
                 }
             };
             w.line(&format!("std::vector<uint8_t> {ctype}::encode() const {{"));
@@ -2563,9 +3077,15 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
                 if f.occurrence.is_repeated() {
-                    w.line(&format!("for (const auto& v : this->{fname}) j.push_back({});", cpp_json_to_val(&f.ty, "v", module)));
+                    w.line(&format!(
+                        "for (const auto& v : this->{fname}) j.push_back({});",
+                        cpp_json_to_val(&f.ty, "v", module)
+                    ));
                 } else {
-                    w.line(&format!("j.push_back({});", cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)));
+                    w.line(&format!(
+                        "j.push_back({});",
+                        cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)
+                    ));
                 }
             }
             w.line("auto s = j.dump();");
@@ -2573,11 +3093,16 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.dedent();
             w.line("}");
             w.blank();
-            w.line(&format!("{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"));
+            w.line(&format!(
+                "{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"
+            ));
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("if (!j.is_array() || j.size() < {fixed}) {{"));
-            w.line(&format!("    throw std::runtime_error({:?});", format!("{ctype}: expected an array of at least {fixed} items")));
+            w.line(&format!(
+                "    throw std::runtime_error({:?});",
+                format!("{ctype}: expected an array of at least {fixed} items")
+            ));
             w.line("}");
             w.line(&format!("std::size_t reps = j.size() - {fixed};"));
             bounds(w, "reps");
@@ -2586,9 +3111,15 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                 let fname = to_snake_case(&f.name);
                 if f.occurrence.is_repeated() {
                     let conv = cpp_json_from_val(&f.ty, &format!("j.at({i} + k)"), opts, module);
-                    w.line(&format!("for (std::size_t k = 0; k < reps; k++) out.{fname}.push_back({conv});"));
+                    w.line(&format!(
+                        "for (std::size_t k = 0; k < reps; k++) out.{fname}.push_back({conv});"
+                    ));
                 } else {
-                    let index = if i < ri { i.to_string() } else { format!("{} + reps", i - 1) };
+                    let index = if i < ri {
+                        i.to_string()
+                    } else {
+                        format!("{} + reps", i - 1)
+                    };
                     let conv = cpp_json_from_val(&f.ty, &format!("j.at({index})"), opts, module);
                     w.line(&format!("out.{fname} = {conv};"));
                 }
@@ -2602,7 +3133,11 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             // order; optional members come last, and one present after an absent
             // one can't be written.
             let ctype = to_pascal_case(&s.name);
-            let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+            let optional: Vec<_> = s
+                .fields
+                .iter()
+                .filter(|f| matches!(f.occurrence, Occurrence::Optional))
+                .collect();
             w.line(&format!("std::vector<uint8_t> {ctype}::encode() const {{"));
             w.indent();
             for pair in optional.windows(2) {
@@ -2621,7 +3156,10 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                         cpp_json_to_val(&f.ty, &format!("this->{fname}.value()"), module)
                     ));
                 } else {
-                    w.line(&format!("j.push_back({});", cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)));
+                    w.line(&format!(
+                        "j.push_back({});",
+                        cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)
+                    ));
                 }
             }
             w.line("auto s = j.dump();");
@@ -2631,11 +3169,22 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.blank();
 
             let required = s.fields.len() - optional.len();
-            w.line(&format!("{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"));
+            w.line(&format!(
+                "{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"
+            ));
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
-            w.line(&format!("if (!j.is_array() || j.size() < {required} || j.size() > {}) {{", s.fields.len()));
-            w.line(&format!("    throw std::runtime_error({:?});", format!("{ctype}: expected an array of {required} to {} items", s.fields.len())));
+            w.line(&format!(
+                "if (!j.is_array() || j.size() < {required} || j.size() > {}) {{",
+                s.fields.len()
+            ));
+            w.line(&format!(
+                "    throw std::runtime_error({:?});",
+                format!(
+                    "{ctype}: expected an array of {required} to {} items",
+                    s.fields.len()
+                )
+            ));
             w.line("}");
             w.line(&format!("{ctype} out{{}};"));
             // One optional member before required ones: present when the array
@@ -2644,12 +3193,18 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             for (i, f) in s.fields.iter().enumerate() {
                 let fname = to_snake_case(&f.name);
                 let index = match &before {
-                    Some(b) if b[i] > 0 => { let x = required + b[i]; format!("j.size() >= {x} ? {i} : {i} - ({x} - j.size())") }
+                    Some(b) if b[i] > 0 => {
+                        let x = required + b[i];
+                        format!("j.size() >= {x} ? {i} : {i} - ({x} - j.size())")
+                    }
                     _ => i.to_string(),
                 };
                 let conv = cpp_json_from_val(&f.ty, &format!("j.at({index})"), opts, module);
                 if let (Occurrence::Optional, Some(b)) = (&f.occurrence, &before) {
-                    w.line(&format!("if (j.size() > {}) out.{fname} = {conv};", required + b[i]));
+                    w.line(&format!(
+                        "if (j.size() > {}) out.{fname} = {conv};",
+                        required + b[i]
+                    ));
                 } else if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (j.size() > {i}) out.{fname} = {conv};"));
                 } else {
@@ -2668,20 +3223,34 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
                 let key_text = cddlc_codegen::field_key_json(&f.key);
-                let key   = key_text.as_str();
-                let _val  = cpp_json_to_val(&f.ty, &fname, module);
+                let key = key_text.as_str();
+                let _val = cpp_json_to_val(&f.ty, &fname, module);
                 match &f.occurrence {
                     Occurrence::Optional => {
-                        w.line(&format!("if ({fname}.has_value()) j[{key:?}] = {val};", fname=format!("this->{fname}"), val=cpp_json_to_val(&f.ty, &format!("this->{fname}.value()"), module)));
+                        w.line(&format!(
+                            "if ({fname}.has_value()) j[{key:?}] = {val};",
+                            fname = format!("this->{fname}"),
+                            val = cpp_json_to_val(&f.ty, &format!("this->{fname}.value()"), module)
+                        ));
                     }
                     _ => {
-                        w.line(&format!("j[{key:?}] = {};", cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)));
+                        w.line(&format!(
+                            "j[{key:?}] = {};",
+                            cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)
+                        ));
                     }
                 }
             }
             if let Some(r) = &s.rest {
-                let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key))).collect();
-                w.line(&format!("for (const auto& [key, value] : this->{}) {{", to_snake_case(&r.name)));
+                let named: Vec<String> = s
+                    .fields
+                    .iter()
+                    .map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key)))
+                    .collect();
+                w.line(&format!(
+                    "for (const auto& [key, value] : this->{}) {{",
+                    to_snake_case(&r.name)
+                ));
                 w.indent();
                 if !named.is_empty() {
                     w.line(&format!(
@@ -2689,7 +3258,10 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                         named.join(", ")
                     ));
                 }
-                w.line(&format!("j[key] = {};", cpp_json_to_val(&r.val_ty, "value", module)));
+                w.line(&format!(
+                    "j[key] = {};",
+                    cpp_json_to_val(&r.val_ty, "value", module)
+                ));
                 w.dedent();
                 w.line("}");
             }
@@ -2699,13 +3271,19 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.line("}");
             w.blank();
 
-            w.line(&format!("{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"));
+            w.line(&format!(
+                "{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"
+            ));
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("{ctype} out{{}};"));
             // A map has only the members its schema gives it (dgtlrift/cddlc#102).
             if s.rest.is_none() {
-                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", cddlc_codegen::field_key_json(&f.key))).collect();
+                let named: Vec<String> = s
+                    .fields
+                    .iter()
+                    .map(|f| format!("key == {:?}", cddlc_codegen::field_key_json(&f.key)))
+                    .collect();
                 w.line(&format!(
                     "for (const auto& [key, value] : j.items()) if (!({})) throw std::invalid_argument(\"{ctype}: unknown member \" + key);",
                     if named.is_empty() { "false".into() } else { named.join(" || ") }
@@ -2714,25 +3292,39 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
                 let key_text = cddlc_codegen::field_key_json(&f.key);
-                let key   = key_text.as_str();
+                let key = key_text.as_str();
                 match &f.occurrence {
                     Occurrence::Optional => {
-                        w.line(&format!("if (j.contains({key:?})) out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j[{key:?}]"), opts, module)));
+                        w.line(&format!(
+                            "if (j.contains({key:?})) out.{fname} = {};",
+                            cpp_json_from_val(&f.ty, &format!("j[{key:?}]"), opts, module)
+                        ));
                     }
                     _ => {
-                        w.line(&format!("out.{fname} = {};", cpp_json_from_val(&f.ty, &format!("j.at({key:?})"), opts, module)));
+                        w.line(&format!(
+                            "out.{fname} = {};",
+                            cpp_json_from_val(&f.ty, &format!("j.at({key:?})"), opts, module)
+                        ));
                     }
                 }
             }
             // Keys no member has are the map's other entries.
             if let Some(r) = &s.rest {
-                let named: Vec<String> = s.fields.iter().map(|f| format!("key == {:?}", cddlc_codegen::field_key_json(&f.key))).collect();
+                let named: Vec<String> = s
+                    .fields
+                    .iter()
+                    .map(|f| format!("key == {:?}", cddlc_codegen::field_key_json(&f.key)))
+                    .collect();
                 w.line("for (const auto& [key, value] : j.items()) {");
                 w.indent();
                 if !named.is_empty() {
                     w.line(&format!("if ({}) continue;", named.join(" || ")));
                 }
-                w.line(&format!("out.{}.emplace(key, {});", to_snake_case(&r.name), cpp_json_from_val(&r.val_ty, "value", opts, module)));
+                w.line(&format!(
+                    "out.{}.emplace(key, {});",
+                    to_snake_case(&r.name),
+                    cpp_json_from_val(&r.val_ty, "value", opts, module)
+                ));
                 w.dedent();
                 w.line("}");
             }
@@ -2741,9 +3333,11 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.line("}");
         }
         TypeDef::Enum(e) => {
-            let ctype   = to_pascal_case(&e.name);
-            let all_str = e.variants.iter().all(|v|
-                matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
+            let ctype = to_pascal_case(&e.name);
+            let all_str = e
+                .variants
+                .iter()
+                .all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
 
             if all_str {
                 // string enum — type alias, no methods needed
@@ -2756,7 +3350,9 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                 w.line("}");
                 w.blank();
 
-                w.line(&format!("{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"));
+                w.line(&format!(
+                    "{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"
+                ));
                 w.indent();
                 w.line(&format!("{ctype} out{{}};"));
                 w.line("out.value = nlohmann::json::parse(data.begin(), data.end());");
@@ -2766,9 +3362,11 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             }
         }
         TypeDef::Array(a) => {
-            let ctype   = to_pascal_case(&a.name);
+            let ctype = to_pascal_case(&a.name);
             let elem_ty = cpp_json_field_type(&a.element, opts);
-            w.line(&format!("std::vector<uint8_t> encode_{ctype}(const {ctype}& val) {{"));
+            w.line(&format!(
+                "std::vector<uint8_t> encode_{ctype}(const {ctype}& val) {{"
+            ));
             w.indent();
             // Element by element, so named elements use their own conversion.
             w.line("nlohmann::json arr = nlohmann::json::array();");
@@ -2780,7 +3378,10 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                     cpp_json_to_val(&a.element, "item", module)
                 ));
             } else {
-                w.line(&format!("for (const auto& item : val) arr.push_back({});", cpp_json_to_val(&a.element, "item", module)));
+                w.line(&format!(
+                    "for (const auto& item : val) arr.push_back({});",
+                    cpp_json_to_val(&a.element, "item", module)
+                ));
             }
             w.line("auto s = arr.dump();");
             w.line("return std::vector<uint8_t>(s.begin(), s.end());");
@@ -2788,7 +3389,9 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.line("}");
             w.blank();
 
-            w.line(&format!("{ctype} decode_{ctype}(const std::vector<uint8_t>& data) {{"));
+            w.line(&format!(
+                "{ctype} decode_{ctype}(const std::vector<uint8_t>& data) {{"
+            ));
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("{ctype} out;"));
@@ -2796,15 +3399,25 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                 w.line(&format!(
                     "if (!j.is_array() || j.size() % {n} != 0) throw std::runtime_error(\"{ctype}: a partial group\");"
                 ));
-                w.line(&format!("for (std::size_t i = 0; i < j.size(); i += {n}) {{"));
+                w.line(&format!(
+                    "for (std::size_t i = 0; i < j.size(); i += {n}) {{"
+                ));
                 w.indent();
                 w.line("nlohmann::json item = nlohmann::json::array();");
-                w.line(&format!("for (std::size_t k = 0; k < {n}; k++) item.push_back(j[i + k]);"));
-                w.line(&format!("out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+                w.line(&format!(
+                    "for (std::size_t k = 0; k < {n}; k++) item.push_back(j[i + k]);"
+                ));
+                w.line(&format!(
+                    "out.push_back({});",
+                    cpp_json_from_val(&a.element, "item", opts, module)
+                ));
                 w.dedent();
                 w.line("}");
             } else {
-                w.line(&format!("for (const auto& item : j) out.push_back({});", cpp_json_from_val(&a.element, "item", opts, module)));
+                w.line(&format!(
+                    "for (const auto& item : j) out.push_back({});",
+                    cpp_json_from_val(&a.element, "item", opts, module)
+                ));
             }
             w.line("return out;");
             w.dedent();
@@ -2813,7 +3426,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             let _ = elem_ty;
         }
         TypeDef::Alias(a) => {
-            let ctype    = to_pascal_case(&a.name);
+            let ctype = to_pascal_case(&a.name);
             w.line(&format!("std::vector<uint8_t> {ctype}::encode() const {{"));
             w.indent();
             let val = cpp_json_to_val(&a.ty, "this->value", module);
@@ -2824,33 +3437,48 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.line("}");
             w.blank();
 
-            w.line(&format!("{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"));
+            w.line(&format!(
+                "{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"
+            ));
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("{ctype} out{{}};"));
-            w.line(&format!("out.value = {};", cpp_json_from_val(&a.ty, "j", opts, module)));
+            w.line(&format!(
+                "out.value = {};",
+                cpp_json_from_val(&a.ty, "j", opts, module)
+            ));
             w.line("return out;");
             w.dedent();
             w.line("}");
         }
         TypeDef::Map(m) => {
             let ctype = to_pascal_case(&m.name);
-            w.line(&format!("std::vector<uint8_t> encode_{ctype}(const {ctype}& val) {{"));
+            w.line(&format!(
+                "std::vector<uint8_t> encode_{ctype}(const {ctype}& val) {{"
+            ));
             w.indent();
             w.line("nlohmann::json obj = nlohmann::json::object();");
-            w.line(&format!("for (const auto& [key, value] : val) obj[key] = {};", cpp_json_to_val(&m.val_ty, "value", module)));
+            w.line(&format!(
+                "for (const auto& [key, value] : val) obj[key] = {};",
+                cpp_json_to_val(&m.val_ty, "value", module)
+            ));
             w.line("auto s = obj.dump();");
             w.line("return std::vector<uint8_t>(s.begin(), s.end());");
             w.dedent();
             w.line("}");
             w.blank();
 
-            w.line(&format!("{ctype} decode_{ctype}(const std::vector<uint8_t>& data) {{"));
+            w.line(&format!(
+                "{ctype} decode_{ctype}(const std::vector<uint8_t>& data) {{"
+            ));
             w.indent();
             w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
             w.line(&format!("if (!j.is_object()) throw std::runtime_error(\"{ctype}: expected a JSON object\");"));
             w.line(&format!("{ctype} out;"));
-            w.line(&format!("for (const auto& [key, value] : j.items()) out.emplace(key, {});", cpp_json_from_val(&m.val_ty, "value", opts, module)));
+            w.line(&format!(
+                "for (const auto& [key, value] : j.items()) out.emplace(key, {});",
+                cpp_json_from_val(&m.val_ty, "value", opts, module)
+            ));
             w.line("return out;");
             w.dedent();
             w.line("}");
@@ -2860,7 +3488,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
 
 fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     let name = module.name.as_str();
-    let ns   = to_snake_case(&name);
+    let ns = to_snake_case(&name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
@@ -2881,12 +3509,23 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.indent();
                 w.line(&format!("{ctype} original{{}};"));
                 if let Some(r) = &s.rest {
-                    w.line(&format!("original.{}[\"other-key\"] = {{}};", to_snake_case(&r.name)));
+                    w.line(&format!(
+                        "original.{}[\"other-key\"] = {{}};",
+                        to_snake_case(&r.name)
+                    ));
                 }
                 // A required boxed member holds a value (dgtlrift/cddlc#156).
-                for f in s.fields.iter().filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name)) {
+                for f in s
+                    .fields
+                    .iter()
+                    .filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name))
+                {
                     if let Some(n) = boxed_named(&f.ty, opts) {
-                        w.line(&format!("original.{} = {};", to_snake_case(&f.name), cpp_filled(n, module)));
+                        w.line(&format!(
+                            "original.{} = {};",
+                            to_snake_case(&f.name),
+                            cpp_filled(n, module)
+                        ));
                     }
                 }
                 // A repeated member gets as many (default) items as it needs
@@ -2894,7 +3533,10 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
                     let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
                     if min > 0 {
-                        w.line(&format!("original.{}.resize({min});", to_snake_case(&f.name)));
+                        w.line(&format!(
+                            "original.{}.resize({min});",
+                            to_snake_case(&f.name)
+                        ));
                     }
                 }
                 w.line("auto encoded = original.encode();");
@@ -2905,9 +3547,11 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.blank();
             }
             TypeDef::Enum(e) => {
-                let ctype   = to_pascal_case(&e.name);
-                let all_str = e.variants.iter().all(|v|
-                    matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
+                let ctype = to_pascal_case(&e.name);
+                let all_str = e
+                    .variants
+                    .iter()
+                    .all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
                 if !all_str {
                     w.line(&format!("void test_{ctype}() {{"));
                     w.indent();
@@ -2969,16 +3613,32 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     w.indent();
     for (_, def) in &module.types {
         match def {
-            TypeDef::Struct(s) => { let ctype = to_pascal_case(&s.name); w.line(&format!("test_{ctype}();")); }
-            TypeDef::Enum(e) => {
-                let ctype   = to_pascal_case(&e.name);
-                let all_str = e.variants.iter().all(|v|
-                    matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
-                if !all_str { w.line(&format!("test_{ctype}();")); }
+            TypeDef::Struct(s) => {
+                let ctype = to_pascal_case(&s.name);
+                w.line(&format!("test_{ctype}();"));
             }
-            TypeDef::Array(a) => { let ctype = to_pascal_case(&a.name); w.line(&format!("test_{ctype}();")); }
-            TypeDef::Alias(a) => { let ctype = to_pascal_case(&a.name); w.line(&format!("test_{ctype}();")); }
-            TypeDef::Map(m) => { let ctype = to_pascal_case(&m.name); w.line(&format!("test_{ctype}();")); }
+            TypeDef::Enum(e) => {
+                let ctype = to_pascal_case(&e.name);
+                let all_str = e
+                    .variants
+                    .iter()
+                    .all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
+                if !all_str {
+                    w.line(&format!("test_{ctype}();"));
+                }
+            }
+            TypeDef::Array(a) => {
+                let ctype = to_pascal_case(&a.name);
+                w.line(&format!("test_{ctype}();"));
+            }
+            TypeDef::Alias(a) => {
+                let ctype = to_pascal_case(&a.name);
+                w.line(&format!("test_{ctype}();"));
+            }
+            TypeDef::Map(m) => {
+                let ctype = to_pascal_case(&m.name);
+                w.line(&format!("test_{ctype}();"));
+            }
         }
     }
     w.line("std::printf(\"All C++ JSON roundtrip tests passed.\\n\");");

@@ -8,7 +8,9 @@ use cddlc_validate::{validate, Value};
 
 fn lower(src: &str) -> IrModule {
     let parsed = cddlc_parser::parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
-    cddlc_ir::lower(&parsed.value, 16, 64).expect("lower").module
+    cddlc_ir::lower(&parsed.value, 16, 64)
+        .expect("lower")
+        .module
 }
 
 fn check(m: &IrModule, ty: &str, json: &str) -> bool {
@@ -29,7 +31,11 @@ fn one_optional_member_in_the_middle() {
     assert!(check(&m, "sig", r#"["Signature1", "b", "a", "p"]"#));
     assert!(check(&m, "sig", r#"["Signature", "b", "s", "a", "p"]"#));
     assert!(!check(&m, "sig", r#"["Signature", "b", "p"]"#));
-    assert!(!check(&m, "sig", r#"["Signature", "b", "s", "a", "p", "x"]"#));
+    assert!(!check(
+        &m,
+        "sig",
+        r#"["Signature", "b", "s", "a", "p", "x"]"#
+    ));
 }
 
 #[test]
@@ -37,7 +43,11 @@ fn the_first_optional_members_are_present() {
     let m = lower(SRC);
     assert!(check(&m, "countersig", r#"["c", "b", "a", "p"]"#));
     assert!(check(&m, "countersig", r#"["c", "b", "s", "a", "p"]"#));
-    assert!(check(&m, "countersig", r#"["c", "b", "s", "a", "p", ["o"]]"#));
+    assert!(check(
+        &m,
+        "countersig",
+        r#"["c", "b", "s", "a", "p", ["o"]]"#
+    ));
     // Five items hold `sign`, not `other`: the fifth item is `payload`, a tstr.
     assert!(!check(&m, "countersig", r#"["c", "b", "a", "p", ["o"]]"#));
 }

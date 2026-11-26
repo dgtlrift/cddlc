@@ -9,10 +9,10 @@
 //! some constraints (`.regexp`) aren't solved, only tried.
 
 use base64::Engine as _;
+use cddlc_ir::types::FieldKey;
 use cddlc_ir::{
     Constraint, IrModule, LiteralValue, Occurrence, Primitive, StructEncoding, TypeDef, TypeRef,
 };
-use cddlc_ir::types::FieldKey;
 
 use std::collections::HashMap;
 
@@ -34,7 +34,11 @@ pub const SHALLOW_DEPTH: usize = 4;
 const MAX_DEPTH: usize = 64;
 
 /// An example value of the type `type_name` (the schema's root type if `None`).
-pub fn sample(module: &IrModule, type_name: Option<&str>, opts: SampleOptions) -> Result<Value, String> {
+pub fn sample(
+    module: &IrModule,
+    type_name: Option<&str>,
+    opts: SampleOptions,
+) -> Result<Value, String> {
     let name = type_name.unwrap_or(module.root.as_str());
     if !module.types.contains_key(name) {
         return Err(format!("no type named '{name}'"));
@@ -43,7 +47,12 @@ pub fn sample(module: &IrModule, type_name: Option<&str>, opts: SampleOptions) -
     if heights.get(name).copied().unwrap_or(INF) == INF {
         return Err(format!("'{name}' doesn't end: every choice recurses"));
     }
-    Sampler { module, opts, heights }.named(name, 0)
+    Sampler {
+        module,
+        opts,
+        heights,
+    }
+    .named(name, 0)
 }
 
 const INF: usize = usize::MAX;
@@ -84,15 +93,24 @@ fn def_height(def: &TypeDef, h: &HashMap<String, usize>) -> usize {
     let r = |t: &TypeRef, c: &[Constraint]| ref_height(t, c, h);
     plus1(match def {
         TypeDef::Struct(s) => {
-            let fields = s.fields.iter()
+            let fields = s
+                .fields
+                .iter()
                 .filter(|f| min_count(&f.occurrence) > 0 && f.default.is_none())
                 .map(|f| r(&f.ty, &f.constraints));
-            let rest = s.rest.iter()
+            let rest = s
+                .rest
+                .iter()
                 .filter(|m| min_count(&m.occurrence) > 0)
                 .map(|m| r(&m.key_ty, &[]).max(r(&m.val_ty, &[])));
             fields.chain(rest).max().unwrap_or(0)
         }
-        TypeDef::Enum(e) => e.variants.iter().map(|v| r(&v.ty, &v.constraints)).min().unwrap_or(INF),
+        TypeDef::Enum(e) => e
+            .variants
+            .iter()
+            .map(|v| r(&v.ty, &v.constraints))
+            .min()
+            .unwrap_or(INF),
         TypeDef::Array(a) if min_count(&a.occurrence) == 0 => 0,
         TypeDef::Array(a) => r(&a.element, &[]),
         TypeDef::Map(m) if min_count(&m.occurrence) == 0 => 0,
@@ -102,25 +120,34 @@ fn def_height(def: &TypeDef, h: &HashMap<String, usize>) -> usize {
 }
 
 fn ref_height(ty: &TypeRef, constraints: &[Constraint], h: &HashMap<String, usize>) -> usize {
-    if constraints.iter().any(|c| matches!(c, Constraint::Eq(_) | Constraint::Default(_))) {
+    if constraints
+        .iter()
+        .any(|c| matches!(c, Constraint::Eq(_) | Constraint::Default(_)))
+    {
         return 0;
     }
     let embedded = constraints.iter().find_map(|c| match c {
         Constraint::CborEmbedded(t) | Constraint::CborSeq(t) => Some(plus1(ref_height(t, &[], h))),
-        Constraint::TextEncoded { ty, constraints, .. } => Some(plus1(ref_height(ty, constraints, h))),
+        Constraint::TextEncoded {
+            ty, constraints, ..
+        } => Some(plus1(ref_height(ty, constraints, h))),
         _ => None,
     });
     match ty {
         TypeRef::Primitive(_) => embedded.unwrap_or(0),
         TypeRef::Named(n) => h.get(n.as_str()).copied().unwrap_or(INF),
         TypeRef::Tagged(_, inner) => ref_height(inner, constraints, h),
-        TypeRef::Choice(alts) => alts.iter().map(|a| ref_height(a, constraints, h)).min().unwrap_or(INF),
+        TypeRef::Choice(alts) => alts
+            .iter()
+            .map(|a| ref_height(a, constraints, h))
+            .min()
+            .unwrap_or(INF),
     }
 }
 
 struct Sampler<'a> {
-    module:  &'a IrModule,
-    opts:    SampleOptions,
+    module: &'a IrModule,
+    opts: SampleOptions,
     heights: HashMap<String, usize>,
 }
 
@@ -131,9 +158,16 @@ impl Sampler<'_> {
 
     /// The alternative to sample: the first with a finite value, or once the
     /// sample is to be small, the shallowest.
-    fn pick<'t, T>(&self, alts: &'t [T], height: impl Fn(&T) -> usize, depth: usize) -> Option<&'t T> {
+    fn pick<'t, T>(
+        &self,
+        alts: &'t [T],
+        height: impl Fn(&T) -> usize,
+        depth: usize,
+    ) -> Option<&'t T> {
         if self.small(depth) {
-            alts.iter().filter(|a| height(a) < INF).min_by_key(|a| height(a))
+            alts.iter()
+                .filter(|a| height(a) < INF)
+                .min_by_key(|a| height(a))
         } else {
             alts.iter().find(|a| height(a) < INF)
         }
@@ -152,14 +186,21 @@ impl Sampler<'_> {
             Occurrence::OneOrMore { .. } => (1, None),
             Occurrence::Bounded { min, max, .. } => (*min as usize, max.map(|m| m as usize)),
         };
-        if self.small(depth) { min } else { min.max(1).min(max.unwrap_or(usize::MAX)) }
+        if self.small(depth) {
+            min
+        } else {
+            min.max(1).min(max.unwrap_or(usize::MAX))
+        }
     }
 
     fn named(&self, name: &str, depth: usize) -> Result<Value, String> {
         if depth > MAX_DEPTH {
             return Err(format!("'{name}' doesn't end: every choice recurses"));
         }
-        let def = self.module.types.get(name)
+        let def = self
+            .module
+            .types
+            .get(name)
             .ok_or_else(|| format!("no type named '{name}'"))?;
         let v = match def {
             TypeDef::Struct(s) => {
@@ -193,10 +234,18 @@ impl Sampler<'_> {
                         while entries.iter().any(|(e, _)| *e == k) {
                             i += 1;
                             k = match k {
-                                Value::Text(t) => Value::Text(format!("{}{i}", t.trim_end_matches(char::is_numeric))),
+                                Value::Text(t) => Value::Text(format!(
+                                    "{}{i}",
+                                    t.trim_end_matches(char::is_numeric)
+                                )),
                                 Value::Uint(n) => Value::Uint(n + 1),
                                 Value::Int(n) => Value::Int(n - 1),
-                                other => return Err(format!("'{name}': no free key for its other entries ({})", to_diag(&other))),
+                                other => {
+                                    return Err(format!(
+                                        "'{name}': no free key for its other entries ({})",
+                                        to_diag(&other)
+                                    ))
+                                }
                             };
                         }
                         let v = self.typed(&rest.val_ty, &[], depth + 1)?;
@@ -209,19 +258,31 @@ impl Sampler<'_> {
                 }
             }
             TypeDef::Enum(e) => {
-                let v = self.pick(&e.variants, |v| self.height(&v.ty, &v.constraints), depth)
+                let v = self
+                    .pick(&e.variants, |v| self.height(&v.ty, &v.constraints), depth)
                     .ok_or_else(|| format!("'{name}' doesn't end: every choice recurses"))?;
                 self.typed(&v.ty, &v.constraints, depth + 1)?
             }
             TypeDef::Array(a) => {
-                let n = if self.height(&a.element, &[]) < INF { self.count(&a.occurrence, depth) } else { 0 };
-                let items: Vec<Value> = (0..n).map(|_| self.typed(&a.element, &[], depth + 1)).collect::<Result<_, _>>()?;
+                let n = if self.height(&a.element, &[]) < INF {
+                    self.count(&a.occurrence, depth)
+                } else {
+                    0
+                };
+                let items: Vec<Value> = (0..n)
+                    .map(|_| self.typed(&a.element, &[], depth + 1))
+                    .collect::<Result<_, _>>()?;
                 // A repeated group's members sit inline (dgtlrift/cddlc#90).
                 if a.flat {
-                    Value::Array(items.into_iter().flat_map(|v| match v {
-                        Value::Array(members) => members,
-                        other => vec![other],
-                    }).collect())
+                    Value::Array(
+                        items
+                            .into_iter()
+                            .flat_map(|v| match v {
+                                Value::Array(members) => members,
+                                other => vec![other],
+                            })
+                            .collect(),
+                    )
                 } else {
                     Value::Array(items)
                 }
@@ -230,7 +291,10 @@ impl Sampler<'_> {
                 let n = self.count(&m.occurrence, depth);
                 let mut entries = Vec::new();
                 for _ in 0..n {
-                    entries.push((self.typed(&m.key_ty, &[], depth + 1)?, self.typed(&m.val_ty, &[], depth + 1)?));
+                    entries.push((
+                        self.typed(&m.key_ty, &[], depth + 1)?,
+                        self.typed(&m.val_ty, &[], depth + 1)?,
+                    ));
                 }
                 Value::Map(entries)
             }
@@ -242,7 +306,12 @@ impl Sampler<'_> {
         })
     }
 
-    fn typed(&self, ty: &TypeRef, constraints: &[Constraint], depth: usize) -> Result<Value, String> {
+    fn typed(
+        &self,
+        ty: &TypeRef,
+        constraints: &[Constraint],
+        depth: usize,
+    ) -> Result<Value, String> {
         // A literal or default is the example.
         for c in constraints {
             if let Constraint::Eq(l) | Constraint::Default(l) = c {
@@ -252,38 +321,68 @@ impl Sampler<'_> {
         match ty {
             TypeRef::Primitive(p) => self.primitive(p, constraints, depth),
             TypeRef::Named(n) => self.named(n, depth),
-            TypeRef::Tagged(t, inner) => Ok(Value::Tag(t.0, Box::new(self.typed(inner, constraints, depth)?))),
+            TypeRef::Tagged(t, inner) => Ok(Value::Tag(
+                t.0,
+                Box::new(self.typed(inner, constraints, depth)?),
+            )),
             TypeRef::Choice(alts) => {
-                let a = self.pick(alts, |a| self.height(a, constraints), depth)
+                let a = self
+                    .pick(alts, |a| self.height(a, constraints), depth)
                     .ok_or_else(|| "a choice that doesn't end".to_string())?;
                 self.typed(a, constraints, depth + 1)
             }
         }
     }
 
-    fn primitive(&self, p: &Primitive, constraints: &[Constraint], depth: usize) -> Result<Value, String> {
-        let ne = |v: &Value| constraints.iter().any(|c| matches!(c, Constraint::Ne(l) if literal(l) == *v));
+    fn primitive(
+        &self,
+        p: &Primitive,
+        constraints: &[Constraint],
+        depth: usize,
+    ) -> Result<Value, String> {
+        let ne = |v: &Value| {
+            constraints
+                .iter()
+                .any(|c| matches!(c, Constraint::Ne(l) if literal(l) == *v))
+        };
         Ok(match p {
             Primitive::Bool => {
                 let v = Value::Bool(false);
-                if ne(&v) { Value::Bool(true) } else { v }
+                if ne(&v) {
+                    Value::Bool(true)
+                } else {
+                    v
+                }
             }
             Primitive::Null => Value::Null,
             Primitive::Undefined => Value::Undefined,
             Primitive::Uint | Primitive::Int => {
                 let (lo, hi) = int_range(constraints, *p == Primitive::Uint);
                 let mut n = 0i128.clamp(lo, hi.max(lo));
-                while ne(&int128(n)) && n < hi { n += 1; }
+                while ne(&int128(n)) && n < hi {
+                    n += 1;
+                }
                 int128(n)
             }
             Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => {
                 let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
                 for c in constraints {
-                    if let Constraint::ValueRangeF64 { min, max, inclusive } = c {
-                        if let Some(m) = min { lo = lo.max(*m); }
+                    if let Constraint::ValueRangeF64 {
+                        min,
+                        max,
+                        inclusive,
+                    } = c
+                    {
+                        if let Some(m) = min {
+                            lo = lo.max(*m);
+                        }
                         if let Some(m) = max {
                             // An exclusive upper bound: a little below it.
-                            hi = hi.min(if *inclusive { *m } else { *m - (m.abs() * 1e-9).max(1e-9) });
+                            hi = hi.min(if *inclusive {
+                                *m
+                            } else {
+                                *m - (m.abs() * 1e-9).max(1e-9)
+                            });
                         }
                     }
                 }
@@ -300,7 +399,12 @@ impl Sampler<'_> {
             Primitive::Tstr => {
                 // RFC 9741: text holding a value of the operand, encoded.
                 for c in constraints {
-                    if let Constraint::TextEncoded { encoding, ty, constraints: inner } = c {
+                    if let Constraint::TextEncoded {
+                        encoding,
+                        ty,
+                        constraints: inner,
+                    } = c
+                    {
                         let v = self.typed(ty, inner, depth + 1)?;
                         return crate::text_encoding::encode(*encoding, &v)
                             .map(Value::Text)
@@ -314,8 +418,12 @@ impl Sampler<'_> {
             Primitive::Bstr => {
                 for c in constraints {
                     match c {
-                        Constraint::CborEmbedded(t) => return Ok(Value::Bytes(to_cbor(&self.typed(t, &[], depth + 1)?))),
-                        Constraint::CborSeq(t) => return Ok(Value::Bytes(to_cbor(&self.typed(t, &[], depth + 1)?))),
+                        Constraint::CborEmbedded(t) => {
+                            return Ok(Value::Bytes(to_cbor(&self.typed(t, &[], depth + 1)?)))
+                        }
+                        Constraint::CborSeq(t) => {
+                            return Ok(Value::Bytes(to_cbor(&self.typed(t, &[], depth + 1)?)))
+                        }
                         _ => {}
                     }
                 }
@@ -340,28 +448,51 @@ fn size(constraints: &[Constraint], preferred: usize) -> Option<usize> {
 
 /// The integers the constraints allow: `[lo, hi]`.
 fn int_range(constraints: &[Constraint], unsigned: bool) -> (i128, i128) {
-    let (mut lo, mut hi) = (if unsigned { 0 } else { i64::MIN as i128 }, u64::MAX as i128);
-    if !unsigned { hi = i64::MAX as i128; }
+    let (mut lo, mut hi) = (
+        if unsigned { 0 } else { i64::MIN as i128 },
+        u64::MAX as i128,
+    );
+    if !unsigned {
+        hi = i64::MAX as i128;
+    }
     for c in constraints {
         let (min, max, inclusive) = match c {
-            Constraint::ValueRangeInt { min, max, inclusive } =>
-                (min.map(i128::from), max.map(i128::from), *inclusive),
-            Constraint::ValueRangeUint { min, max, inclusive } =>
-                (min.map(i128::from), max.map(i128::from), *inclusive),
+            Constraint::ValueRangeInt {
+                min,
+                max,
+                inclusive,
+            } => (min.map(i128::from), max.map(i128::from), *inclusive),
+            Constraint::ValueRangeUint {
+                min,
+                max,
+                inclusive,
+            } => (min.map(i128::from), max.map(i128::from), *inclusive),
             _ => continue,
         };
-        if let Some(m) = min { lo = lo.max(m); }
-        if let Some(m) = max { hi = hi.min(if inclusive { m } else { m - 1 }); }
+        if let Some(m) = min {
+            lo = lo.max(m);
+        }
+        if let Some(m) = max {
+            hi = hi.min(if inclusive { m } else { m - 1 });
+        }
     }
     (lo, hi)
 }
 
 fn int128(n: i128) -> Value {
-    if n >= 0 { Value::Uint(n as u64) } else { Value::Int(n as i64) }
+    if n >= 0 {
+        Value::Uint(n as u64)
+    } else {
+        Value::Int(n as i64)
+    }
 }
 
 fn int(n: i64) -> Value {
-    if n >= 0 { Value::Uint(n as u64) } else { Value::Int(n) }
+    if n >= 0 {
+        Value::Uint(n as u64)
+    } else {
+        Value::Int(n)
+    }
 }
 
 fn key(k: &FieldKey) -> Value {
@@ -401,7 +532,9 @@ pub fn to_json(v: &Value) -> serde_json::Value {
         Value::Bool(b) => J::Bool(*b),
         Value::Uint(n) => J::from(*n),
         Value::Int(n) => J::from(*n),
-        Value::Float(x) => serde_json::Number::from_f64(*x).map(J::Number).unwrap_or(J::Null),
+        Value::Float(x) => serde_json::Number::from_f64(*x)
+            .map(J::Number)
+            .unwrap_or(J::Null),
         Value::Text(t) => J::String(t.clone()),
         Value::Bytes(b) => J::String(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)),
         Value::Array(a) => J::Array(a.iter().map(to_json).collect()),
@@ -426,22 +559,46 @@ pub fn to_diag(v: &Value) -> String {
         Value::Undefined => "undefined".into(),
         Value::Simple(n) => format!("simple({n})"),
         // RFC 8949 §8.1 encoding indicators: _1, _2, _3 for 16, 32, 64 bits.
-        Value::SizedFloat(x, w) => format!("{}_{}", to_diag(&Value::Float(*x)), match w { 16 => 1, 32 => 2, _ => 3 }),
+        Value::SizedFloat(x, w) => format!(
+            "{}_{}",
+            to_diag(&Value::Float(*x)),
+            match w {
+                16 => 1,
+                32 => 2,
+                _ => 3,
+            }
+        ),
         Value::Bool(b) => b.to_string(),
         Value::Uint(n) => n.to_string(),
         Value::Int(n) => n.to_string(),
         Value::Float(x) if x.is_nan() => "NaN".into(),
-        Value::Float(x) if x.is_infinite() => if *x > 0.0 { "Infinity".into() } else { "-Infinity".into() },
+        Value::Float(x) if x.is_infinite() => {
+            if *x > 0.0 {
+                "Infinity".into()
+            } else {
+                "-Infinity".into()
+            }
+        }
         Value::Float(x) => {
             let s = format!("{x:?}");
-            if s.contains(['.', 'e', 'E']) { s } else { format!("{s}.0") }
+            if s.contains(['.', 'e', 'E']) {
+                s
+            } else {
+                format!("{s}.0")
+            }
         }
         Value::Text(t) => serde_json::Value::String(t.clone()).to_string(),
-        Value::Bytes(b) => format!("h'{}'", b.iter().map(|x| format!("{x:02x}")).collect::<String>()),
+        Value::Bytes(b) => format!(
+            "h'{}'",
+            b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+        ),
         Value::Array(a) => format!("[{}]", a.iter().map(to_diag).collect::<Vec<_>>().join(", ")),
         Value::Map(m) => format!(
             "{{{}}}",
-            m.iter().map(|(k, v)| format!("{}: {}", to_diag(k), to_diag(v))).collect::<Vec<_>>().join(", ")
+            m.iter()
+                .map(|(k, v)| format!("{}: {}", to_diag(k), to_diag(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         Value::Tag(t, inner) => format!("{t}({})", to_diag(inner)),
     }
@@ -466,7 +623,11 @@ enum Ordered {
 fn to_json_ordered(v: &Value) -> Ordered {
     match v {
         Value::Array(a) => Ordered::Array(a.iter().map(to_json_ordered).collect()),
-        Value::Map(m) => Ordered::Object(m.iter().map(|(k, v)| (json_key(k), to_json_ordered(v))).collect()),
+        Value::Map(m) => Ordered::Object(
+            m.iter()
+                .map(|(k, v)| (json_key(k), to_json_ordered(v)))
+                .collect(),
+        ),
         Value::Tag(_, inner) => to_json_ordered(inner),
         other => Ordered::Scalar(to_json(other)),
     }

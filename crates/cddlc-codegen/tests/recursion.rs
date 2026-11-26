@@ -14,8 +14,15 @@ fn module(src: &str) -> IrModule {
 }
 
 fn member_ty(m: &IrModule, rule: &str, member: &str) -> TypeRef {
-    let Some(TypeDef::Struct(s)) = m.get(rule) else { panic!("{rule}: not a struct") };
-    s.fields.iter().find(|f| f.name == member).expect("member").ty.clone()
+    let Some(TypeDef::Struct(s)) = m.get(rule) else {
+        panic!("{rule}: not a struct")
+    };
+    s.fields
+        .iter()
+        .find(|f| f.name == member)
+        .expect("member")
+        .ty
+        .clone()
 }
 
 #[test]
@@ -29,8 +36,14 @@ fn a_member_that_holds_its_own_type() {
 fn a_cycle_through_a_choice_and_a_record() {
     let m = module("expr = int / binop\nbinop = [op: tstr, lhs: expr, rhs: expr]");
     assert!(is_indirect("binop", &member_ty(&m, "binop", "lhs"), &m));
-    let Some(TypeDef::Enum(e)) = m.get("expr") else { panic!() };
-    let binop = e.variants.iter().find(|v| v.ty == TypeRef::Named("binop".into())).expect("variant");
+    let Some(TypeDef::Enum(e)) = m.get("expr") else {
+        panic!()
+    };
+    let binop = e
+        .variants
+        .iter()
+        .find(|v| v.ty == TypeRef::Named("binop".into()))
+        .expect("variant");
     assert!(is_indirect("expr", &binop.ty, &m));
 }
 
@@ -50,8 +63,13 @@ fn no_cycle_no_pointer() {
 
 #[test]
 fn declared_after_what_they_hold_by_value() {
-    let m = module("outer = { a: inner, t: tree }\ninner = { x: uint }\ntree = { v: inner, ? left: tree }");
-    let order: Vec<String> = inline_decl_order(&m).into_iter().map(|s| s.to_string()).collect();
+    let m = module(
+        "outer = { a: inner, t: tree }\ninner = { x: uint }\ntree = { v: inner, ? left: tree }",
+    );
+    let order: Vec<String> = inline_decl_order(&m)
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
     let at = |n: &str| order.iter().position(|x| x == n).expect(n);
     assert!(at("inner") < at("outer"));
     assert!(at("inner") < at("tree"));

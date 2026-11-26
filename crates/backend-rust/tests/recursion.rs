@@ -12,8 +12,14 @@ use cddlc_parser::parse_cddl;
 fn generate(src: &str, opts: CodegenOptions) -> (String, String, String) {
     let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let out = RustBackend.generate(&lowered.module, &opts).expect("generate");
-    (out.files[0].content.clone(), out.files[1].content.clone(), out.files[2].content.clone())
+    let out = RustBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
+    (
+        out.files[0].content.clone(),
+        out.files[1].content.clone(),
+        out.files[2].content.clone(),
+    )
 }
 
 const SRC: &str = "
@@ -44,14 +50,23 @@ fn a_list_needs_no_box() {
 
 #[test]
 fn no_std_takes_box_from_alloc() {
-    let (cargo, lib, _) = generate(SRC, CodegenOptions { no_std: true, ..CodegenOptions::default() });
+    let (cargo, lib, _) = generate(
+        SRC,
+        CodegenOptions {
+            no_std: true,
+            ..CodegenOptions::default()
+        },
+    );
     assert!(cargo.contains("no-std  = [\"alloc\"]"), "{cargo}");
     assert!(lib.contains("use alloc::boxed::Box;"), "{lib}");
 }
 
 #[test]
 fn a_schema_without_recursion_has_no_box() {
-    let (cargo, lib, _) = generate("r = { a: uint, b: [* r2] }\nr2 = { c: tstr }", CodegenOptions::default());
+    let (cargo, lib, _) = generate(
+        "r = { a: uint, b: [* r2] }\nr2 = { c: tstr }",
+        CodegenOptions::default(),
+    );
     assert!(!lib.contains("Box"), "{lib}");
     assert!(cargo.contains("no-std  = [\"heapless\"]"), "{cargo}");
 }

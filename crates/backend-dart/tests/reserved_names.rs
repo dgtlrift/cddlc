@@ -11,8 +11,14 @@ use std::path::PathBuf;
 fn compile(src: &str) -> String {
     let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let out = DartBackend.generate(&lowered.module, &CodegenOptions::default()).expect("generate");
-    out.files.iter().map(|f| f.content.as_str()).collect::<Vec<_>>().join("\n")
+    let out = DartBackend
+        .generate(&lowered.module, &CodegenOptions::default())
+        .expect("generate");
+    out.files
+        .iter()
+        .map(|f| f.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
@@ -26,7 +32,9 @@ fn a_rule_named_like_a_core_type_is_renamed() {
 
 #[test]
 fn a_rule_named_like_a_cbor_or_test_type_is_renamed() {
-    let g = compile("holder = { a: cbor-value, b: timeout }\ncbor-value = { x: int }\ntimeout = { s: uint }");
+    let g = compile(
+        "holder = { a: cbor-value, b: timeout }\ncbor-value = { x: int }\ntimeout = { s: uint }",
+    );
     assert!(g.contains("class TestCborValue"), "{g}");
     assert!(g.contains("class TestTimeout"), "{g}");
 }

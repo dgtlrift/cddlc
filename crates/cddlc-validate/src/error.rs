@@ -29,13 +29,16 @@ impl fmt::Display for PathSeg {
 /// root (e.g. `readings[3].value`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidationError {
-    pub path:    Vec<PathSeg>,
+    pub path: Vec<PathSeg>,
     pub message: String,
 }
 
 impl ValidationError {
     pub fn new(path: Vec<PathSeg>, message: impl Into<String>) -> Self {
-        Self { path, message: message.into() }
+        Self {
+            path,
+            message: message.into(),
+        }
     }
 
     pub fn path_string(&self) -> String {

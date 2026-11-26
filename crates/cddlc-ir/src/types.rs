@@ -6,7 +6,6 @@
 /// been consumed into typed fields (capacity, constraints, tags, etc.).
 ///
 /// This is the sole input to all code-generation backends.
-
 use indexmap::IndexMap;
 use smol_str::SmolStr;
 
@@ -37,7 +36,7 @@ pub struct IrModule {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Sources {
     /// By type name.
-    pub types:  IndexMap<SmolStr, SourceRef>,
+    pub types: IndexMap<SmolStr, SourceRef>,
     /// By type name and field name.
     pub fields: IndexMap<(SmolStr, SmolStr), SourceRef>,
 }
@@ -62,16 +61,20 @@ impl SourceRef {
 
 impl From<&cddlc_parser::SourceLine> for SourceRef {
     fn from(s: &cddlc_parser::SourceLine) -> Self {
-        Self { path: s.path.clone(), line: s.line, text: s.text.clone() }
+        Self {
+            path: s.path.clone(),
+            line: s.line,
+            text: s.text.clone(),
+        }
     }
 }
 
 impl IrModule {
     pub fn new(name: impl Into<SmolStr>, root: impl Into<SmolStr>) -> Self {
         Self {
-            name:    name.into(),
-            root:    root.into(),
-            types:   IndexMap::new(),
+            name: name.into(),
+            root: root.into(),
+            types: IndexMap::new(),
             sources: Sources::default(),
         }
     }
@@ -100,30 +103,30 @@ impl TypeDef {
     pub fn name(&self) -> &str {
         match self {
             TypeDef::Struct(d) => &d.name,
-            TypeDef::Enum(d)   => &d.name,
-            TypeDef::Array(d)  => &d.name,
-            TypeDef::Map(d)    => &d.name,
-            TypeDef::Alias(d)  => &d.name,
+            TypeDef::Enum(d) => &d.name,
+            TypeDef::Array(d) => &d.name,
+            TypeDef::Map(d) => &d.name,
+            TypeDef::Alias(d) => &d.name,
         }
     }
 
     pub fn tag(&self) -> Option<CborTag> {
         match self {
             TypeDef::Struct(d) => d.tagged,
-            TypeDef::Enum(d)   => d.tagged,
-            TypeDef::Array(d)  => d.tagged,
-            TypeDef::Map(d)    => d.tagged,
-            TypeDef::Alias(d)  => d.tagged,
+            TypeDef::Enum(d) => d.tagged,
+            TypeDef::Array(d) => d.tagged,
+            TypeDef::Map(d) => d.tagged,
+            TypeDef::Alias(d) => d.tagged,
         }
     }
 
     pub fn doc(&self) -> Option<&str> {
         match self {
             TypeDef::Struct(d) => d.doc.as_deref(),
-            TypeDef::Enum(d)   => d.doc.as_deref(),
-            TypeDef::Array(d)  => d.doc.as_deref(),
-            TypeDef::Map(d)    => d.doc.as_deref(),
-            TypeDef::Alias(d)  => d.doc.as_deref(),
+            TypeDef::Enum(d) => d.doc.as_deref(),
+            TypeDef::Array(d) => d.doc.as_deref(),
+            TypeDef::Map(d) => d.doc.as_deref(),
+            TypeDef::Alias(d) => d.doc.as_deref(),
         }
     }
 }
@@ -137,18 +140,18 @@ impl TypeDef {
 /// ```
 #[derive(Debug, Clone)]
 pub struct StructDef {
-    pub name:       SmolStr,
-    pub fields:     Vec<FieldDef>,
+    pub name: SmolStr,
+    pub fields: Vec<FieldDef>,
     /// A map (`{ a: uint }`), or an array of positional members, a record
     /// (`[a: uint, b: tstr]`, `[uint, tstr]`; RFC 8610 §3.4).
-    pub encoding:   StructEncoding,
+    pub encoding: StructEncoding,
     /// The entries a map has besides its named members, when it has a member
     /// with a computed key (`{ a: uint, * tstr => any }`).
-    pub rest:       Option<MapRest>,
-    pub tagged:     Option<CborTag>,
+    pub rest: Option<MapRest>,
+    pub tagged: Option<CborTag>,
     /// Emit map keys in sorted order on encode (dCBOR / deterministic mode).
-    pub dcbor:      bool,
-    pub doc:        Option<String>,
+    pub dcbor: bool,
+    pub doc: Option<String>,
     pub deprecated: bool,
 }
 
@@ -159,9 +162,9 @@ pub struct StructDef {
 pub struct MapRest {
     /// The member that holds them in generated code (`extra`, or `extra_entries`
     /// when a named member is already called `extra`).
-    pub name:       SmolStr,
-    pub key_ty:     TypeRef,
-    pub val_ty:     TypeRef,
+    pub name: SmolStr,
+    pub key_ty: TypeRef,
+    pub val_ty: TypeRef,
     pub occurrence: Occurrence,
 }
 
@@ -178,16 +181,16 @@ pub enum StructEncoding {
 
 #[derive(Debug, Clone)]
 pub struct FieldDef {
-    pub name:        SmolStr,
+    pub name: SmolStr,
     /// The CBOR map key.  Usually matches `name` (tstr key), but can be a
     /// numeric key when the CDDL uses an integer literal key.
-    pub key:         FieldKey,
-    pub ty:          TypeRef,
-    pub occurrence:  Occurrence,
+    pub key: FieldKey,
+    pub ty: TypeRef,
+    pub occurrence: Occurrence,
     pub constraints: Vec<Constraint>,
-    pub default:     Option<LiteralValue>,
-    pub doc:         Option<String>,
-    pub deprecated:  bool,
+    pub default: Option<LiteralValue>,
+    pub doc: Option<String>,
+    pub deprecated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,10 +213,10 @@ pub enum FieldKey {
 /// ```
 #[derive(Debug, Clone)]
 pub struct EnumDef {
-    pub name:       SmolStr,
-    pub variants:   Vec<EnumVariant>,
-    pub tagged:     Option<CborTag>,
-    pub doc:        Option<String>,
+    pub name: SmolStr,
+    pub variants: Vec<EnumVariant>,
+    pub tagged: Option<CborTag>,
+    pub doc: Option<String>,
     pub deprecated: bool,
 }
 
@@ -221,7 +224,7 @@ pub struct EnumDef {
 pub struct EnumVariant {
     /// Synthesized name for anonymous variants (e.g. `"ok"` → `Ok`).
     pub name: SmolStr,
-    pub ty:   TypeRef,
+    pub ty: TypeRef,
     /// For a literal-valued variant (e.g. the `"ok"` in `"ok" / "warn"`),
     /// the exact value it must equal — `ty` alone only narrows to the
     /// primitive kind (e.g. any `tstr`), so this is what discriminates one
@@ -239,16 +242,16 @@ pub struct EnumVariant {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ArrayDef {
-    pub name:       SmolStr,
-    pub element:    TypeRef,
+    pub name: SmolStr,
+    pub element: TypeRef,
     pub occurrence: Occurrence,
     /// A repeated group (`[* (a: uint, b: tstr)]`, RFC 8610 §2.1): `element`
     /// names a record (a [`StructDef`] with [`StructEncoding::Array`]) whose
     /// members sit inline in this array, with no array of their own, so
     /// `[1, "x", 2, "y"]` holds two elements. Its members are all required.
-    pub flat:       bool,
-    pub tagged:     Option<CborTag>,
-    pub doc:        Option<String>,
+    pub flat: bool,
+    pub tagged: Option<CborTag>,
+    pub doc: Option<String>,
     pub deprecated: bool,
 }
 
@@ -262,12 +265,12 @@ pub struct ArrayDef {
 /// ```
 #[derive(Debug, Clone)]
 pub struct MapDef {
-    pub name:       SmolStr,
-    pub key_ty:     TypeRef,
-    pub val_ty:     TypeRef,
+    pub name: SmolStr,
+    pub key_ty: TypeRef,
+    pub val_ty: TypeRef,
     pub occurrence: Occurrence,
-    pub tagged:     Option<CborTag>,
-    pub doc:        Option<String>,
+    pub tagged: Option<CborTag>,
+    pub doc: Option<String>,
     pub deprecated: bool,
 }
 
@@ -281,12 +284,12 @@ pub struct MapDef {
 /// ```
 #[derive(Debug, Clone)]
 pub struct AliasDef {
-    pub name:        SmolStr,
-    pub ty:          TypeRef,
+    pub name: SmolStr,
+    pub ty: TypeRef,
     pub constraints: Vec<Constraint>,
-    pub tagged:      Option<CborTag>,
-    pub doc:         Option<String>,
-    pub deprecated:  bool,
+    pub tagged: Option<CborTag>,
+    pub doc: Option<String>,
+    pub deprecated: bool,
 }
 
 // ── Shared sub-types ──────────────────────────────────────────────────────────
@@ -345,18 +348,18 @@ impl Primitive {
             "bool" | "true" | "false" => Some(Primitive::Bool),
             "null" | "nil" => Some(Primitive::Null),
             "undefined" => Some(Primitive::Undefined),
-            "uint"      => Some(Primitive::Uint),
-            "int"       => Some(Primitive::Int),
-            "float16"   => Some(Primitive::Float16),
-            "float32"   => Some(Primitive::Float32),
-            "float64"   => Some(Primitive::Float64),
-            "float"     => Some(Primitive::Float),
-            "bstr"      | "bytes" => Some(Primitive::Bstr),
-            "tstr"      | "text"  => Some(Primitive::Tstr),
-            "any"       => Some(Primitive::Any),
+            "uint" => Some(Primitive::Uint),
+            "int" => Some(Primitive::Int),
+            "float16" => Some(Primitive::Float16),
+            "float32" => Some(Primitive::Float32),
+            "float64" => Some(Primitive::Float64),
+            "float" => Some(Primitive::Float),
+            "bstr" | "bytes" => Some(Primitive::Bstr),
+            "tstr" | "text" => Some(Primitive::Tstr),
+            "any" => Some(Primitive::Any),
             // `number` and the tagged prelude types aren't primitives; see
             // `prelude::prelude_typeref`.
-            _           => None,
+            _ => None,
         }
     }
 }
@@ -371,9 +374,13 @@ pub enum Occurrence {
     /// Zero or more (`*`) — with resolved capacity for stack/arena targets.
     ZeroOrMore { capacity: Capacity },
     /// One or more (`+`) — with resolved capacity.
-    OneOrMore  { capacity: Capacity },
+    OneOrMore { capacity: Capacity },
     /// Bounded range `n*m` — with resolved capacity.
-    Bounded    { min: u32, max: Option<u32>, capacity: Capacity },
+    Bounded {
+        min: u32,
+        max: Option<u32>,
+        capacity: Capacity,
+    },
 }
 
 impl Occurrence {
@@ -388,8 +395,8 @@ impl Occurrence {
     pub fn capacity(&self) -> Option<&Capacity> {
         match self {
             Occurrence::ZeroOrMore { capacity } => Some(capacity),
-            Occurrence::OneOrMore  { capacity } => Some(capacity),
-            Occurrence::Bounded    { capacity, .. } => Some(capacity),
+            Occurrence::OneOrMore { capacity } => Some(capacity),
+            Occurrence::Bounded { capacity, .. } => Some(capacity),
             _ => None,
         }
     }
@@ -411,12 +418,27 @@ pub enum Capacity {
 pub enum Constraint {
     /// `.size N` or `.size lo..hi`
     SizeExact(usize),
-    SizeRange { min: Option<usize>, max: Option<usize> },
+    SizeRange {
+        min: Option<usize>,
+        max: Option<usize>,
+    },
 
     /// Numeric range from `..` range operator or `.lt`/`.le`/`.gt`/`.ge`
-    ValueRangeInt  { min: Option<i64>,  max: Option<i64>,  inclusive: bool },
-    ValueRangeUint { min: Option<u64>,  max: Option<u64>,  inclusive: bool },
-    ValueRangeF64  { min: Option<f64>,  max: Option<f64>,  inclusive: bool },
+    ValueRangeInt {
+        min: Option<i64>,
+        max: Option<i64>,
+        inclusive: bool,
+    },
+    ValueRangeUint {
+        min: Option<u64>,
+        max: Option<u64>,
+        inclusive: bool,
+    },
+    ValueRangeF64 {
+        min: Option<f64>,
+        max: Option<f64>,
+        inclusive: bool,
+    },
 
     /// `.eq value`
     Eq(LiteralValue),
@@ -424,7 +446,10 @@ pub enum Constraint {
     Ne(LiteralValue),
 
     /// `.regexp "pattern"` with optional user-supplied hook function name.
-    Regexp { pattern: String, hook: Option<String> },
+    Regexp {
+        pattern: String,
+        hook: Option<String>,
+    },
 
     /// `.cbor T` — inner bstr decodes as type T.
     CborEmbedded(Box<TypeRef>),
@@ -442,8 +467,8 @@ pub enum Constraint {
     /// `constraints`: bytes in base64, hex, base32 or base45 (`tstr .b64u
     /// (bstr .size 32)`), an integer in decimal (`.base10`), or JSON (`.json`).
     TextEncoded {
-        encoding:    TextEncoding,
-        ty:          Box<TypeRef>,
+        encoding: TextEncoding,
+        ty: Box<TypeRef>,
         constraints: Vec<Constraint>,
     },
 }
@@ -531,13 +556,13 @@ pub enum LiteralValue {
 impl LiteralValue {
     pub fn type_name(&self) -> &'static str {
         match self {
-            LiteralValue::Bool(_)  => "bool",
-            LiteralValue::Null     => "null",
-            LiteralValue::Uint(_)  => "uint",
-            LiteralValue::Int(_)   => "int",
+            LiteralValue::Bool(_) => "bool",
+            LiteralValue::Null => "null",
+            LiteralValue::Uint(_) => "uint",
+            LiteralValue::Int(_) => "int",
             LiteralValue::Float(_) => "float",
             LiteralValue::Bytes(_) => "bstr",
-            LiteralValue::Text(_)  => "tstr",
+            LiteralValue::Text(_) => "tstr",
         }
     }
 }

@@ -1,28 +1,31 @@
-/// Integration tests for backend-rust.
-///
-/// Each test compiles a CDDL snippet to IR then runs the Rust backend,
-/// asserting on the generated source text.
-
-use std::path::PathBuf;
 use backend_rust::RustBackend;
 use cddlc_codegen::{Backend, CodegenOptions};
 use cddlc_ir::lower;
 use cddlc_parser::parse_cddl;
+/// Integration tests for backend-rust.
+///
+/// Each test compiles a CDDL snippet to IR then runs the Rust backend,
+/// asserting on the generated source text.
+use std::path::PathBuf;
 
 fn generate(src: &str) -> String {
-    let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let opts    = CodegenOptions::default();
-    let out     = RustBackend.generate(&lowered.module, &opts).expect("generate");
+    let opts = CodegenOptions::default();
+    let out = RustBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
     out.files[1].content.clone()
 }
 
 fn generate_no_std(src: &str) -> String {
-    let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
     let mut opts = CodegenOptions::default();
     opts.no_std = true;
-    let out = RustBackend.generate(&lowered.module, &opts).expect("generate");
+    let out = RustBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
     out.files[1].content.clone()
 }
 
@@ -146,10 +149,12 @@ fn test_unknown_field_skipped() {
 
 #[test]
 fn test_struct_with_ref() {
-    let code = generate(r#"
+    let code = generate(
+        r#"
 device-id = tstr
 sensor = { id: device-id, value: float32 }
-"#);
+"#,
+    );
     assert!(code.contains("pub id: DeviceId,"));
 }
 
@@ -195,11 +200,17 @@ fn test_array_heapless_no_std() {
 
 #[test]
 fn test_array_std_vec() {
-    let parsed  = parse_cddl("; @capacity 8\nreadings = [* float32]", PathBuf::from("test.cddl")).expect("parse");
+    let parsed = parse_cddl(
+        "; @capacity 8\nreadings = [* float32]",
+        PathBuf::from("test.cddl"),
+    )
+    .expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
     let mut opts = CodegenOptions::default();
-    opts.alloc = cddlc_codegen::AllocStrategy::Heap;  // ← ADD THIS LINE
-    let out  = RustBackend.generate(&lowered.module, &opts).expect("generate");
+    opts.alloc = cddlc_codegen::AllocStrategy::Heap; // ← ADD THIS LINE
+    let out = RustBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
     let code = &out.files[1].content;
     assert!(code.contains("Vec<f32>"));
 }
@@ -215,11 +226,11 @@ fn test_array_default_capacity_no_std() {
 
 #[test]
 fn test_dcbor_comment_in_header() {
-    let parsed  = parse_cddl("s = { a: uint, b: tstr }", PathBuf::from("t.cddl")).unwrap();
+    let parsed = parse_cddl("s = { a: uint, b: tstr }", PathBuf::from("t.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
     let mut opts = CodegenOptions::default();
     opts.dcbor = true;
-    let out  = RustBackend.generate(&lowered.module, &opts).unwrap();
+    let out = RustBackend.generate(&lowered.module, &opts).unwrap();
     let code = &out.files[1].content;
     assert!(code.contains("deterministic"));
 }
@@ -228,10 +239,12 @@ fn test_dcbor_comment_in_header() {
 
 #[test]
 fn test_generic_instantiation_emits_struct() {
-    let code = generate(r#"
+    let code = generate(
+        r#"
 labeled<T> = { label: tstr, value: T }
 temp-reading = labeled<float32>
-"#);
+"#,
+    );
     assert!(code.contains("pub struct TempReading {"));
     assert!(code.contains("pub value: f32,"));
 }
@@ -240,14 +253,16 @@ temp-reading = labeled<float32>
 
 #[test]
 fn test_iot_schema_generates() {
-    let code = generate(r#"
+    let code = generate(
+        r#"
 sensor-message = {
     version:   uint,
     device-id: device-id,
     timestamp: #6.1(uint),
 }
 device-id = tstr .size 16
-"#);
+"#,
+    );
     assert!(code.contains("pub struct SensorMessage"));
     assert!(code.contains("pub struct DeviceId"));
     assert!(code.contains("val.len() == 16"));
@@ -274,7 +289,10 @@ mod docs_headers_sources {
         assert_eq!(doc(DocStyle::Line("///"), "a\n\nb"), "/// a\n///\n/// b\n");
         assert_eq!(doc(DocStyle::Line("#"), "a"), "# a\n");
         assert_eq!(doc(DocStyle::Block { open: "/**" }, "one"), "/** one */\n");
-        assert_eq!(doc(DocStyle::Block { open: "/*" }, "a */ b\nc"), "/*\n * a * / b\n * c\n */\n");
+        assert_eq!(
+            doc(DocStyle::Block { open: "/*" }, "a */ b\nc"),
+            "/*\n * a * / b\n * c\n */\n"
+        );
         assert_eq!(
             doc(DocStyle::CSharpXml, "x < y & z"),
             "/// <summary>\n/// x &lt; y &amp; z\n/// </summary>\n"
@@ -289,7 +307,11 @@ mod docs_headers_sources {
         };
         assert_eq!(
             header_lines(&opts),
-            ["@generated by cddlc — do not edit manually", "cddlc v1.1.0 (abc)", "from a.cddl"]
+            [
+                "@generated by cddlc — do not edit manually",
+                "cddlc v1.1.0 (abc)",
+                "from a.cddl"
+            ]
         );
         assert_eq!(
             header_text(&opts, CommentStyle::CBlock),
@@ -299,8 +321,12 @@ mod docs_headers_sources {
 
     fn with_boilerplate() -> CodegenOptions {
         CodegenOptions {
-            provenance:  vec!["cddlc v1.1.0 (abc)".into()],
-            boilerplate: vec!["(c) Acme -- all */ rights".into(), "".into(), "Apache-2.0".into()],
+            provenance: vec!["cddlc v1.1.0 (abc)".into()],
+            boilerplate: vec![
+                "(c) Acme -- all */ rights".into(),
+                "".into(),
+                "Apache-2.0".into(),
+            ],
             ..CodegenOptions::default()
         }
     }
@@ -310,8 +336,14 @@ mod docs_headers_sources {
         let opts = with_boilerplate();
         assert_eq!(
             header_lines(&opts),
-            ["@generated by cddlc — do not edit manually", "cddlc v1.1.0 (abc)", "",
-             "(c) Acme -- all */ rights", "", "Apache-2.0"]
+            [
+                "@generated by cddlc — do not edit manually",
+                "cddlc v1.1.0 (abc)",
+                "",
+                "(c) Acme -- all */ rights",
+                "",
+                "Apache-2.0"
+            ]
         );
     }
 
@@ -319,20 +351,59 @@ mod docs_headers_sources {
     fn each_comment_style_escapes_what_would_end_it_early() {
         let opts = with_boilerplate();
         let tail = |style| header_comment(&opts, style)[2..].to_vec();
-        assert_eq!(tail(CommentStyle::Slash), ["//", "// (c) Acme -- all */ rights", "//", "// Apache-2.0"]);
-        assert_eq!(tail(CommentStyle::Hash), ["#", "# (c) Acme -- all */ rights", "#", "# Apache-2.0"]);
-        assert_eq!(tail(CommentStyle::DashDash), ["--", "-- (c) Acme -- all */ rights", "--", "-- Apache-2.0"]);
-        assert_eq!(tail(CommentStyle::CBlock), [" * cddlc v1.1.0 (abc)", " *", " * (c) Acme -- all * / rights", " *", " * Apache-2.0", " */"]);
-        assert_eq!(tail(CommentStyle::Xml), ["  cddlc v1.1.0 (abc)", "", "  (c) Acme - - all */ rights", "", "  Apache-2.0", "-->"]);
+        assert_eq!(
+            tail(CommentStyle::Slash),
+            ["//", "// (c) Acme -- all */ rights", "//", "// Apache-2.0"]
+        );
+        assert_eq!(
+            tail(CommentStyle::Hash),
+            ["#", "# (c) Acme -- all */ rights", "#", "# Apache-2.0"]
+        );
+        assert_eq!(
+            tail(CommentStyle::DashDash),
+            ["--", "-- (c) Acme -- all */ rights", "--", "-- Apache-2.0"]
+        );
+        assert_eq!(
+            tail(CommentStyle::CBlock),
+            [
+                " * cddlc v1.1.0 (abc)",
+                " *",
+                " * (c) Acme -- all * / rights",
+                " *",
+                " * Apache-2.0",
+                " */"
+            ]
+        );
+        assert_eq!(
+            tail(CommentStyle::Xml),
+            [
+                "  cddlc v1.1.0 (abc)",
+                "",
+                "  (c) Acme - - all */ rights",
+                "",
+                "  Apache-2.0",
+                "-->"
+            ]
+        );
         // A `-` before `-->` would make `--->`, which XML rejects as well.
-        let dash = CodegenOptions { boilerplate: vec!["a -".into(), "b ---".into()], ..CodegenOptions::default() };
+        let dash = CodegenOptions {
+            boilerplate: vec!["a -".into(), "b ---".into()],
+            ..CodegenOptions::default()
+        };
         let xml = header_comment(&dash, CommentStyle::Xml);
-        assert!(xml.iter().all(|l| l == "<!--" || l == "-->" || !l.contains("--")), "{xml:?}");
+        assert!(
+            xml.iter()
+                .all(|l| l == "<!--" || l == "-->" || !l.contains("--")),
+            "{xml:?}"
+        );
     }
 
     #[test]
     fn json_headers_are_escaped_strings() {
-        let opts = CodegenOptions { boilerplate: vec!["say \"hi\"\tC:\\x".into()], ..CodegenOptions::default() };
+        let opts = CodegenOptions {
+            boilerplate: vec!["say \"hi\"\tC:\\x".into()],
+            ..CodegenOptions::default()
+        };
         let json = format!("[\n{}\n]", header_json(&opts, 2));
         let v: Vec<String> = serde_json::from_str(&json).unwrap();
         assert_eq!(v.last().unwrap(), "say \"hi\"\tC:\\x");
@@ -341,7 +412,10 @@ mod docs_headers_sources {
     #[test]
     fn the_boilerplate_is_the_comment_block_before_the_first_blank_line() {
         let src = ";;;;;;;;\n; Copyright (c) 2026 Acme\n;\n;   indented\n; @import \"x.cddl\"\n;;;;;;;;\n\n; @doc \"A thing\"\nthing = uint\n";
-        assert_eq!(cddl_boilerplate(src), ["Copyright (c) 2026 Acme", "", "  indented"]);
+        assert_eq!(
+            cddl_boilerplate(src),
+            ["Copyright (c) 2026 Acme", "", "  indented"]
+        );
         // A block a rule follows directly is that rule's comment, not boilerplate.
         assert!(cddl_boilerplate("; A thing.\nthing = uint\n").is_empty());
         // Annotations only: nothing.
@@ -353,12 +427,22 @@ mod docs_headers_sources {
     #[test]
     fn source_lines_join_the_docs() {
         let src = "; A thing.\nthing = {\n  id: uint,\n}\n";
-        let m = cddlc_parser::parse_cddl(src, "/work/schema/t.cddl".into()).unwrap().value;
+        let m = cddlc_parser::parse_cddl(src, "/work/schema/t.cddl".into())
+            .unwrap()
+            .value;
         let ir = cddlc_ir::lower(&m, 16, 64).unwrap().module;
         let with = cddlc_codegen::with_source_docs(&ir, Some(std::path::Path::new("/work")));
-        let Some(cddlc_ir::TypeDef::Struct(s)) = with.get("thing") else { panic!("struct") };
-        assert_eq!(s.doc.as_deref(), Some("A thing.\ncddl: schema/t.cddl:2: thing = {"));
-        assert_eq!(s.fields[0].doc.as_deref(), Some("cddl: schema/t.cddl:3: id: uint,"));
+        let Some(cddlc_ir::TypeDef::Struct(s)) = with.get("thing") else {
+            panic!("struct")
+        };
+        assert_eq!(
+            s.doc.as_deref(),
+            Some("A thing.\ncddl: schema/t.cddl:2: thing = {")
+        );
+        assert_eq!(
+            s.fields[0].doc.as_deref(),
+            Some("cddl: schema/t.cddl:3: id: uint,")
+        );
     }
 }
 
@@ -366,10 +450,20 @@ mod docs_headers_sources {
 /// lowercased name only when there is none.
 #[test]
 fn test_enum_variant_text_prefers_literal() {
-    let parsed = parse_cddl("model = \"free-space\" / \"Log_Distance\" / nil", PathBuf::from("t.cddl")).expect("parse");
+    let parsed = parse_cddl(
+        "model = \"free-space\" / \"Log_Distance\" / nil",
+        PathBuf::from("t.cddl"),
+    )
+    .expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let Some(cddlc_ir::TypeDef::Enum(e)) = lowered.module.get("model") else { panic!("expected enum") };
-    let texts: Vec<String> = e.variants.iter().map(cddlc_codegen::enum_variant_text).collect();
+    let Some(cddlc_ir::TypeDef::Enum(e)) = lowered.module.get("model") else {
+        panic!("expected enum")
+    };
+    let texts: Vec<String> = e
+        .variants
+        .iter()
+        .map(cddlc_codegen::enum_variant_text)
+        .collect();
     assert_eq!(texts[0], "free-space");
     assert_eq!(texts[1], "Log_Distance");
     assert_eq!(texts[2], e.variants[2].name.to_lowercase());
