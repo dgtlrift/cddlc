@@ -574,6 +574,10 @@ fn emit_record_codec(
     let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
     let total = s.fields.len();
     let want = if required == total { required.to_string() } else { format!("{required} to {total}") };
+    // One optional member before required ones: present when the array holds
+    // every member; those after it move down one when it's absent
+    // (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
 
     // The number of members written, checking optional ones are present in order.
     let emit_len = |w: &mut IndentWriter| {
@@ -608,6 +612,9 @@ fn emit_record_codec(
             let expr = ts_json_encode_expr(&f.ty, &format!("val.{prop}"), opts);
             if f.occurrence.is_required() {
                 w.line(&format!("items.push({expr});"));
+            } else if before.is_some() {
+                // Optional members before required ones (dgtlrift/cddlc#134).
+                w.line(&format!("if (val.{prop} !== undefined) items.push({expr});"));
             } else {
                 w.line(&format!("if (items.length < len) items.push({expr});"));
             }
@@ -658,7 +665,10 @@ fn emit_record_codec(
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
         let ty = ts_struct_field_type(f, opts);
-        let item = format!("a[{i}]");
+        let item = match &before {
+            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("a[a.length >= {x} ? {i} : {i} - ({x} - a.length)]") }
+            _ => format!("a[{i}]"),
+        };
         let conv = if opts.is_json() {
             ts_json_decode_expr(&f.ty, &item, &f.name, opts)
         } else {
@@ -669,7 +679,8 @@ fn emit_record_codec(
             w.line(&format!("const {local}: {ty} = {conv};"));
             emit_ts_validation(w, &f.constraints, &local, &f.name, opts.is_json());
         } else {
-            w.line(&format!("const {local}: {ty} | undefined = a.length > {i} ? {conv} : undefined;"));
+            let present = match &before { Some(b) => format!("a.length > {}", required + b[i]), None => format!("a.length > {i}") };
+            w.line(&format!("const {local}: {ty} | undefined = {present} ? {conv} : undefined;"));
         }
     }
     w.line("return {");

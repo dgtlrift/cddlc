@@ -698,12 +698,21 @@ fn emit_record_raw(w: &mut IndentWriter, _cx: &Cx, s: &StructDef, t: &str) {
     w.dedent();
     w.line("end");
     w.line(&format!("local v = setmetatable({{}}, M.{t})"));
+    // One optional member before required ones: present when the array holds
+    // every member; those after it move down one when it's absent
+    // (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
     for (i, f) in s.fields.iter().enumerate() {
         let m = format!("v.{}", lua_member_name(&f.name));
         let at = format!("{t}.{}", f.name);
-        let item = format!("a[{}]", i + 1);
+        let item = match &before {
+            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("a[(#a >= {x}) and {} or ({} - ({x} - #a))]", i + 1, i + 1) }
+            _ => format!("a[{}]", i + 1),
+        };
         if f.occurrence.is_required() {
             w.line(&format!("{m} = {}", from_raw(&f.ty, &item, &at)));
+        } else if let Some(b) = &before {
+            w.line(&format!("if #a > {} then {m} = {} end", required + b[i], from_raw(&f.ty, &item, &at)));
         } else {
             w.line(&format!("if {item} ~= nil then {m} = {} end", from_raw(&f.ty, &item, &at)));
         }

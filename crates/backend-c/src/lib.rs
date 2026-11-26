@@ -713,10 +713,23 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 w.line("nanocbor_value_t arr;");
                 w.line("if (nanocbor_enter_array(dec, &arr) < 0) return -1;");
                 w.line(&format!("memset(out, 0, sizeof({type_name}_t));"));
-                for f in &s.fields {
+                // One optional member before required ones: present when the
+                // array holds every member, so count the items on a copy
+                // (dgtlrift/cddlc#134).
+                let before = cddlc_codegen::record_optionals_before(s);
+                if before.is_some() {
+                    w.line("size_t count = 0;");
+                    w.line("{ nanocbor_value_t probe = arr; while (!nanocbor_at_end(&probe)) { if (nanocbor_skip(&probe) < 0) return -1; count++; } }");
+                }
+                let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+                for (i, f) in s.fields.iter().enumerate() {
                     let fname = to_snake_case(&f.name);
                     if matches!(f.occurrence, Occurrence::Optional) {
-                        w.line("if (!nanocbor_at_end(&arr)) {");
+                        if let Some(b) = &before {
+                            w.line(&format!("if (count > {}) {{", required + b[i]));
+                        } else {
+                            w.line("if (!nanocbor_at_end(&arr)) {");
+                        }
                         w.indent();
                         emit_c_decode_field(w, &f.ty, &format!("out->{fname}"), &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
                         w.line(&format!("out->{fname}_present = true;"));
@@ -2079,10 +2092,22 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
     w.line("int n = cJSON_GetArraySize(j);");
     w.line(&format!("if (n < {required} || n > {}) return false;", s.fields.len()));
     w.line("memset(out, 0, sizeof(*out));");
+    // One optional member before required ones: present when the array holds
+    // every member; the members after it move down one when it's absent
+    // (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
+    let index = |i: usize| match &before {
+        Some(b) if b[i] > 0 => { let x = required + b[i]; format!("(n >= {x} ? {i} : {i} - ({x} - n))") }
+        _ => i.to_string(),
+    };
     for (i, f) in s.fields.iter().enumerate() {
         let fname = to_snake_case(&f.name);
         if matches!(f.occurrence, Occurrence::Optional) {
-            w.line(&format!("if (n > {i}) {{"));
+            if let Some(b) = &before {
+                w.line(&format!("if (n > {}) {{", required + b[i]));
+            } else {
+                w.line(&format!("if (n > {i}) {{"));
+            }
             w.indent();
             w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {i});"));
             json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
@@ -2090,7 +2115,7 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
             w.dedent();
             w.line("}");
         } else {
-            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {i});"));
+            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {});", index(i)));
             json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
         }
     }

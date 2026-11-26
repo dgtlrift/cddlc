@@ -1290,14 +1290,15 @@ impl<'m> LowerCtx<'m> {
                 }
                 f.key = FieldKey::Text(f.name.clone());
             }
-            let optional_then_required = st.fields.windows(2).any(|w| {
-                !matches!(w[0].occurrence, Occurrence::Required) && matches!(w[1].occurrence, Occurrence::Required)
-            });
-            if optional_then_required || st.fields.iter().any(|f| f.occurrence.is_repeated()) {
+            // The array's length says which members it holds: an array of
+            // n items holds the first n - required optional members, in order
+            // (COSE's `Sig_structure` and `Countersign_structure`,
+            // dgtlrift/cddlc#134). A repeated member isn't supported yet.
+            if st.fields.iter().any(|f| f.occurrence.is_repeated()) {
                 return Err(IrError::Unsupported {
                     rule:   name.into(),
-                    reason: "a record array's optional members must come last, and it can't repeat a member \
-                             (`[a: uint, * tstr]`); use a separate array for the repeated part".into(),
+                    reason: "a record array can't repeat a member yet (`[a: uint, * tstr]`, dgtlrift/cddlc#134); \
+                             use a separate array for the repeated part".into(),
                 });
             }
         }

@@ -486,6 +486,12 @@ and the test fails when one starts working, so the list stays current.
   two. Each repetition must have the same members, so a group with optional or repeated
   members, or with choices, is rejected as unsupported, as is a repeated group among other
   array members (`[id: uint, * (a: uint, b: tstr)]`).
+- **Optional members of a record** can come anywhere, as in COSE's `Sig_structure`
+  (`[context, body_protected, ? sign_protected, external_aad, payload]`). The array's length
+  says which are present: with R required members, an array of N items holds the first N − R
+  optional members, in order. An optional member can be set only if every optional member
+  before it is set. A record can't repeat a member yet (`[primary, * extension, payload]`,
+  #134).
 - **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
 - **Maps with named members and other entries** need text keys for the other entries
   (`{ a: uint, * tstr => any }`); other key types there (`{ 1 => int, * int => any }`), and

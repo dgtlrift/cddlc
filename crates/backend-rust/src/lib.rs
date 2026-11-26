@@ -638,6 +638,24 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.line("Ok(match len { Some(n) => i < n, None => d.datatype()? != minicbor::data::Type::Break })");
     w.dedent();
     w.line("}");
+    // One optional member before required ones: the item count says whether
+    // it's there, so count the items (on a copy, for an indefinite length).
+    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let before = cddlc_codegen::record_optionals_before(s);
+    let middle = before.is_some();
+    // The item count past which each optional member is present.
+    let threshold = |f: &FieldDef| -> usize {
+        let i = s.fields.iter().position(|x| x.name == f.name).unwrap_or(0);
+        required + before.as_ref().map_or(0, |b| b[i])
+    };
+    if middle {
+        w.line("let count = match len {");
+        w.indent();
+        w.line("Some(n) => n,");
+        w.line("None => { let mut p = d.clone(); let mut c = 0u64; while p.datatype()? != minicbor::data::Type::Break { p.skip()?; c += 1; } c }");
+        w.dedent();
+        w.line("};");
+    }
     for f in &s.fields {
         let local = field_local(&f.name);
         let decode_expr = decode_expr_for_in_module(&f.ty, opts, Some(module));
@@ -654,7 +672,10 @@ fn emit_record_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
             w.dedent();
             w.line("i += 1;");
         } else {
-            w.line(&format!("let {local} = if more(d, len, i)? {{"));
+            // An optional member before required ones is present when the
+            // array holds every member (dgtlrift/cddlc#134).
+            let cond = if middle { format!("count > {}", threshold(f)) } else { "more(d, len, i)?".to_owned() };
+            w.line(&format!("let {local} = if {cond} {{"));
             w.indent();
             w.line(&format!("let val = {decode_expr};"));
             emit_field_validation(w, &f.constraints, &checked_value(&f.ty, "val", Some(module)), &f.name);
@@ -2952,6 +2973,78 @@ fn emit_record_json_impls(w: &mut IndentWriter, s: &StructDef, field_types: &[St
     w.line("fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {");
     w.indent();
     w.line("use serde::de::Error as _;");
+    // One optional member before required ones: the item count says whether
+    // it's there, so read the items first (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
+    let middle = before.is_some();
+    let threshold = |f: &FieldDef| -> usize {
+        let i = s.fields.iter().position(|x| x.name == f.name).unwrap_or(0);
+        required + before.as_ref().map_or(0, |b| b[i])
+    };
+    if middle {
+        // A format that knows the length (CBOR's definite arrays) says it
+        // up front; read the items in order.
+        w.line("if let Some(n) = seq.size_hint() {");
+        w.indent();
+        for (f, inner, wrapper) in &members {
+            let local = field_ident(&f.name);
+            let (read_ty, unwrap) = match wrapper {
+                Some(wr) => (wr.clone(), ".map(|w| w.0)"),
+                None => (inner.clone(), ""),
+            };
+            let take = format!(
+                "seq.next_element::<{read_ty}>()?{unwrap}.ok_or_else(|| A::Error::custom(\"{}: missing item '{}'\"))?",
+                s.name, f.name
+            );
+            if f.occurrence.is_required() {
+                w.line(&format!("let {local} = {take};"));
+            } else {
+                w.line(&format!("let {local} = if n > {} {{ Some({take}) }} else {{ None }};", threshold(f)));
+            }
+        }
+        w.line(&format!(
+            "if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {{ return Err(A::Error::custom(\"{}: too many items\")); }}",
+            s.name
+        ));
+        let names: Vec<_> = s.fields.iter().map(|f| field_ident(&f.name)).collect();
+        w.line(&format!("return Ok({ty} {{ {} }});", names.join(", ")));
+        w.dedent();
+        w.line("}");
+        // Otherwise (JSON) read the items first, then count them.
+        w.line("let mut items = Vec::new();");
+        w.line("while let Some(v) = seq.next_element::<serde_json::Value>()? { items.push(v); }");
+        w.line("let n = items.len();");
+        w.line("let mut items = items.into_iter();");
+        for (f, inner, wrapper) in &members {
+            let local = field_ident(&f.name);
+            let (read_ty, unwrap) = match wrapper {
+                Some(wr) => (wr.clone(), ".0"),
+                None => (inner.clone(), ""),
+            };
+            let take = format!(
+                "serde_json::from_value::<{read_ty}>(items.next().ok_or_else(|| A::Error::custom(\"{}: missing item '{}'\"))?).map_err(A::Error::custom)?{unwrap}",
+                s.name, f.name
+            );
+            if f.occurrence.is_required() {
+                w.line(&format!("let {local} = {take};"));
+            } else {
+                w.line(&format!("let {local} = if n > {} {{ Some({take}) }} else {{ None }};", threshold(f)));
+            }
+        }
+        w.line(&format!("if items.next().is_some() {{ return Err(A::Error::custom(\"{}: too many items\")); }}", s.name));
+        let names: Vec<_> = s.fields.iter().map(|f| field_ident(&f.name)).collect();
+        w.line(&format!("Ok({ty} {{ {} }})", names.join(", ")));
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        w.line("deserializer.deserialize_seq(CddlcVisitor)");
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        return;
+    }
     for (f, inner, wrapper) in &members {
         let local = field_ident(&f.name);
         let (read_ty, unwrap) = match wrapper {

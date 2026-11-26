@@ -325,12 +325,26 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
         let def   = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
+    // One optional member before required ones: present when the array holds
+    // every member, so count the items first, on a copy of the array's
+    // encoding (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
+    if before.is_some() {
+        w.line("var encoded = reader.ReadEncodedValue();");
+        w.line("var probe = new CborReader(encoded, reader.ConformanceMode);");
+        w.line("probe.ReadStartArray();");
+        w.line("int count = 0;");
+        w.line("while (probe.PeekState() != CborReaderState.EndArray) { probe.SkipValue(); count++; }");
+        w.line("reader = new CborReader(encoded, reader.ConformanceMode);");
+    }
     w.line("var length = reader.ReadStartArray();");
     w.line("int read = 0;");
     w.line("bool More() => length is int n ? read < n : reader.PeekState() != CborReaderState.EndArray;");
-    for f in &s.fields {
+    for (i, f) in s.fields.iter().enumerate() {
         let local = to_snake_case(&f.name);
-        if matches!(f.occurrence, Occurrence::Optional) {
+        if let (Occurrence::Optional, Some(b)) = (&f.occurrence, &before) {
+            w.line(&format!("if (count > {})", required + b[i]));
+        } else if matches!(f.occurrence, Occurrence::Optional) {
             w.line("if (More())");
             w.line("{");
             w.indent();
@@ -386,13 +400,21 @@ fn emit_record_json_converter(w: &mut IndentWriter, s: &StructDef, type_name: &s
     w.line(&format!("return new {type_name}"));
     w.line("{");
     w.indent();
+    // One optional member before required ones: present when the array holds
+    // every member; those after it move down one when it's absent
+    // (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
     for (i, f) in s.fields.iter().enumerate() {
         let ty = cs_field_type(&f.ty, &f.occurrence, opts);
         let pname = to_pascal_case(&f.name);
-        let el = format!("a[{i}]");
+        let el = match &before {
+            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("a[n >= {x} ? {i} : {i} - ({x} - n)]") }
+            _ => format!("a[{i}]"),
+        };
+        let present = match &before { Some(b) => format!("n > {}", required + b[i]), None => format!("n > {i}") };
         match f.occurrence {
             Occurrence::Optional =>
-                w.line(&format!("{pname} = n > {i} ? ({ty}){} : null,", cs_json_from_element(&f.ty, &el, opts))),
+                w.line(&format!("{pname} = {present} ? ({ty}){} : null,", cs_json_from_element(&f.ty, &el, opts))),
             Occurrence::Required =>
                 w.line(&format!("{pname} = {},", cs_json_from_element(&f.ty, &el, opts))),
             _ => w.line(&format!("{pname} = {el}.Deserialize<{ty}>(options)!,")),

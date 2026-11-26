@@ -18,3 +18,24 @@ labelled = [id: uint, name: tstr, ? note: tstr]
 
 ; A record with a byte string, base64url in JSON
 blob = [id: uint, data: bstr]
+
+; One optional member before required ones (COSE's Sig_structure, RFC 9052):
+; the array's length says whether it's there
+signed = [
+    context: "Signature" / "Signature1",
+    body: bstr,
+    ? sign: bstr,
+    aad: bstr,
+    payload: tstr,
+]
+
+; Two optional members, one in the middle (COSE's Countersign_structure,
+; RFC 9338): an array of n items holds the first n - 4 of them, in order
+countersigned = [
+    context: tstr,
+    body: bstr,
+    ? sign: bstr,
+    aad: bstr,
+    payload: tstr,
+    ? other: [+ bstr],
+]

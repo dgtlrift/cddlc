@@ -23,7 +23,7 @@ struct Case {
     expect: Expect,
 }
 
-const RECORD: &str = "a record array's optional members must come last";
+const RECORD: &str = "a record array can't repeat a member yet";
 const MAP_GROUP: &str = "a repeated group in a map";
 const COMPUTED_KEYS: &str = "a map with more than one member with a computed key";
 const OTHER_KEY: &str = "a computed key other than tstr alongside named members";
@@ -33,8 +33,8 @@ const CASES: &[Case] = &[
     Case { files: &["rfc/rfc8927.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc8990.cddl"], expect: Expect::Fails(RECORD, 134) },
     Case { files: &["rfc/rfc8990-cleaned.cddl"], expect: Expect::Fails(RECORD, 134) },
-    Case { files: &["rfc/rfc9052.cddl"], expect: Expect::Fails(RECORD, 134) },
-    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9053.cddl"], expect: Expect::Fails(RECORD, 134) },
+    Case { files: &["rfc/rfc9052.cddl"], expect: Expect::Fails(OTHER_KEY, 136) },
+    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9053.cddl"], expect: Expect::Fails(OTHER_KEY, 136) },
     Case { files: &["rfc/rfc9054.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9090.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9115.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
@@ -49,7 +49,7 @@ const CASES: &[Case] = &[
     Case { files: &["rfc/rfc9277.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9290.cddl"], expect: Expect::Fails(COMPUTED_KEYS, 136) },
     Case { files: &["rfc/rfc9321.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9338.cddl"], expect: Expect::Fails(RECORD, 134) },
+    Case { files: &["rfc/rfc9052.cddl", "rfc/rfc9338.cddl"], expect: Expect::Fails(OTHER_KEY, 136) },
     Case { files: &["rfc/rfc9360.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9393.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
     Case { files: &["rfc/rfc9393-concise-swid-tag.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },

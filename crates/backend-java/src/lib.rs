@@ -1042,14 +1042,23 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class: &str) {
     w.line(&format!("    throw Cddl.invalid({}, \"expected {want} items, got \" + a.size());", java_str(class)));
     w.line("}");
     let mut args = Vec::new();
+    // One optional member before required ones: present when the array holds
+    // every member; those after it move down one when it's absent
+    // (dgtlrift/cddlc#134).
+    let before = cddlc_codegen::record_optionals_before(s);
     for (i, f) in s.fields.iter().enumerate() {
         let local = format!("f_{}", java_member_name(&f.name));
         let at = format!("{class}.{}", f.name);
-        let conv = from_raw(&f.ty, &format!("a.get({i})"), &at, None);
+        let index = match &before {
+            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("a.size() >= {x} ? {i} : {i} - ({x} - a.size())") }
+            _ => i.to_string(),
+        };
+        let conv = from_raw(&f.ty, &format!("a.get({index})"), &at, None);
+        let present = match &before { Some(b) => format!("a.size() > {}", required + b[i]), None => format!("a.size() > {i}") };
         if f.occurrence.is_required() {
             w.line(&format!("{} {local} = {conv};", member_type(f)));
         } else {
-            w.line(&format!("{} {local} = a.size() > {i} ? {conv} : null;", member_type(f)));
+            w.line(&format!("{} {local} = {present} ? {conv} : null;", member_type(f)));
         }
         args.push(local);
     }

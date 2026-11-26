@@ -828,10 +828,23 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 // A record: the members' values in order; optional ones last.
                 w.line("nanocbor_value_t arr;");
                 w.line("if (nanocbor_enter_array(dec, &arr) < 0) return -1;");
-                for f in &s.fields {
+                // One optional member before required ones: present when the
+                // array holds every member, so count the items on a copy
+                // (dgtlrift/cddlc#134).
+                let before = cddlc_codegen::record_optionals_before(s);
+                let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+                if before.is_some() {
+                    w.line("std::size_t count = 0;");
+                    w.line("{ nanocbor_value_t probe = arr; while (!nanocbor_at_end(&probe)) { if (nanocbor_skip(&probe) < 0) return -1; count++; } }");
+                }
+                for (i, f) in s.fields.iter().enumerate() {
                     let fname = to_snake_case(&f.name);
                     if matches!(f.occurrence, Occurrence::Optional) {
-                        w.line("if (!nanocbor_at_end(&arr)) {");
+                        if let Some(b) = &before {
+                            w.line(&format!("if (count > {}) {{", required + b[i]));
+                        } else {
+                            w.line("if (!nanocbor_at_end(&arr)) {");
+                        }
                         w.indent();
                         w.line(&format!("{} _v{{}};", cpp_typeref(&f.ty, opts)));
                         emit_cpp_decode_field(w, &f.ty, "_v", &f.constraints, &f.name, "&arr", opts);
@@ -2016,10 +2029,19 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
             w.line(&format!("    throw std::runtime_error({:?});", format!("{ctype}: expected an array of {required} to {} items", s.fields.len())));
             w.line("}");
             w.line(&format!("{ctype} out{{}};"));
+            // One optional member before required ones: present when the array
+            // holds every member; those after it move down one when it's absent.
+            let before = cddlc_codegen::record_optionals_before(s);
             for (i, f) in s.fields.iter().enumerate() {
                 let fname = to_snake_case(&f.name);
-                let conv = cpp_json_from_val(&f.ty, &format!("j.at({i})"), opts, module);
-                if matches!(f.occurrence, Occurrence::Optional) {
+                let index = match &before {
+                    Some(b) if b[i] > 0 => { let x = required + b[i]; format!("j.size() >= {x} ? {i} : {i} - ({x} - j.size())") }
+                    _ => i.to_string(),
+                };
+                let conv = cpp_json_from_val(&f.ty, &format!("j.at({index})"), opts, module);
+                if let (Occurrence::Optional, Some(b)) = (&f.occurrence, &before) {
+                    w.line(&format!("if (j.size() > {}) out.{fname} = {conv};", required + b[i]));
+                } else if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (j.size() > {i}) out.{fname} = {conv};"));
                 } else {
                     w.line(&format!("out.{fname} = {conv};"));
