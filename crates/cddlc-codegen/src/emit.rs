@@ -595,6 +595,23 @@ pub fn check_rest_keys(
     Ok(())
 }
 
+/// Whether two choice alternatives are maps with the same members (keys,
+/// types, occurrences and constraints): nothing on the wire tells them apart
+/// (dgtlrift/cddlc#157).
+pub fn same_map_shape(a: &cddlc_ir::TypeRef, b: &cddlc_ir::TypeRef, module: &cddlc_ir::IrModule) -> bool {
+    use cddlc_ir::{TypeDef, TypeRef, StructEncoding};
+    let (TypeRef::Named(x), TypeRef::Named(y)) = (a, b) else { return false };
+    let (Some(TypeDef::Struct(s)), Some(TypeDef::Struct(t))) = (module.get(x), module.get(y)) else { return false };
+    s.encoding == StructEncoding::Map && t.encoding == StructEncoding::Map
+        && s.rest.is_none() && t.rest.is_none()
+        && s.fields.len() == t.fields.len()
+        && s.fields.iter().zip(&t.fields).all(|(f, g)| {
+            f.key == g.key && f.ty == g.ty
+                && format!("{:?}", f.occurrence) == format!("{:?}", g.occurrence)
+                && format!("{:?}", f.constraints) == format!("{:?}", g.constraints)
+        })
+}
+
 /// The module with types renamed (`from` → `to`), at their definitions and
 /// everywhere they're used: for a backend whose name for a rule would clash
 /// with one its target already has (C's `mode_t`, dgtlrift/cddlc#154).

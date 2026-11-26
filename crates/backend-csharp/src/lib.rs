@@ -723,10 +723,36 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     let type_name = to_pascal_case(&s.name);
 
     if opts.is_json() {
+        // A member pinned to a literal (`type: "javascript"`) must hold it, so
+        // a choice of maps tells its alternatives apart (dgtlrift/cddlc#157).
+        let pinned: Vec<(String, String)> = s.fields.iter()
+            .filter(|f| matches!(f.occurrence, Occurrence::Required))
+            .filter_map(|f| f.constraints.iter().find_map(|c| match c {
+                Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => Some((to_pascal_case(&f.name), format!("{:?}", t.as_str()))),
+                Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => Some((to_pascal_case(&f.name), format!("{n}UL"))),
+                Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => Some((to_pascal_case(&f.name), format!("{n}L"))),
+                _ => None,
+            }))
+            .collect();
         w.line(&format!("public static {type_name} FromJson(byte[] data)"));
+        if pinned.is_empty() {
+            w.indent();
+            w.line(&format!("=> JsonSerializer.Deserialize<{type_name}>(data)!;"));
+            w.dedent();
+            return;
+        }
+        w.line("{");
         w.indent();
-        w.line(&format!("=> JsonSerializer.Deserialize<{type_name}>(data)!;"));
+        w.line(&format!("var v = JsonSerializer.Deserialize<{type_name}>(data)!;"));
+        for (prop, lit) in pinned {
+            w.line(&format!(
+                "if (!Equals(v.{prop}, {lit})) throw new JsonException({:?});",
+                format!("{type_name}.{prop}: must be {lit}")
+            ));
+        }
+        w.line("return v;");
         w.dedent();
+        w.line("}");
         return;
     }
 

@@ -74,6 +74,11 @@ struct LowerCtx<'m> {
     /// for every use, which also ends a group that recurses through one
     /// (`schema = ( elements: { schema } // ... )`, RFC 8927).
     inline_groups: HashMap<(bool, SmolStr), SmolStr>,
+
+    /// A map rule `{ ... } .and other`: the rule, and the map whose members
+    /// it also has, merged in once every rule is lowered (WebDriver BiDi's
+    /// `script.DateRemoteValue`, dgtlrift/cddlc#157).
+    and_merges: Vec<(SmolStr, SmolStr)>,
 }
 
 impl<'m> LowerCtx<'m> {
@@ -92,6 +97,7 @@ impl<'m> LowerCtx<'m> {
             sources:      Sources::default(),
             warnings:     Vec::new(),
             inline_groups: HashMap::new(),
+            and_merges: Vec::new(),
         }
     }
 
@@ -134,6 +140,62 @@ impl<'m> LowerCtx<'m> {
                         });
                     }
                 }
+            }
+        }
+        // `{ ... } .and other`: the other map's members, after the rule's own.
+        for (target, other) in std::mem::take(&mut self.and_merges) {
+            let mut src = other.clone();
+            for _ in 0..8 {
+                match self.output.get(&src) {
+                    Some(TypeDef::Alias(a)) => match &a.ty {
+                        TypeRef::Named(n) => src = n.clone(),
+                        _ => break,
+                    },
+                    _ => break,
+                }
+            }
+            let Some(TypeDef::Struct(from)) = self.output.get(&src) else { continue };
+            if from.encoding != StructEncoding::Map {
+                continue;
+            }
+            let extra = from.fields.clone();
+            if let Some(TypeDef::Struct(to)) = self.output.get_mut(&target) {
+                for f in extra {
+                    if !to.fields.iter().any(|g| g.key == f.key) {
+                        to.fields.push(f);
+                    }
+                }
+            }
+        }
+        // A choice of maps tries the more specific first: one that pins more
+        // members to a literal (`type: "javascript"`) before one that takes
+        // any text there (`type: text`), as a value both accept is meant for
+        // the specific one (WebDriver BiDi's `log.Entry`, dgtlrift/cddlc#157).
+        // The order otherwise stays as written.
+        let literals = |output: &IndexMap<SmolStr, TypeDef>, v: &EnumVariant| -> usize {
+            match &v.ty {
+                TypeRef::Named(n) => match output.get(n) {
+                    Some(TypeDef::Struct(s)) if s.encoding == StructEncoding::Map => s.fields.iter()
+                        .filter(|f| f.occurrence.is_required() && f.constraints.iter().any(|c| matches!(c, Constraint::Eq(_))))
+                        .count(),
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        };
+        let enums: Vec<SmolStr> = self.output.iter()
+            .filter(|(_, d)| matches!(d, TypeDef::Enum(_)))
+            .map(|(n, _)| n.clone())
+            .collect();
+        for name in enums {
+            let Some(TypeDef::Enum(e)) = self.output.get(&name) else { continue };
+            let mut keyed: Vec<(usize, EnumVariant)> = e.variants.iter().map(|v| (literals(&self.output, v), v.clone())).collect();
+            if keyed.iter().all(|(n, _)| *n == 0) {
+                continue;
+            }
+            keyed.sort_by(|a, b| b.0.cmp(&a.0));
+            if let Some(TypeDef::Enum(e)) = self.output.get_mut(&name) {
+                e.variants = keyed.into_iter().map(|(_, v)| v).collect();
             }
         }
         // A key that's an alias of `tstr` is `tstr`: backends hold text keys
@@ -296,8 +358,18 @@ impl<'m> LowerCtx<'m> {
 
         // Classify the base type2
         match &t1.base.node {
-            // Map → Struct
+            // Map → Struct; `{ ... } .and other` has the other map's members
+            // too.
             Type2::Map(group) => {
+                for op in &t1.ops {
+                    if let cddlc_parser::TypeOp::Control { op: ctl, operand } = op {
+                        if let (cddlc_parser::CtlOp::And, Type2::Typename { name: other, args }) = (&ctl.node, &operand.node) {
+                            if args.is_empty() {
+                                self.and_merges.push((name.into(), other.node.0.clone()));
+                            }
+                        }
+                    }
+                }
                 self.lower_map_as_struct(name, &group.node.choices, meta)
             }
 
