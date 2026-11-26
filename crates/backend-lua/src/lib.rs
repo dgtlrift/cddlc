@@ -1227,6 +1227,13 @@ fn enum_specs(cx: &Cx, e: &EnumDef) -> Vec<(String, Vec<String>)> {
         // In JSON a byte string is text, which a tstr variant reads first.
         if cx.json() && takes_text && has_payload(v) && matches!(base_primitive(&v.ty), Some(Primitive::Bstr | Primitive::Any)) { continue; }
         let mut body = roundtrip(&t, &lua_variant_value(cx, e, v, 0));
+        // A map variant with the same members as an earlier one decodes as
+        // that one, to the same encoding (dgtlrift/cddlc#192).
+        if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, cx.module)) {
+            if let Some(last) = body.last_mut() {
+                *last = format!("assert.equal(M.{t}.encode(original), M.{t}.encode(M.{t}.decode(M.{t}.encode(original))))");
+            }
+        }
         body.push(format!("assert.equal({}, original.kind)", lua_str(&lua_variant_kind(&v.name))));
         out.push((format!("roundtrips the {} variant", lua_variant_kind(&v.name)), body));
     }

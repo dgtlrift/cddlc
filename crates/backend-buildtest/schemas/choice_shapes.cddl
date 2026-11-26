@@ -6,6 +6,12 @@ entry = generic-entry / javascript-entry
 generic-entry = { level: tstr, type: tstr }
 javascript-entry = { level: tstr, type: "javascript" }
 
+; Two maps with the same members: nothing on the wire tells them apart, so a
+; print-result decodes as a shot-result, to the same bytes (dgtlrift/cddlc#192)
+outcome = shot-result / print-result
+shot-result = { data: tstr }
+print-result = { data: tstr }
+
 ; `.and` of two maps has both maps' members
 date-remote = { ? handle: tstr } .and date-local
 date-local = { type: "date", value: tstr }

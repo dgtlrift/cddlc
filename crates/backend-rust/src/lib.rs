@@ -2507,7 +2507,13 @@ fn emit_enum_roundtrip(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opt
             "let decoded: {} = minicbor::decode(&buf).expect(\"decode\");",
             type_name
         ));
-        w.line("assert_eq!(original, decoded);");
+        // A map variant with the same members as an earlier one decodes as
+        // that one, to the same encoding (dgtlrift/cddlc#192).
+        if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+            w.line("assert_eq!(minicbor::to_vec(&decoded).expect(\"encode\"), buf);");
+        } else {
+            w.line("assert_eq!(original, decoded);");
+        }
         w.dedent();
         w.line("}");
     }

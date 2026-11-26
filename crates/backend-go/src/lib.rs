@@ -2084,6 +2084,27 @@ func roundtrip[T encodable](t *testing.T, orig T, decode func([]byte) (T, error)
 	}
 }
 
+// roundtripBytes encodes orig, decodes the result and checks it encodes the
+// same: for a value that may decode as another alternative of its choice.
+func roundtripBytes[T encodable](t *testing.T, orig T, decode func([]byte) (T, error)) {
+	t.Helper()
+	data, err := orig.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	got, err := decode(data)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	again, err := got.Encode()
+	if err != nil {
+		t.Fatalf("encode again: %v", err)
+	}
+	if !reflect.DeepEqual(again, data) {
+		t.Fatalf("roundtrip mismatch:\n got  %x\n want %x", again, data)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }"#;
 
 fn emit_tests(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
@@ -2162,7 +2183,14 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
             continue;
         }
         let value = go_variant_value(e, v, module, 0);
-        test_fn(w, &format!("Test{name}Roundtrip{}", to_pascal_case(&v.name)), &[format!("roundtrip(t, {value}, Decode{name})")]);
+        // A map variant with the same members as an earlier one decodes as
+        // that one, to the same encoding (dgtlrift/cddlc#192).
+        let check = if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+            "roundtripBytes"
+        } else {
+            "roundtrip"
+        };
+        test_fn(w, &format!("Test{name}Roundtrip{}", to_pascal_case(&v.name)), &[format!("{check}(t, {value}, Decode{name})")]);
     }
     // An integer no literal names is rejected, unless some variant takes any number.
     let lits: Vec<i128> = e.variants.iter().filter_map(int_literal).collect();

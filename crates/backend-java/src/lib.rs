@@ -1585,6 +1585,7 @@ fn emit_alias(w: &mut IndentWriter, cx: &Cx, a: &AliasDef) {
 fn emit_tests(cx: &Cx) -> String {
     let mut w = IndentWriter::new(4);
     header(&mut w, cx);
+    w.line("import static org.junit.jupiter.api.Assertions.assertArrayEquals;");
     w.line("import static org.junit.jupiter.api.Assertions.assertEquals;");
     w.line("import static org.junit.jupiter.api.Assertions.assertFalse;");
     w.line("import static org.junit.jupiter.api.Assertions.assertThrows;");
@@ -1663,9 +1664,19 @@ fn emit_tests(cx: &Cx) -> String {
                     // In JSON a byte string is text, which a tstr variant reads first.
                     if cx.json() && takes_text && has_payload(v) && is_bytes(&v.ty) { continue; }
                     let value = java_variant_value(cx, e, v, 0);
+                    // A map variant with the same members as an earlier one
+                    // decodes as that one, to the same encoding
+                    // (dgtlrift/cddlc#192).
+                    let ambiguous = e.variants.iter().take_while(|x| x.name != v.name)
+                        .any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, cx.module));
+                    let check = if ambiguous {
+                        format!("assertArrayEquals(original.encode(), {class}.decode(original.encode()).encode());")
+                    } else {
+                        format!("roundtrip(original, original.encode(), {class}::decode, {class}.class);")
+                    };
                     test(&mut w, format!("{}Roundtrip{}", camel(&e.name), to_pascal_case(&v.name)), vec![
                         format!("{class} original = {value};"),
-                        format!("roundtrip(original, original.encode(), {class}::decode, {class}.class);"),
+                        check,
                         format!("assertEquals({}, original.kind());", java_str(&to_pascal_case(&v.name))),
                     ]);
                 }
