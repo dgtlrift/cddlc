@@ -37,6 +37,13 @@ flowchart LR
 
 The generated `CMakeLists.txt` fetches the selected runtime via `FetchContent`.
 
+## Type names
+
+A rule's type is `<rule>_t`. A rule whose `<rule>_t` the C library or the runtime
+already defines (`mode_t`, `time_t`, `size_t`, `pid_t`, the `<stdint.h>` types,
+`cbor_str_t`, ...) is named `<module>_<rule>_t` instead, so `mode` in `fs.cddl` is
+`fs_mode_t` (dgtlrift/cddlc#154).
+
 ## What is generated per IR type
 
 ### Structs

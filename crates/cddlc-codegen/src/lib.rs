@@ -11,7 +11,7 @@ pub use backend::{
     CodegenOutput, Format, GeneratedFile, JavaFlavor, Language, GENERATED,
 };
 pub use emit::{
-    record_optionals_before, record_repeated, repeat_bounds, default_is_encodable, field_key_json, has_int_keys, dcbor_key_order, rest_keys_are_text, map_with_non_text_rest, check_rest_keys, same_map_shape,
+    record_optionals_before, record_repeated, repeat_bounds, default_is_encodable, field_key_json, has_int_keys, dcbor_key_order, rest_keys_are_text, map_with_non_text_rest, check_rest_keys, rename_types, c_reserved_renames, same_map_shape,
     capacity_value, constraint_to_c_check, constraint_to_cpp_check, constraint_to_rust_check,
     literal_to_c, literal_to_rust, primitive_to_c, primitive_to_rust,
     to_pascal_case, to_screaming_snake, to_snake_case, IndentWriter,

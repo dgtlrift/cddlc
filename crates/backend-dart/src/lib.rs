@@ -724,12 +724,25 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
     w.blank();
     w.line(&format!("const {class_name}._(this.kind, [this.value]);"));
     w.blank();
+    // Equal by kind and value, so one can key a map (COSE's `label`).
+    w.line("@override");
+    w.line(&format!("bool operator ==(Object other) => other is {class_name} && other.kind == kind && other.value == value;"));
+    w.blank();
+    w.line("@override");
+    w.line("int get hashCode => Object.hash(kind, value);");
+    w.blank();
 
     // Named constructors for each variant
     for v in &e.variants {
         let vname    = to_pascal_case(&v.name);
         let kind_str = variant_kind_str(v);
         match &v.ty {
+            // A text literal (`"on"`) is a constant; a `tstr` alternative holds
+            // its text (dgtlrift/cddlc#180).
+            TypeRef::Primitive(Primitive::Tstr) if !is_text_literal(v) => {
+                w.line(&format!(
+                    "static {class_name} {vname}(String value) => {class_name}._({kind_str:?}, value);"));
+            }
             TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
                 w.line(&format!(
                     "static const {vname} = {class_name}._({kind_str:?});"));
@@ -798,6 +811,7 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         let case_val = match &v.ty {
             // `null` is JSON null, not text (dgtlrift/cddlc#147).
             TypeRef::Primitive(Primitive::Null) => "return null;".to_owned(),
+            TypeRef::Primitive(Primitive::Tstr) if !is_text_literal(v) => "return value;".to_owned(),
             TypeRef::Primitive(Primitive::Tstr) => {
                 format!("return {kind_str:?};")
             }
@@ -839,14 +853,17 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         w.line("switch (raw) {");
         w.indent();
         for v in &e.variants {
-            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
+            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v) {
                 let kind_str = variant_kind_str(v);
                 let vname    = to_pascal_case(&v.name);
                 w.line(&format!("case {kind_str:?}: return {class_name}.{vname};"));
             }
         }
-        w.line(&format!(
-            "default: throw ArgumentError('Unknown {class_name}: $raw');"));
+        // Any other text is the `tstr` alternative's.
+        match e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v)) {
+            Some(v) => w.line(&format!("default: return {class_name}.{}(raw);", to_pascal_case(&v.name))),
+            None => w.line(&format!("default: throw ArgumentError('Unknown {class_name}: $raw');")),
+        }
         w.dedent();
         w.line("}");
         w.dedent();
@@ -927,6 +944,7 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         let cbor_val = match &v.ty {
             // `null` is CBOR null, not text (dgtlrift/cddlc#147).
             TypeRef::Primitive(Primitive::Null) => format!("CborNull(tags: {tags})"),
+            TypeRef::Primitive(Primitive::Tstr) if !is_text_literal(v) => format!("CborString(value as String, tags: {tags})"),
             TypeRef::Primitive(Primitive::Tstr) => {
                 format!("CborString({kind_str:?}, tags: {tags})")
             }
@@ -978,14 +996,17 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         w.line("switch (v.toString()) {");
         w.indent();
         for v2 in &e.variants {
-            if matches!(&v2.ty, TypeRef::Primitive(Primitive::Tstr)) {
+            if matches!(&v2.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v2) {
                 let kind_str = variant_kind_str(v2);
                 let vname    = to_pascal_case(&v2.name);
                 w.line(&format!("case {kind_str:?}: return {class_name}.{vname};"));
             }
         }
-        w.line(&format!(
-            "default: throw ArgumentError('Unknown {class_name}: $v');"));
+        // Any other text is the `tstr` alternative's.
+        match e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v)) {
+            Some(v) => w.line(&format!("default: return {class_name}.{}(v.toString());", to_pascal_case(&v.name))),
+            None => w.line(&format!("default: throw ArgumentError('Unknown {class_name}: $v');")),
+        }
         w.dedent();
         w.line("}");
         w.dedent();
@@ -1184,7 +1205,12 @@ fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &C
         let vname = to_pascal_case(&v.name);
         w.line(&format!("test('{class_name} roundtrip', () {{"));
         w.indent();
-        w.line(&format!("final obj = {class_name}.{vname};"));
+        // A `tstr` alternative holds its text (dgtlrift/cddlc#180).
+        if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v) {
+            w.line(&format!("final obj = {class_name}.{vname}('hello');"));
+        } else {
+            w.line(&format!("final obj = {class_name}.{vname};"));
+        }
         if opts.is_json() {
             w.line("final encoded = obj.encode();");
             w.line(&format!("final decoded = {class_name}.decode(encoded);"));
@@ -1193,6 +1219,7 @@ fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &C
             w.line(&format!("final decoded = {class_name}.decode(encoded);"));
         }
         w.line("expect(decoded.kind, equals(obj.kind));");
+        w.line("expect(decoded, equals(obj));");
         w.dedent();
         w.line("});");
     }
@@ -1573,6 +1600,11 @@ fn field_key_str(key: &FieldKey) -> String {
 }
 
 /// The string that represents this enum variant's wire value: its CDDL literal.
+/// Whether a `tstr` variant is a text literal (`"on"`), not any text.
+fn is_text_literal(v: &cddlc_ir::EnumVariant) -> bool {
+    v.constraints.iter().any(|c| matches!(c, cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
+}
+
 fn variant_kind_str(v: &cddlc_ir::EnumVariant) -> String {
     cddlc_codegen::enum_variant_text(v)
 }
