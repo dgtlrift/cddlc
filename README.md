@@ -603,7 +603,8 @@ and the test fails when one starts working, so the list stays current.
   more than one member with a computed key, are rejected with an "unsupported" error (#136).
   Integer keys there are CBOR only, in Rust, C, C++, C#, Python and Go (#181).
 - **`any`** is held as a byte string in most backends, so a value that's any other data item
-  (COSE's header values, `values = any`) can't be decoded yet (#178).
+  (COSE's header values, `values = any`) can't be decoded yet (#178). Rust holds the encoded
+  item: an `AnyItem` whose bytes encoding writes back unchanged, or a `serde_json::Value` in JSON.
 
 ### Validator gaps (`cddlc validate`)
 

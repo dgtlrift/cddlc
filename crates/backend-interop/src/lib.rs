@@ -209,6 +209,9 @@ pub enum FieldVal {
     Bool(bool),
     Text(String),
     Bytes(Vec<u8>),
+    /// An `any` member's value: a data item's whole encoding, written as is
+    /// (dgtlrift/cddlc#178). Harnesses check it by the re-encode.
+    Item(Vec<u8>),
     Null,
     /// `kind` is the variant's type name, `text` its CDDL string on the wire.
     Enum {
@@ -739,6 +742,7 @@ fn encode_field_val(enc: &mut Encoder<&mut Vec<u8>>, val: &FieldVal) -> Option<(
         FieldVal::Text(s) => enc.str(s).ok().map(|_| ()),
         FieldVal::Bytes(b) => enc.bytes(b).ok().map(|_| ()),
         FieldVal::Null => enc.null().ok().map(|_| ()),
+        FieldVal::Item(b) => minicbor::encode::Write::write_all(enc.writer_mut(), b).ok(),
         FieldVal::Enum { text, .. } => enc.str(text).ok().map(|_| ()),
     }
 }
@@ -757,7 +761,9 @@ fn default_field_val(ty: &TypeRef) -> FieldVal {
         },
         TypeRef::Primitive(Primitive::Bool) => FieldVal::Bool(false),
         TypeRef::Primitive(Primitive::Tstr) => FieldVal::Text(String::new()),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => FieldVal::Bytes(vec![]),
+        TypeRef::Primitive(Primitive::Bstr) => FieldVal::Bytes(vec![]),
+        // `any`: the item `0`.
+        TypeRef::Primitive(Primitive::Any) => FieldVal::Item(vec![0x00]),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => FieldVal::Null,
         TypeRef::Named(_) | TypeRef::Tagged(_, _) | TypeRef::Choice(_) => FieldVal::Uint(0),
     }
@@ -778,7 +784,9 @@ fn explicit_field_val(ty: &TypeRef) -> FieldVal {
         },
         TypeRef::Primitive(Primitive::Bool) => FieldVal::Bool(true),
         TypeRef::Primitive(Primitive::Tstr) => FieldVal::Text("hello".into()),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => FieldVal::Bytes(vec![0x01, 0x02]),
+        TypeRef::Primitive(Primitive::Bstr) => FieldVal::Bytes(vec![0x01, 0x02]),
+        // `any`: an item that isn't a byte string, `[1, "a"]`.
+        TypeRef::Primitive(Primitive::Any) => FieldVal::Item(vec![0x82, 0x01, 0x61, 0x61]),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => FieldVal::Null,
         TypeRef::Named(_) | TypeRef::Tagged(_, _) | TypeRef::Choice(_) => FieldVal::Uint(42),
     }
@@ -882,6 +890,10 @@ fn json_value(v: &FieldVal) -> String {
             format!("\"0x{hex}\"")
         }
         FieldVal::Null => "null".into(),
+        FieldVal::Item(b) => {
+            let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+            format!("{{\"item\": \"0x{hex}\"}}")
+        }
         FieldVal::Enum { kind, .. } => format!("\"{}\"", kind),
     }
 }
@@ -978,6 +990,16 @@ fn emit_rust_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions
                         .collect::<Vec<_>>()
                         .join(", ");
                     w.line(&format!("assert_eq!(&decoded.{field}[..], &[{arr}][..]);"));
+                }
+                FieldVal::Item(b) => {
+                    let arr = b
+                        .iter()
+                        .map(|x| format!("{x:#04x}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    w.line(&format!(
+                        "assert_eq!(decoded.{field}.as_bytes(), &[{arr}][..]);"
+                    ));
                 }
                 // A null member has no value to compare.
                 FieldVal::Null => {}
@@ -1264,6 +1286,8 @@ fn emit_csharp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                     w.line(&format!("Assert.IsType<{type_name}.{kind}>(decoded);"))
                 }
                 FieldVal::Null => w.line(&format!("Assert.Null(decoded.{pname});")),
+                // An `any` item is checked by the re-encode (dgtlrift/cddlc#178).
+                FieldVal::Item(_) => {}
                 FieldVal::Bytes(b) => {
                     let hex = b.iter().map(|x| format!("{x:02x}")).collect::<String>();
                     w.line(&format!(
@@ -1393,6 +1417,8 @@ fn emit_nodejs_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                         w.line(&format!("expect(decoded.kind).toEqual({kind:?});"))
                     }
                     FieldVal::Null => w.line(&format!("expect(decoded{fname}).toBeNull();")),
+                    // An `any` item is checked by the re-encode (dgtlrift/cddlc#178).
+                    FieldVal::Item(_) => {}
                     FieldVal::Bytes(b) => {
                         let arr = b
                             .iter()
@@ -1502,6 +1528,8 @@ fn emit_python_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                         w.line(&format!("assert decoded.kind == {kind:?}"))
                     }
                     FieldVal::Null => w.line(&format!("assert decoded.{fname} is None")),
+                    // An `any` item is checked by the re-encode (dgtlrift/cddlc#178).
+                    FieldVal::Item(_) => {}
                     FieldVal::Bytes(b) => {
                         let s = b
                             .iter()
@@ -1603,7 +1631,7 @@ fn emit_go_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) 
                     "got.Kind".to_owned(),
                     go_kind_const(&v.cddl_name, kind),
                 )),
-                FieldVal::Enum { .. } | FieldVal::Null => None,
+                FieldVal::Enum { .. } | FieldVal::Null | FieldVal::Item(_) => None,
                 FieldVal::Float { value, .. } => Some((
                     format!("math.Abs(float64({target})-{value:?}) > 1e-4"),
                     target.clone(),
@@ -1746,7 +1774,7 @@ fn emit_java_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions
                 FieldVal::Enum { kind, .. } if v.shape == VectorShape::Enum => {
                     w.line(&format!("assertEquals({}, got.kind());", java_str(kind)));
                 }
-                FieldVal::Enum { .. } | FieldVal::Null => {}
+                FieldVal::Enum { .. } | FieldVal::Null | FieldVal::Item(_) => {}
                 FieldVal::Uint(n) => w.line(&format!("assertEquals({n}L, {target}, {label});")),
                 FieldVal::Int(n) => w.line(&format!("assertEquals({n}L, {target}, {label});")),
                 FieldVal::Bool(b) => w.line(&format!("assertEquals({b}, {target}, {label});")),
@@ -1839,7 +1867,7 @@ fn emit_lua_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
                 FieldVal::Enum { kind, .. } if v.shape == VectorShape::Enum => {
                     w.line(&format!("assert.equal({}, got.kind)", lua_str(kind)))
                 }
-                FieldVal::Enum { .. } | FieldVal::Null => {}
+                FieldVal::Enum { .. } | FieldVal::Null | FieldVal::Item(_) => {}
                 FieldVal::Uint(n) => w.line(&format!("assert.equal({n}, {target})")),
                 FieldVal::Int(n) => w.line(&format!("assert.equal({n}, {target})")),
                 FieldVal::Bool(b) => w.line(&format!("assert.equal({b}, {target})")),

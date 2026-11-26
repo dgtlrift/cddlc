@@ -70,6 +70,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
         include_str!("../schemas/choice_shapes.cddl"),
     ),
     ("recursive", include_str!("../schemas/recursive.cddl")),
+    ("any", include_str!("../schemas/any.cddl")),
 ];
 
 /// Reference schemas only some backends can generate yet: each with the
@@ -77,8 +78,11 @@ pub const SCHEMAS: &[(&str, &str)] = &[
 /// - A map's other entries with integer keys can't be JSON (JSON objects
 ///   have text keys), and Node, Java, Lua and Dart don't hold them yet
 ///   (dgtlrift/cddlc#181).
-const LIMITED_SCHEMAS: &[(&str, &[&str], bool)] =
-    &[("other-keys", &["rs", "h", "hpp", "cs", "py", "go"], true)];
+/// - `any` as the encoded item: Rust so far (dgtlrift/cddlc#178).
+const LIMITED_SCHEMAS: &[(&str, &[&str], bool)] = &[
+    ("other-keys", &["rs", "h", "hpp", "cs", "py", "go"], true),
+    ("any", &["rs"], false),
+];
 
 /// Whether a reference schema is built with this backend and format.
 pub fn schema_applies(schema: &str, backend: &dyn Backend, opts: &CodegenOptions) -> bool {
