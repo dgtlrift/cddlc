@@ -558,7 +558,14 @@ and the test fails when one starts working, so the list stays current.
   `<module>_<type>_release()` gives it back through the `release` callback. In JSON, decoding uses
   `calloc`, and `_release` uses `free`. A repeated member, or a map's other entries, that holds its
   own type again isn't supported yet (#156).
-- **C++, Go**: recursive types don't compile yet (#156, #221).
+- **C++**: a member or alternative that holds its own type again is a `Box<T>`: a value type
+  with deep copy and `==`, whose value lives elsewhere, empty when an optional member is absent.
+  With `--alloc heap`, it's on the heap. Otherwise decoding takes its memory from
+  `Callbacks::alloc` and gives it back through `Callbacks::release`, and fails with
+  `ErrorCode::AllocFailed` without them. A copy is made on the heap. JSON boxes use the heap.
+  A repeated member, or a map's other entries, that holds its own type again isn't supported
+  yet (#156).
+- **Go**: recursive types don't compile yet (#221).
 
 ### Schema language gaps
 
