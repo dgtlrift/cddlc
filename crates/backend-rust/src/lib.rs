@@ -3908,7 +3908,18 @@ fn emit_enum_roundtrip_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule
         w.line(&format!("let original = {construct};"));
         w.line("let buf = original.encode();");
         w.line(&format!("let decoded = {type_name}::decode(&buf).expect(\"decode\");"));
-        w.line("assert_eq!(original, decoded);");
+        // A map variant with the same members as an earlier one can't be told
+        // apart from it on the wire (WebDriver BiDi's `PrintResult` and
+        // `CaptureScreenshotResult`, both `{ data: text }`): it decodes as the
+        // earlier one, to the same encoding (dgtlrift/cddlc#157).
+        let ambiguous = e.variants.iter()
+            .take_while(|x| x.name != v.name)
+            .any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module));
+        if ambiguous {
+            w.line("assert_eq!(decoded.encode(), buf);");
+        } else {
+            w.line("assert_eq!(original, decoded);");
+        }
         w.dedent();
         w.line("}");
     }

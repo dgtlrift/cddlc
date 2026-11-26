@@ -1,0 +1,11 @@
+; Reference schema: choices of maps that overlap (WebDriver BiDi,
+; dgtlrift/cddlc#157)
+
+; `type: text` also takes "javascript": the specific alternative is tried first
+entry = generic-entry / javascript-entry
+generic-entry = { level: tstr, type: tstr }
+javascript-entry = { level: tstr, type: "javascript" }
+
+; `.and` of two maps has both maps' members
+date-remote = { ? handle: tstr } .and date-local
+date-local = { type: "date", value: tstr }
