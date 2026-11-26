@@ -236,7 +236,7 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
     let mut w = IndentWriter::new(4);
 
     // File header
-    emit_header(&mut w, opts);
+    emit_header(&mut w, module, opts);
     if module_has_boxes(module) {
         w.line("// A recursive type holds a `Box`: no-std needs `alloc` (dgtlrift/cddlc#139).");
         w.line("#[cfg(feature = \"no-std\")]");
@@ -248,7 +248,7 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
     }
     if cddlc_codegen::module_uses_bits(module) {
         w.blank();
-        emit_bits_check(&mut w);
+        emit_bits_check(&mut w, module);
     }
 
     // Each type definition
@@ -268,7 +268,13 @@ fn emit_module(module: &IrModule, opts: &CodegenOptions) -> String {
 
 /// The `BitsCheck` trait `.bits` checks call (dgtlrift/cddlc#107): only the
 /// bits the mask allows are set, bit `n` being bit `n % 8` of byte `n / 8`.
-fn emit_bits_check(w: &mut IndentWriter) {
+fn emit_bits_check(w: &mut IndentWriter, module: &IrModule) {
+    // In a module of its own, imported anonymously so the `.bits_ok` calls
+    // resolve without the name; re-exported unless a rule takes it
+    // (dgtlrift/cddlc#149).
+    w.line("/// The `.bits` check, apart from the schema's types.");
+    w.line("pub mod cddlc_bits {");
+    w.indent();
     w.line("/// `.bits`: only the bits `allowed` has set may be set (bit n is bit n % 8 of byte n / 8).");
     w.line("pub trait BitsCheck {");
     w.indent();
@@ -295,9 +301,16 @@ fn emit_bits_check(w: &mut IndentWriter) {
     w.line("}");
     w.dedent();
     w.line("}");
+    w.dedent();
+    w.line("}");
+    w.line("#[allow(unused_imports)]");
+    w.line("use cddlc_bits::BitsCheck as _;");
+    if !module.types.keys().any(|n| to_pascal_case(n) == "BitsCheck") {
+        w.line("pub use cddlc_bits::BitsCheck;");
+    }
 }
 
-fn emit_header(w: &mut IndentWriter, opts: &CodegenOptions) {
+fn emit_header(w: &mut IndentWriter, module: &IrModule, opts: &CodegenOptions) {
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
         w.line(&l);
     }
@@ -335,7 +348,12 @@ fn emit_header(w: &mut IndentWriter, opts: &CodegenOptions) {
         w.blank();
     }
 
-    // Error types
+    // Error types, in a module of their own so a rule of the same name
+    // (WebDriver BiDi's `ErrorCode`) can't collide with them; re-exported at
+    // the crate root unless a schema type takes the name (dgtlrift/cddlc#149).
+    w.line("/// cddlc's runtime types, apart from the schema's.");
+    w.line(&format!("pub mod {RUNTIME_MOD} {{"));
+    w.indent();
     w.line("/// Field-level decode error.");
     w.line("#[derive(Debug, Clone, PartialEq)]");
     w.line("pub struct FieldError {");
@@ -362,7 +380,20 @@ fn emit_header(w: &mut IndentWriter, opts: &CodegenOptions) {
     w.line("ValidationFailed,");
     w.dedent();
     w.line("}");
+    w.dedent();
+    w.line("}");
+    let free: Vec<&str> = RUNTIME_TYPES.iter().copied()
+        .filter(|t| !module.types.keys().any(|n| to_pascal_case(n) == *t))
+        .collect();
+    if !free.is_empty() {
+        w.line(&format!("pub use {RUNTIME_MOD}::{{{}}};", free.join(", ")));
+    }
 }
+
+/// The module holding cddlc's runtime types (snake_case, so no rule's
+/// PascalCase type can take its name), and the types in it.
+const RUNTIME_MOD: &str = "cddlc_runtime";
+const RUNTIME_TYPES: &[&str] = &["ErrorCode", "FieldError"];
 
 // ── Struct ────────────────────────────────────────────────────────────────────
 
@@ -2433,7 +2464,7 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("use serde::{Deserialize, Serialize};");
     w.blank();
     if cddlc_codegen::module_uses_bits(module) {
-        emit_bits_check(&mut w);
+        emit_bits_check(&mut w, module);
         w.blank();
     }
 

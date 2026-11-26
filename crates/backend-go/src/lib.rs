@@ -43,6 +43,18 @@ impl Backend for GoBackend {
     }
 }
 
+
+/// Exported names the generated package's runtime defines (`type Null
+/// struct{}`, the CDDL nil). A rule whose type would take one gets a trailing
+/// `_` instead, which no rule's name can produce (dgtlrift/cddlc#149).
+const RESERVED_TYPES: &[&str] = &["Null"];
+
+/// The Go type name of a rule.
+pub fn go_type_name(name: &str) -> String {
+    let n = to_pascal_case(name);
+    if RESERVED_TYPES.contains(&n.as_str()) { format!("{n}_") } else { n }
+}
+
 fn fmt_tag(opts: &CodegenOptions) -> &'static str {
     if opts.is_json() { "json" } else { "cbor" }
 }
@@ -764,7 +776,7 @@ fn go_primitive(p: &Primitive) -> &'static str {
 pub fn go_type(ty: &TypeRef) -> String {
     match ty {
         TypeRef::Primitive(p) => go_primitive(p).to_owned(),
-        TypeRef::Named(n) => to_pascal_case(n),
+        TypeRef::Named(n) => go_type_name(n),
         TypeRef::Tagged(_, inner) => go_type(inner),
         TypeRef::Choice(_) => "any".into(),
     }
@@ -1046,7 +1058,7 @@ fn struct_fields<'a>(s: &'a StructDef, opts: &CodegenOptions) -> Vec<&'a cddlc_i
 }
 
 fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &CodegenOptions) {
-    let name = to_pascal_case(&s.name);
+    let name = go_type_name(&s.name);
     cddlc_codegen::emit_doc_lines(w, s.doc.as_deref(), cddlc_codegen::DocStyle::Line("//"));
     if s.deprecated { w.line("//"); w.line("// Deprecated: marked deprecated in the schema."); }
     w.line(&format!("type {name} struct {{"));
@@ -1365,7 +1377,7 @@ fn is_nil(v: &EnumVariant) -> bool {
 }
 
 fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
-    let name = to_pascal_case(&e.name);
+    let name = go_type_name(&e.name);
     let kind_ty = format!("{name}Kind");
     let at = go_str(&name);
 
@@ -1627,7 +1639,7 @@ fn flat_width(a: &ArrayDef, module: &IrModule) -> Option<usize> {
 }
 
 fn emit_array(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, opts: &CodegenOptions) {
-    let name = to_pascal_case(&a.name);
+    let name = go_type_name(&a.name);
     let elem = go_type(&a.element);
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("//"));
     if a.deprecated { w.line("//"); w.line("// Deprecated: marked deprecated in the schema."); }
@@ -1677,7 +1689,7 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, opts: &Co
 
 /// A table (`{ * tstr => uint }`): a Go map (dgtlrift/cddlc#82).
 fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
-    let name = to_pascal_case(&m.name);
+    let name = go_type_name(&m.name);
     let key = go_type(&m.key_ty);
     let val = go_type(&m.val_ty);
     cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("//"));
@@ -1725,7 +1737,7 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
 // ── Alias ─────────────────────────────────────────────────────────────────────
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
-    let name = to_pascal_case(&a.name);
+    let name = go_type_name(&a.name);
     let inner = go_type(&a.ty);
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("//"));
     if a.deprecated { w.line("//"); w.line("// Deprecated: marked deprecated in the schema."); }
@@ -1914,7 +1926,7 @@ fn test_fn(w: &mut IndentWriter, name: &str, body: &[String]) {
 }
 
 fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts: &CodegenOptions) {
-    let name = to_pascal_case(&s.name);
+    let name = go_type_name(&s.name);
     for (suffix, explicit) in [("Default", false), ("Explicit", true)] {
         let value = go_struct_value(s, module, explicit, 0);
         test_fn(w, &format!("Test{name}Roundtrip{suffix}"), &[format!("roundtrip(t, {value}, Decode{name})")]);
@@ -1931,7 +1943,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
 
 /// A test value for one enum variant.
 fn go_variant_value(e: &EnumDef, v: &EnumVariant, module: &IrModule, depth: usize) -> String {
-    let name = to_pascal_case(&e.name);
+    let name = go_type_name(&e.name);
     let vname = to_pascal_case(&v.name);
     if !has_payload(v) {
         return format!("New{name}{vname}()");
@@ -1940,7 +1952,7 @@ fn go_variant_value(e: &EnumDef, v: &EnumVariant, module: &IrModule, depth: usiz
 }
 
 fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &CodegenOptions) {
-    let name = to_pascal_case(&e.name);
+    let name = go_type_name(&e.name);
     let takes_text = e.variants.iter().any(|v| has_payload(v) && matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
     for v in &e.variants {
         // In JSON a byte string is text, which a tstr variant decodes first.
@@ -1966,7 +1978,7 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
 }
 
 fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, module: &IrModule) {
-    let name = to_pascal_case(&a.name);
+    let name = go_type_name(&a.name);
     let valid = go_value(&a.ty, &Occurrence::Required, &a.constraints, module, false, 1);
     test_fn(w, &format!("Test{name}RoundtripValid"), &[format!("roundtrip(t, {name}({valid}), Decode{name})")]);
     if let Some(bad) = go_invalid_value(&a.constraints, &a.ty) {
@@ -1977,14 +1989,14 @@ fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, module: &IrModule) {
 }
 
 fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, module: &IrModule) {
-    let name = to_pascal_case(&a.name);
+    let name = go_type_name(&a.name);
     test_fn(w, &format!("Test{name}RoundtripEmpty"), &[format!("roundtrip(t, {name}{{}}, Decode{name})")]);
     let item = go_value(&a.element, &Occurrence::Required, &[], module, true, 1);
     test_fn(w, &format!("Test{name}RoundtripItems"), &[format!("roundtrip(t, {name}{{{item}, {item}}}, Decode{name})")]);
 }
 
 fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, module: &IrModule) {
-    let name = to_pascal_case(&m.name);
+    let name = go_type_name(&m.name);
     test_fn(w, &format!("Test{name}RoundtripEmpty"), &[format!("roundtrip(t, {name}{{}}, Decode{name})")]);
     test_fn(w, &format!("Test{name}RoundtripEntries"), &[format!("roundtrip(t, {}, Decode{name})", go_map_value(m, module, true, 1))]);
 }
@@ -1998,7 +2010,7 @@ const MAX_FIXTURE_DEPTH: usize = 4;
 fn go_map_value(m: &MapDef, module: &IrModule, explicit: bool, depth: usize) -> String {
     let key = go_value(&m.key_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
     let val = go_value(&m.val_ty, &Occurrence::Required, &[], module, explicit, depth + 1);
-    format!("{}{{{key}: {val}}}", to_pascal_case(&m.name))
+    format!("{}{{{key}: {val}}}", go_type_name(&m.name))
 }
 
 fn go_struct_value(s: &StructDef, module: &IrModule, explicit: bool, depth: usize) -> String {
@@ -2013,7 +2025,7 @@ fn go_struct_value(s: &StructDef, module: &IrModule, explicit: bool, depth: usiz
             fields.push(format!("{}: map[string]{}{{\"other-key\": {v}}}", go_field_name(&r.name), go_type(&r.val_ty)));
         }
     }
-    format!("{}{{{}}}", to_pascal_case(&s.name), fields.join(", "))
+    format!("{}{{{}}}", go_type_name(&s.name), fields.join(", "))
 }
 
 /// A Go literal of primitive type `p`, typed so it can't default to `int`.
@@ -2085,7 +2097,7 @@ fn go_value(ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], module: 
             None => "nil".into(),
         },
         TypeRef::Named(n) => {
-            let tn = to_pascal_case(n);
+            let tn = go_type_name(n);
             if depth > MAX_FIXTURE_DEPTH {
                 return format!("{tn}{{}}");
             }

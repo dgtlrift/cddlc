@@ -465,7 +465,10 @@ and the test fails when one starts working, so the list stays current.
 - **Lua**: `float16` is written at float32 width; `.regexp` constraints are not checked; Lua 5.3+ only (no LuaJIT).
 - **Rust**: `ciborium` and `cbor4ii` runtime options are listed in the CLI but the backend only fully implements `minicbor`.
   A recursive type (`tree = { ? left: tree }`) holds a `Box` where it would contain itself, so with `--no-std`
-  such a schema needs `alloc`.
+  such a schema needs `alloc`. The runtime's own types live in modules of their own,
+  `cddlc_runtime` (`ErrorCode`, `FieldError`) and `cddlc_bits` (`BitsCheck`). They're
+  re-exported at the crate root unless a rule takes the name, as WebDriver BiDi's
+  `ErrorCode` does.
 - **C / C++**: recursive types don't compile yet (#156).
 
 ### Schema language gaps

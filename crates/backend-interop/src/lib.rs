@@ -1236,7 +1236,9 @@ fn emit_go_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions) 
 
     let mut used = std::collections::HashSet::new();
     for v in vectors {
-        let ty = to_pascal_case(&v.type_name);
+        // The generated package's name for the type (a rule named like a
+        // runtime type gets a trailing `_`; dgtlrift/cddlc#149).
+        let ty = backend_go::go_type_name(&v.cddl_name);
         let base = format!("TestInterop{ty}{}", to_pascal_case(&v.description.replace(' ', "_")));
         let mut name = base.clone();
         let mut i = 2;

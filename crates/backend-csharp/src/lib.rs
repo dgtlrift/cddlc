@@ -674,7 +674,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
         w.line("var tag = reader.ReadTag();");
         w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
     }
-    w.line(&format!("return ({type_name})Cddl.Choice(reader,"));
+    w.line(&format!("return ({type_name})Cddl_.Choice(reader,"));
     w.indent();
     let n = e.variants.len();
     for (i, v) in e.variants.iter().enumerate() {
@@ -682,7 +682,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
         let sep = if i + 1 == n { ");" } else { "," };
         match enum_literal(v) {
             Some(_) if matches!(v.ty, TypeRef::Primitive(Primitive::Null)) =>
-                w.line(&format!("r => Cddl.ReadNull(r) ?? {vname}.Instance{sep}")),
+                w.line(&format!("r => Cddl_.ReadNull(r) ?? {vname}.Instance{sep}")),
             Some(lit) => w.line(&format!(
                 "r => {} == {lit} ? {vname}.Instance : throw new CborContentException(\"not {vname}\"){sep}",
                 cs_decode_expr_from(&v.ty, "r", opts)
@@ -785,7 +785,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOpt
     w.line("{");
     w.indent();
     w.line("using var doc = JsonDocument.Parse(data);");
-    w.line(&format!("return ({type_name})Cddl.Choice(doc.RootElement,"));
+    w.line(&format!("return ({type_name})Cddl_.Choice(doc.RootElement,"));
     w.indent();
     let n = e.variants.len();
     for (i, v) in e.variants.iter().enumerate() {
@@ -840,7 +840,7 @@ fn cs_json_from_element(ty: &TypeRef, el: &str, opts: &CodegenOptions) -> String
             let tries: Vec<String> = alts.iter()
                 .map(|a| format!("{e2} => (object?){}", cs_json_from_element(a, &e2, opts)))
                 .collect();
-            let call = format!("Cddl.Choice({el}, {})", tries.join(", "));
+            let call = format!("Cddl_.Choice({el}, {})", tries.join(", "));
             match cs_typeref(ty, opts).as_str() {
                 "object" => call,
                 t => format!("({t}){call}"),
@@ -853,7 +853,7 @@ fn cs_json_from_element(ty: &TypeRef, el: &str, opts: &CodegenOptions) -> String
 /// The JSON counterpart of `emit_cbor_helpers`: trying a choice's alternatives.
 fn emit_json_helpers(w: &mut IndentWriter) {
     for l in [
-        "internal static class Cddl",
+        "internal static class Cddl_",
         "{",
         "    public static object Choice(JsonElement element, params Func<JsonElement, object?>[] alternatives)",
         "    {",
@@ -926,7 +926,7 @@ fn cs_json_write_stmt(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String
         TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => format!("writer.WriteStringValue(Base64Url.Encode({expr}));"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "writer.WriteNullValue();".into(),
         TypeRef::Named(_) => format!("writer.WriteRawValue({expr}.ToJson());"),
-        _ if cs_typeref(ty, opts) == "object" => format!("Cddl.WriteChoice(writer, {expr}, options);"),
+        _ if cs_typeref(ty, opts) == "object" => format!("Cddl_.WriteChoice(writer, {expr}, options);"),
         _ => format!("JsonSerializer.Serialize(writer, {expr}, options);"),
     }
 }
@@ -946,7 +946,7 @@ fn emit_choice_member_converter(w: &mut IndentWriter, name: &str, ty: &TypeRef, 
     w.blank();
     w.line("public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)");
     w.indent();
-    w.line("=> Cddl.WriteChoice(writer, value, options);");
+    w.line("=> Cddl_.WriteChoice(writer, value, options);");
     w.dedent();
     w.dedent();
     w.line("}");
@@ -987,7 +987,7 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &C
     w.blank();
 
     if opts.is_json() {
-        w.line("public byte[] ToJson() => Cddl.Json(writer =>");
+        w.line("public byte[] ToJson() => Cddl_.Json(writer =>");
         w.line("{");
         w.indent();
         w.line("var options = JsonSerializerOptions.Default;");
@@ -1116,7 +1116,7 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.blank();
 
     if opts.is_json() {
-        w.line("public byte[] ToJson() => Cddl.Json(writer =>");
+        w.line("public byte[] ToJson() => Cddl_.Json(writer =>");
         w.line("{");
         w.indent();
         w.line("var options = JsonSerializerOptions.Default;");
@@ -1223,7 +1223,7 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
                 format!("{key_ty}.Parse(p.Name, System.Globalization.CultureInfo.InvariantCulture)"),
             )
         };
-        w.line("public byte[] ToJson() => Cddl.Json(writer =>");
+        w.line("public byte[] ToJson() => Cddl_.Json(writer =>");
         w.line("{");
         w.indent();
         w.line("var options = JsonSerializerOptions.Default;");
@@ -1547,8 +1547,8 @@ fn cs_base(ty: &TypeRef) -> &TypeRef {
 /// form, which only dCBOR asks for.
 fn cs_encode_call(p: &Primitive, expr: &str, opts: &CodegenOptions) -> String {
     match p {
-        Primitive::Float32 if !opts.dcbor => format!("Cddl.WriteFloat32(writer, {expr})"),
-        Primitive::Float64 | Primitive::Float if !opts.dcbor => format!("Cddl.WriteFloat64(writer, {expr})"),
+        Primitive::Float32 if !opts.dcbor => format!("Cddl_.WriteFloat32(writer, {expr})"),
+        Primitive::Float64 | Primitive::Float if !opts.dcbor => format!("Cddl_.WriteFloat64(writer, {expr})"),
         Primitive::Bool      => format!("writer.WriteBoolean({expr})"),
         Primitive::Null      => "writer.WriteNull()".into(),
         Primitive::Undefined => "writer.WriteSimpleValue(CborSimpleValue.Undefined)".into(),
@@ -1567,7 +1567,7 @@ fn cs_encode_call(p: &Primitive, expr: &str, opts: &CodegenOptions) -> String {
 /// the encoded item in turn).
 fn emit_cbor_helpers(w: &mut IndentWriter) {
     for l in [
-        "internal static class Cddl",
+        "internal static class Cddl_",
         "{",
         "    public static object? ReadNull(CborReader reader) { reader.ReadNull(); return null; }",
         "",
@@ -1699,14 +1699,14 @@ fn cs_decode_expr_from(ty: &TypeRef, reader: &str, opts: &CodegenOptions) -> Str
         TypeRef::Named(n)     => format!("{}.Decode({reader})", to_pascal_case(n)),
         TypeRef::Tagged(tag, inner) => {
             let r = format!("{reader}1");
-            format!("Cddl.Tagged({reader}, {}UL, {r} => {})", tag.0, cs_decode_expr_from(inner, &r, opts))
+            format!("Cddl_.Tagged({reader}, {}UL, {r} => {})", tag.0, cs_decode_expr_from(inner, &r, opts))
         }
         TypeRef::Choice(alts) => {
             let r = format!("{reader}1");
             let tries: Vec<String> = alts.iter()
                 .map(|a| format!("{r} => (object?){}", cs_decode_expr_from(a, &r, opts)))
                 .collect();
-            let call = format!("Cddl.Choice({reader}, {})", tries.join(", "));
+            let call = format!("Cddl_.Choice({reader}, {})", tries.join(", "));
             match cs_typeref(ty, opts).as_str() {
                 "object" => call,
                 t => format!("({t}){call}"),
@@ -1718,8 +1718,8 @@ fn cs_decode_expr_from(ty: &TypeRef, reader: &str, opts: &CodegenOptions) -> Str
 fn cs_decode_call(p: &Primitive, reader: &str) -> String {
     match p {
         Primitive::Bool      => format!("{reader}.ReadBoolean()"),
-        Primitive::Null      => format!("Cddl.ReadNull({reader})"),
-        Primitive::Undefined => format!("Cddl.ReadUndefined({reader})"),
+        Primitive::Null      => format!("Cddl_.ReadNull({reader})"),
+        Primitive::Undefined => format!("Cddl_.ReadUndefined({reader})"),
         Primitive::Uint      => format!("{reader}.ReadUInt64()"),
         Primitive::Int       => format!("{reader}.ReadInt64()"),
         Primitive::Float16   => format!("(float){reader}.ReadHalf()"),

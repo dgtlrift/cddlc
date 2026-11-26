@@ -447,13 +447,13 @@ fn test_inline_choice_is_object_tried_in_order() {
     let g = compile("r = { v: int / float }");
     assert!(g.source.contains("public object V { get; set; }"), "{}", g.source);
     assert!(g.source.contains("case long alt_thisV:"), "{}", g.source);
-    assert!(g.source.contains("Cddl.Choice(reader, reader1 => (object?)reader1.ReadInt64(), reader1 => (object?)reader1.ReadDouble())"), "{}", g.source);
+    assert!(g.source.contains("Cddl_.Choice(reader, reader1 => (object?)reader1.ReadInt64(), reader1 => (object?)reader1.ReadDouble())"), "{}", g.source);
 }
 
 #[test]
 fn test_tagged_member_checks_its_tag() {
     let g = compile("r = { t: #6.1(uint) }");
-    assert!(g.source.contains("Cddl.Tagged(reader, 1UL, reader1 => reader1.ReadUInt64())"), "{}", g.source);
+    assert!(g.source.contains("Cddl_.Tagged(reader, 1UL, reader1 => reader1.ReadUInt64())"), "{}", g.source);
 }
 
 #[test]
@@ -466,6 +466,6 @@ fn test_integer_enum_writes_its_literal() {
 #[test]
 fn test_floats_keep_their_width() {
     let g = compile("r = { a: float32, b: float64 }");
-    assert!(g.source.contains("Cddl.WriteFloat32(writer, this.A)"), "{}", g.source);
-    assert!(g.source.contains("Cddl.WriteFloat64(writer, this.B)"), "{}", g.source);
+    assert!(g.source.contains("Cddl_.WriteFloat32(writer, this.A)"), "{}", g.source);
+    assert!(g.source.contains("Cddl_.WriteFloat64(writer, this.B)"), "{}", g.source);
 }
