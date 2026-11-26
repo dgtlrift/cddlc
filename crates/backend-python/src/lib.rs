@@ -1339,7 +1339,13 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
         w.indent();
         w.line(&format!("original = {}", py_variant_value(e, v, module, opts, 0)));
         w.line(&format!("decoded = {class_name}.decode(original.encode())"));
-        w.line("assert decoded == original");
+        // A map variant with the same members as an earlier one decodes as
+        // that one, to the same encoding (dgtlrift/cddlc#192).
+        if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+            w.line("assert decoded.encode() == original.encode()");
+        } else {
+            w.line("assert decoded == original");
+        }
         w.dedent();
         w.blank();
     }

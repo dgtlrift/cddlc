@@ -1253,8 +1253,14 @@ fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &C
         w.indent();
         w.line(&format!("final obj = {class_name}.{vname}({}({}));", to_pascal_case(n), args.join(", ")));
         w.line(&format!("final decoded = {class_name}.decode(obj.encode());"));
-        w.line("expect(decoded.kind, equals(obj.kind));");
-        w.line(&format!("expect(decoded.value, isA<{}>());", to_pascal_case(n)));
+        // A map variant with the same members as an earlier one decodes as
+        // that one, to the same encoding (dgtlrift/cddlc#192).
+        if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+            w.line("expect(decoded.encode(), equals(obj.encode()));");
+        } else {
+            w.line("expect(decoded.kind, equals(obj.kind));");
+            w.line(&format!("expect(decoded.value, isA<{}>());", to_pascal_case(n)));
+        }
         w.dedent();
         w.line("});");
     }

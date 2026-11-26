@@ -2210,7 +2210,7 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.indent();
 
     for (_, def) in &module.types {
-        emit_type_tests(&mut w, def, opts);
+        emit_type_tests(&mut w, def, module, opts);
         w.blank();
     }
 
@@ -2219,10 +2219,10 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct_tests(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum_tests(w, e, opts),
+        TypeDef::Enum(e)   => emit_enum_tests(w, e, module, opts),
         TypeDef::Alias(a)  => emit_alias_tests(w, a, opts),
         TypeDef::Array(a)  => emit_array_tests(w, a, opts),
         TypeDef::Map(m)    => emit_map_tests(w, m, opts),
@@ -2300,7 +2300,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
     }
 }
 
-fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
+fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&e.name);
 
     for v in &e.variants {
@@ -2318,7 +2318,12 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         };
         w.line(&format!("{type_name} original = {construct};"));
         if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
-        w.line("Assert.IsType(original.GetType(), decoded);");
+        // A map variant with the same members as an earlier one decodes as
+        // that one; the encodings, compared above, are the same
+        // (dgtlrift/cddlc#192).
+        if !e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+            w.line("Assert.IsType(original.GetType(), decoded);");
+        }
         w.dedent();
         w.line("}");
         w.blank();

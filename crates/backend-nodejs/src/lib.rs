@@ -2492,7 +2492,13 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
         w.indent();
         w.line(&format!("const original: {type_name} = {construct};"));
         w.line(&format!("const decoded = {dname}({fname}(original));"));
-        w.line("expect(decoded).toEqual(original);");
+        // A map variant with the same members as an earlier one decodes as
+        // that one, to the same encoding (dgtlrift/cddlc#192).
+        if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+            w.line(&format!("expect({fname}(decoded)).toEqual({fname}(original));"));
+        } else {
+            w.line("expect(decoded).toEqual(original);");
+        }
         w.dedent();
         w.line("});");
     }

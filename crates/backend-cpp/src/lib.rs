@@ -1733,7 +1733,19 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
     w.line("assert(decode(&dec, decoded) == 0);");
-    w.line("assert(original == decoded);");
+    // An enum with a map variant whose members an earlier one has too: it
+    // decodes as the earlier one, to the same encoding (dgtlrift/cddlc#192).
+    let ambiguous = matches!(def, TypeDef::Enum(e) if e.variants.iter().enumerate()
+        .any(|(i, v)| e.variants[..i].iter().any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module))));
+    if ambiguous {
+        w.line("uint8_t buf2[sizeof(buf)];");
+        w.line("nanocbor_encoder_t enc2;");
+        w.line("nanocbor_encoder_init(&enc2, buf2, sizeof(buf2));");
+        w.line("assert(encode(&enc2, decoded) == 0);");
+        w.line("assert(nanocbor_encoded_len(&enc2) == enc_len && std::memcmp(buf, buf2, enc_len) == 0);");
+    } else {
+        w.line("assert(original == decoded);");
+    }
     if enum_loop {
         w.dedent();
         w.line("}");
