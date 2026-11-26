@@ -192,6 +192,34 @@ cmake --build build
 Requires CMake 3.17+ (3.16+ for JSON) and a C++17 compiler. CMake downloads
 nanocbor (or nlohmann/json) on the first configure.
 
+## Recursive types
+
+A member or alternative that holds its own type again, directly or through other types, is a
+`Box<T>`. Examples are `tree = { value: int, ? left: tree }`, and `binop = [op: tstr, lhs: expr,
+rhs: expr]` with `expr = int / binop`. Without the box, a type would contain itself.
+
+- **What a `Box` is:** a value type. It copies deep, compares by value, and its value lives
+  elsewhere. Empty means absent for an optional member (`has_value()`, `*box`, `box->`,
+  `value()`, which throws `std::bad_optional_access` when empty).
+- **Memory:** with `--alloc heap`, a box's value is on the heap. Otherwise decoding takes its
+  memory from the callbacks (any allocator: heap, pool or arena):
+
+  ```cpp
+  Callbacks cb{};
+  cb.alloc   = [](void *, std::size_t n) { return ::operator new(n); };
+  cb.release = [](void *, void *p) { ::operator delete(p); };
+  Tree t{};
+  if (decode(&dec, t, cb) == 0) { /* t.left->value ... */ }
+  ```
+
+  Without `alloc`, decoding a recursive member fails with `ErrorCode::AllocFailed`. A box gives
+  its memory back through `release` when it goes. A copy of a box is made on the heap.
+- **Encoding:** an empty required box is an error (`-1`).
+- **JSON:** boxes use the heap. An array or table member boxes the type the alias stands for
+  (`Box<std::vector<Node>>`).
+
+A repeated member, or a map's other entries, that holds its own type again isn't supported yet.
+
 ## Known gaps
 
 - **nanocbor only**: `--runtime` is accepted, but only nanocbor is wired up.

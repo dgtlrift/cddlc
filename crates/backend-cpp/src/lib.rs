@@ -30,6 +30,11 @@ impl Backend for CppBackend {
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "C++", true)?;
+        if let Some(msg) = unsupported_recursion(module, opts) {
+            return Err(CodegenError::new(msg));
+        }
+        // The members and variants held in a `Box` (dgtlrift/cddlc#156).
+        BOXED.with(|b| *b.borrow_mut() = boxed_items(module, opts));
         let name      = module.name.as_str();
         let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}-cpp");
@@ -170,6 +175,8 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("#include <cstddef>");
     w.line("#include <optional>");
     w.line("#include <variant>");
+    w.line("#include <new>");
+    w.line("#include <utility>");
     w.line("#include <string_view>");
     w.line("#include <array>");
     w.line("#include <vector>");
@@ -192,6 +199,8 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("UnknownField,");
     w.line("TagMismatch,");
     w.line("ValidationFailed,");
+    // A recursive member's memory couldn't be had (dgtlrift/cddlc#156).
+    w.line("AllocFailed,");
     w.dedent();
     w.line("};");
     w.blank();
@@ -210,6 +219,10 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.indent();
     w.line("void (*on_error)(void *ctx, FieldError err){nullptr};");
     w.line("void (*on_unknown_field)(void *ctx, std::string_view key){nullptr};");
+    // A recursive member's memory when decoding without `--alloc heap`; it's
+    // given back through `release` when its `Box` goes (dgtlrift/cddlc#156).
+    w.line("void *(*alloc)(void *ctx, std::size_t size){nullptr};");
+    w.line("void (*release)(void *ctx, void *ptr){nullptr};");
     w.dedent();
     w.line("};");
     w.blank();
@@ -218,7 +231,9 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("// Forward declarations");
     for (_, def) in &module.types {
         match def {
-            TypeDef::Struct(_) | TypeDef::Enum(_) => {
+            // Arrays and tables are structs too, which a `Box` may hold
+            // (dgtlrift/cddlc#156).
+            TypeDef::Struct(_) | TypeDef::Enum(_) | TypeDef::Array(_) | TypeDef::Map(_) => {
                 w.line(&format!("struct {};", to_pascal_case(def.name())));
             }
             _ => {}
@@ -226,8 +241,20 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     }
     w.blank();
 
+    // A type that holds itself again does so through a `Box`
+    // (dgtlrift/cddlc#156).
+    let boxes = BOXED.with(|b| !b.borrow().is_empty());
+    if boxes {
+        for line in BOX_TEMPLATE.lines() {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
+        w.blank();
+    }
+
     // ── Type declarations ─────────────────────────────────────────────────────
-    for (_, def) in &module.types {
+    // After what each holds by value.
+    for tname in cddlc_codegen::inline_decl_order(module) {
+        let Some(def) = module.get(&tname) else { continue };
         emit_type_decl_hpp(&mut w, def, opts);
         w.blank();
     }
@@ -244,6 +271,25 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
         ));
     }
     w.blank();
+    // A `Box` is encoded through it, and decoded into memory from the heap
+    // (`--alloc heap`) or `Callbacks::alloc` (dgtlrift/cddlc#156).
+    if boxes {
+        w.line("template <class T>");
+        w.line("int encode(nanocbor_encoder_t *enc, const Box<T> &val) { return val ? encode(enc, *val) : -1; }");
+        w.line("template <class T>");
+        w.line("int decode(nanocbor_value_t *dec, Box<T> &out, const Callbacks &cb = {}, void *ctx = nullptr) {");
+        w.indent();
+        if is_heap(opts) {
+            w.line("out = Box<T>::heap();");
+        } else {
+            w.line("out = Box<T>::in(cb.alloc, cb.release, ctx);");
+            w.line("if (!out) { if (cb.on_error) cb.on_error(ctx, {ErrorCode::AllocFailed, \"Box\"}); return -1; }");
+        }
+        w.line("return decode(dec, *out, cb, ctx);");
+        w.dedent();
+        w.line("}");
+        w.blank();
+    }
 
     w.line(&format!("}} // namespace {ns}"));
     w.blank();
@@ -268,7 +314,13 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     w.indent();
     for f in &s.fields {
         cddlc_codegen::emit_doc_lines(w, f.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
-        let ty_str = cpp_field_type(&f.ty, &f.occurrence, opts);
+        // A member that holds this type again is a `Box`, empty when an
+        // optional one is absent (dgtlrift/cddlc#156).
+        let ty_str = if is_boxed(&s.name, &f.name) {
+            format!("Box<{}>", cpp_typeref(&f.ty, opts))
+        } else {
+            cpp_field_type(&f.ty, &f.occurrence, opts)
+        };
         let fname  = to_snake_case(&f.name);
         w.line(&format!("{ty_str} {fname}{{}};"));
         // A fixed-capacity repeated member says how many items it holds
@@ -329,7 +381,7 @@ fn emit_enum_hpp(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     // The payload types of valued variants, deduplicated in order.
     let mut payloads: Vec<String> = Vec::new();
     for v in &e.variants {
-        if let Some(t) = cpp_variant_payload(v, opts) {
+        if let Some(t) = cpp_variant_payload_in(&e.name, v, opts) {
             if !payloads.contains(&t) {
                 payloads.push(t);
             }
@@ -354,7 +406,7 @@ fn emit_enum_hpp(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     }
     // The payload of a valued variant; `std::monostate` for text, nil and
     // integer-literal variants. Defaults to the first variant's payload.
-    match first.and_then(|v| cpp_variant_payload(v, opts)) {
+    match first.and_then(|v| cpp_variant_payload_in(&e.name, v, opts)) {
         Some(t) => w.line(&format!("Variant value{{std::in_place_type<{t}>}};")),
         None => w.line("Variant value{};"),
     }
@@ -362,12 +414,12 @@ fn emit_enum_hpp(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
     for v in &e.variants {
         let k = to_pascal_case(&v.name);
-        match cpp_variant_payload(v, opts) {
+        match cpp_variant_payload_in(&e.name, v, opts) {
             None => w.line(&format!(
                 "static {type_name} make_{k}() {{ return {type_name}{{Kind::{k}, Variant{{}}}}; }}"
             )),
             Some(t) => w.line(&format!(
-                "static {type_name} make_{k}({t} v) {{ return {type_name}{{Kind::{k}, Variant(std::in_place_type<{t}>, v)}}; }}"
+                "static {type_name} make_{k}({t} v) {{ return {type_name}{{Kind::{k}, Variant(std::in_place_type<{t}>, std::move(v))}}; }}"
             )),
         }
     }
@@ -388,6 +440,21 @@ fn is_heap(opts: &CodegenOptions) -> bool {
 /// The C++ payload type of an enum variant, or `None` for a variant that carries
 /// no value: a text literal, `nil`, or an integer literal (dgtlrift/cddlc#49).
 fn cpp_variant_payload(v: &EnumVariant, opts: &CodegenOptions) -> Option<String> {
+    cpp_variant_payload_in("", v, opts)
+}
+
+/// A variant's payload type, `Box<T>` for one that holds its enum again
+/// (dgtlrift/cddlc#156).
+fn cpp_variant_payload_in(owner: &str, v: &EnumVariant, opts: &CodegenOptions) -> Option<String> {
+    if let TypeRef::Named(n) = &v.ty {
+        if is_boxed(owner, &v.name) {
+            return Some(format!("Box<{}>", to_pascal_case(n)));
+        }
+    }
+    cpp_variant_payload_plain(v, opts)
+}
+
+fn cpp_variant_payload_plain(v: &EnumVariant, opts: &CodegenOptions) -> Option<String> {
     if cpp_int_literal(v).is_some() {
         return None;
     }
@@ -609,6 +676,244 @@ fn emit_cpp_repeat_check(w: &mut IndentWriter, f: &cddlc_ir::FieldDef, n: &str) 
     }
 }
 
+// ── Recursion (dgtlrift/cddlc#156) ───────────────────────────────────────────
+
+thread_local! {
+    /// The members and variants held in a `Box`, as (owner, item) names: set
+    /// for each `generate`.
+    static BOXED: std::cell::RefCell<std::collections::HashSet<(String, String)>> = Default::default();
+}
+
+/// Each member and variant that holds its owner again, inline: held in a
+/// `Box`, as a type can't contain itself.
+fn boxed_items(module: &IrModule, opts: &CodegenOptions) -> std::collections::HashSet<(String, String)> {
+    let mut out = std::collections::HashSet::new();
+    for (name, def) in &module.types {
+        match def {
+            TypeDef::Struct(s) => for f in &s.fields {
+                if matches!(f.occurrence, Occurrence::Required | Occurrence::Optional)
+                    && boxed_named(&f.ty, opts).is_some()
+                    && cddlc_codegen::is_indirect(name, &f.ty, module)
+                {
+                    out.insert((name.to_string(), f.name.to_string()));
+                }
+            },
+            TypeDef::Enum(e) => for v in &e.variants {
+                if matches!(v.ty, TypeRef::Named(_)) && cddlc_codegen::is_indirect(name, &v.ty, module) {
+                    out.insert((name.to_string(), v.name.to_string()));
+                }
+            },
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The named type a recursive member's `Box` holds: the member's own, or a
+/// choice's first alternative, which is how CBOR holds a choice that isn't
+/// of primitives (see `cpp_typeref`). JSON holds such a choice as an
+/// `nlohmann::json`, which needs no `Box`.
+fn boxed_named<'a>(ty: &'a TypeRef, opts: &CodegenOptions) -> Option<&'a str> {
+    match ty {
+        TypeRef::Named(n) => Some(n.as_str()),
+        TypeRef::Choice(cs) if !opts.is_json() && prim_choice(cs, opts).is_none() => match cs.first() {
+            Some(TypeRef::Named(n)) => Some(n.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `owner`'s member or variant `item` is held in a `Box`.
+fn is_boxed(owner: &str, item: &str) -> bool {
+    BOXED.with(|b| b.borrow().contains(&(owner.to_owned(), item.to_owned())))
+}
+
+/// A recursive member C++ can't hold yet: repeated, of other entries, under
+/// a tag, or of an inline choice.
+fn unsupported_recursion(module: &IrModule, opts: &CodegenOptions) -> Option<String> {
+    for (name, def) in &module.types {
+        match def {
+            TypeDef::Struct(s) => {
+                for f in &s.fields {
+                    if !cddlc_codegen::is_indirect(name, &f.ty, module) {
+                        continue;
+                    }
+                    if f.occurrence.is_repeated() {
+                        return Some(format!("'{name}.{}': C++ can't hold a repeated member that holds '{name}' again yet; use an array type for it (dgtlrift/cddlc#156)", f.name));
+                    }
+                    // JSON holds an inline choice as an `nlohmann::json`.
+                    let json_choice = opts.is_json() && matches!(f.ty, TypeRef::Choice(_));
+                    if boxed_named(&f.ty, opts).is_none() && !json_choice {
+                        return Some(format!("'{name}.{}': C++ can't hold a recursive member that isn't a named type yet (dgtlrift/cddlc#156)", f.name));
+                    }
+                }
+                if let Some(r) = &s.rest {
+                    if cddlc_codegen::is_indirect(name, &r.val_ty, module) {
+                        return Some(format!("'{name}': C++ can't hold other entries whose value holds '{name}' again yet (dgtlrift/cddlc#156)"));
+                    }
+                }
+            }
+            TypeDef::Enum(e) => {
+                for v in &e.variants {
+                    if cddlc_codegen::is_indirect(name, &v.ty, module) && !matches!(v.ty, TypeRef::Named(_)) {
+                        return Some(format!("'{name}': C++ can't hold a recursive alternative that isn't a named type yet (dgtlrift/cddlc#156)"));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `Box<T>`: holds a value of a type that holds itself again, which a type
+/// can't contain directly. A value type: copies deep, compares by value, and
+/// empty is absent for an optional member. Its memory is from the heap, or
+/// from `Callbacks::alloc` when decoding without `--alloc heap`.
+const BOX_TEMPLATE: &str = r#"/// Holds a value of a type that holds itself again (dgtlrift/cddlc#156): a
+/// value type (copies deep, compares by value) whose value lives elsewhere.
+/// Empty is absent, for an optional member. Its memory is from the heap, or,
+/// when decoding without `--alloc heap`, from `Callbacks::alloc`.
+template <class T>
+class Box {
+public:
+    Box() noexcept = default;
+    Box(const T &v) : p_(new T(v)) {}
+    Box(T &&v) : p_(new T(std::move(v))) {}
+    Box(const Box &o) : p_(o.p_ ? new T(*o.p_) : nullptr) {}
+    Box(Box &&o) noexcept : p_(o.p_), release_(o.release_), ctx_(o.ctx_), own_(o.own_) { o.p_ = nullptr; }
+    Box &operator=(Box o) noexcept {
+        std::swap(p_, o.p_); std::swap(release_, o.release_); std::swap(ctx_, o.ctx_); std::swap(own_, o.own_);
+        return *this;
+    }
+    ~Box() { reset(); }
+
+    /// A default value on the heap.
+    static Box heap() { Box b; b.p_ = new T{}; return b; }
+    /// A default value in memory from `alloc`, given back with `release`;
+    /// empty if `alloc` gives none.
+    static Box in(void *(*alloc)(void *, std::size_t), void (*release)(void *, void *), void *ctx) {
+        Box b;
+        void *m = alloc ? alloc(ctx, sizeof(T)) : nullptr;
+        if (m) { b.p_ = new (m) T{}; b.release_ = release; b.ctx_ = ctx; b.own_ = false; }
+        return b;
+    }
+
+    void reset() noexcept {
+        if (!p_) return;
+        if (own_) { delete p_; }
+        else { p_->~T(); if (release_) release_(ctx_, p_); }
+        p_ = nullptr;
+    }
+    bool has_value() const noexcept { return p_ != nullptr; }
+    explicit operator bool() const noexcept { return p_ != nullptr; }
+    T &operator*() { return *p_; }
+    const T &operator*() const { return *p_; }
+    T *operator->() { return p_; }
+    const T *operator->() const { return p_; }
+    /// The value; throws `std::bad_optional_access` when empty, as
+    /// `std::optional` does.
+    T &value() { if (!p_) throw std::bad_optional_access{}; return *p_; }
+    const T &value() const { if (!p_) throw std::bad_optional_access{}; return *p_; }
+    bool operator==(const Box &o) const { return (p_ && o.p_) ? *p_ == *o.p_ : p_ == o.p_; }
+    bool operator!=(const Box &o) const { return !(*this == o); }
+
+private:
+    T *p_ = nullptr;
+    void (*release_)(void *, void *) = nullptr;
+    void *ctx_ = nullptr;
+    bool own_ = true;
+};"#;
+
+/// A test value of `name`: its default, with each required boxed member
+/// holding a default value, which an empty `Box` doesn't encode as
+/// (dgtlrift/cddlc#156).
+fn cpp_filled(name: &str, module: &IrModule) -> String {
+    let t = to_pascal_case(name);
+    let Some(TypeDef::Struct(s)) = module.get(name) else { return format!("{t}{{}}") };
+    let sets: Vec<String> = s.fields.iter()
+        .filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name))
+        .filter_map(|f| match &f.ty {
+            TypeRef::Named(n) => Some(format!("v.{} = {}{{}};", to_snake_case(&f.name), to_pascal_case(n))),
+            TypeRef::Choice(cs) => match cs.first() {
+                Some(TypeRef::Named(n)) => Some(format!("v.{} = {}{{}};", to_snake_case(&f.name), to_pascal_case(n))),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    if sets.is_empty() {
+        format!("{t}{{}}")
+    } else {
+        format!("[] {{ {t} v{{}}; {} return v; }}()", sets.join(" "))
+    }
+}
+
+/// The type a JSON member's `Box` holds. An array or table is an alias in
+/// JSON, which can't be declared ahead, so the `Box` names the type it
+/// stands for (`std::vector<Node>`), which needs no complete `Node` yet.
+fn json_box_target(ty: &TypeRef, module: &IrModule, opts: &CodegenOptions) -> String {
+    let mut n = match ty { TypeRef::Named(n) => n.as_str(), _ => return cpp_json_field_type(ty, opts) };
+    for _ in 0..16 {
+        match module.get(n) {
+            Some(TypeDef::Alias(a)) => match &a.ty {
+                TypeRef::Named(t) if a.constraints.is_empty() && a.tagged.is_none() => n = t.as_str(),
+                _ => break,
+            },
+            _ => break,
+        }
+    }
+    match module.get(n) {
+        Some(TypeDef::Array(a)) => format!("std::vector<{}>", cpp_json_field_type(&a.element, opts)),
+        Some(TypeDef::Map(m)) => format!("std::map<std::string, {}>", cpp_json_field_type(&m.val_ty, opts)),
+        _ => cpp_json_field_type(ty, opts),
+    }
+}
+
+/// A member as JSON encoding reads it: through its `Box` when it has one
+/// (dgtlrift/cddlc#156).
+fn json_member(owner: &str, f: &cddlc_ir::FieldDef) -> String {
+    let fname = to_snake_case(&f.name);
+    if is_boxed(owner, &f.name) { format!("this->{fname}.value()") } else { format!("this->{fname}") }
+}
+
+/// Whether a choice has a `nil` alternative.
+fn choice_has_null(ty: &TypeRef) -> bool {
+    matches!(ty, TypeRef::Choice(cs) if cs.iter().any(|c| matches!(c, TypeRef::Primitive(Primitive::Null))))
+}
+
+/// Writes a boxed choice member (`children: info-list / null`), held as its
+/// first alternative: the value, or `null` for an empty box when the choice
+/// has a `nil` alternative (dgtlrift/cddlc#156).
+fn emit_boxed_choice_encode(w: &mut IndentWriter, ty: &TypeRef, expr: &str) {
+    if choice_has_null(ty) {
+        w.line(&format!("if ({expr}) {{ if (encode(enc, {expr}) < 0) return -1; }} else {{ nanocbor_fmt_null(enc); }}"));
+    } else {
+        w.line(&format!("if (encode(enc, {expr}) < 0) return -1;"));
+    }
+}
+
+/// Reads a boxed choice member: `null` leaves the box empty, when the choice
+/// has a `nil` alternative; anything else is its first alternative.
+fn emit_boxed_choice_decode(w: &mut IndentWriter, ty: &TypeRef, dest: &str, dec: &str) {
+    if choice_has_null(ty) {
+        w.line(&format!("if (nanocbor_get_null({dec}) < 0) {{ if (decode({dec}, {dest}, cb, ctx) < 0) return -1; }}"));
+    } else {
+        w.line(&format!("if (decode({dec}, {dest}, cb, ctx) < 0) return -1;"));
+    }
+}
+
+/// The type an optional member decodes into before it's set: its own, or
+/// its `Box` (dgtlrift/cddlc#156).
+fn member_temp_type(s: &StructDef, f: &cddlc_ir::FieldDef, opts: &CodegenOptions) -> String {
+    if is_boxed(&s.name, &f.name) {
+        format!("Box<{}>", cpp_typeref(&f.ty, opts))
+    } else {
+        cpp_typeref(&f.ty, opts)
+    }
+}
+
 /// Whether a map's other entries have plain `tstr` keys, held as
 /// `std::string_view` (otherwise they hold their key type; dgtlrift/cddlc#136).
 fn text_rest(r: &cddlc_ir::MapRest) -> bool {
@@ -706,7 +1011,11 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                     w.line("}");
                 } else {
                     if !record { w.line(&cpp_key_write(&f.key)); }
-                    emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}"), &f.occurrence, opts);
+                    if is_boxed(&s.name, &f.name) && matches!(f.ty, TypeRef::Choice(_)) {
+                        emit_boxed_choice_encode(w, &f.ty, &format!("val.{fname}"));
+                    } else {
+                        emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}"), &f.occurrence, opts);
+                    }
                 }
             }
             if let Some(r) = &s.rest {
@@ -739,7 +1048,7 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 let k = to_pascal_case(&v.name);
                 w.line(&format!("case {type_name}::Kind::{k}:"));
                 w.indent();
-                let payload = cpp_variant_payload(v, opts);
+                let payload = cpp_variant_payload_in(&e.name, v, opts);
                 let get = |t: &str| format!("std::get<{t}>(val.value)");
                 match (&v.ty, payload.as_deref()) {
                     (_, None) if cpp_int_literal(v).is_some() => {
@@ -849,8 +1158,10 @@ fn emit_cpp_encode_field(
             let call = cpp_encode_call(p, expr);
             w.line(&format!("{call};"));
         }
+        // A nested value that fails to encode (an empty required `Box`,
+        // dgtlrift/cddlc#156) fails the whole.
         TypeRef::Named(_) => {
-            w.line(&format!("encode(enc, {expr});"));
+            w.line(&format!("if (encode(enc, {expr}) < 0) return -1;"));
         }
         TypeRef::Tagged(tag, inner) => {
             w.line(&format!("nanocbor_fmt_tag(enc, {});", tag.0));
@@ -947,9 +1258,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                             w.line("if (!nanocbor_at_end(&arr)) {");
                         }
                         w.indent();
-                        w.line(&format!("{} _v{{}};", cpp_typeref(&f.ty, opts)));
+                        w.line(&format!("{} _v{{}};", member_temp_type(s, f, opts)));
                         emit_cpp_decode_field(w, &f.ty, "_v", &f.constraints, &f.name, "&arr", opts);
-                        w.line(&format!("out.{fname} = _v;"));
+                        w.line(&format!("out.{fname} = std::move(_v);"));
                         w.dedent();
                         w.line("}");
                     } else {
@@ -1009,9 +1320,15 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                     // Decode into the inner type, then set the optional: nanocbor
                     // writes through a pointer to the inner type, never an optional
                     // (dgtlrift/cddlc#35). A present `nil` becomes a present monostate.
-                    w.line(&format!("{} _v{{}};", cpp_typeref(&f.ty, opts)));
-                    emit_cpp_decode_field(w, &f.ty, "_v", &f.constraints, fkey, "&map", opts);
-                    w.line(&format!("out.{fname} = _v;"));
+                    w.line(&format!("{} _v{{}};", member_temp_type(s, f, opts)));
+                    if is_boxed(&s.name, &f.name) && matches!(f.ty, TypeRef::Choice(_)) {
+                        emit_boxed_choice_decode(w, &f.ty, "_v", "&map");
+                    } else {
+                        emit_cpp_decode_field(w, &f.ty, "_v", &f.constraints, fkey, "&map", opts);
+                    }
+                    w.line(&format!("out.{fname} = std::move(_v);"));
+                } else if is_boxed(&s.name, &f.name) && matches!(f.ty, TypeRef::Choice(_)) {
+                    emit_boxed_choice_decode(w, &f.ty, &format!("out.{fname}"), "&map");
                 } else {
                     emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}"), &f.constraints, fkey, "&map", opts);
                 }
@@ -1167,7 +1484,11 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
 /// each named variant (dgtlrift/cddlc#49).
 fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     let t = to_pascal_case(&e.name);
-    let make = |v: &EnumVariant, arg: &str| format!("out = {t}::make_{}({arg}); return NANOCBOR_OK;", to_pascal_case(&v.name));
+    let make = |v: &EnumVariant, arg: &str| {
+        // A payload is moved in (a `Box` is, not copied; dgtlrift/cddlc#156).
+        let arg = if arg.is_empty() { String::new() } else { format!("std::move({arg})") };
+        format!("out = {t}::make_{}({arg}); return NANOCBOR_OK;", to_pascal_case(&v.name))
+    };
     let payload_is = |v: &EnumVariant, f: &dyn Fn(&Primitive) -> bool| {
         cpp_variant_payload(v, opts).is_some() && matches!(&v.ty, TypeRef::Primitive(p) if f(p))
     };
@@ -1272,8 +1593,10 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
 
     // Anything else: the first named variant whose decoder accepts it.
     for v in &e.variants {
-        if let (TypeRef::Named(n), Some(_)) = (&v.ty, cpp_variant_payload(v, opts)) {
-            let nt = to_pascal_case(n);
+        if let (TypeRef::Named(_), Some(pt)) = (&v.ty, cpp_variant_payload_in(&e.name, v, opts)) {
+            // A boxed variant decodes into a `Box`, whose memory comes from
+            // the heap or `Callbacks::alloc` (dgtlrift/cddlc#156).
+            let nt = pt;
             w.line("{");
             w.indent();
             w.line("nanocbor_value_t tmp = *dec;");
@@ -1487,6 +1810,12 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
     w.line("static uint8_t buf[1024];");
     w.blank();
+    // A recursive member's memory, from the heap here; any allocator (a pool,
+    // an arena) works (dgtlrift/cddlc#156).
+    w.line("static void *test_alloc(void *, std::size_t n) { return ::operator new(n); }");
+    w.line("static void test_release(void *, void *p) { ::operator delete(p); }");
+    w.line("static const Callbacks test_cb = [] { Callbacks c{}; c.alloc = test_alloc; c.release = test_release; return c; }();");
+    w.blank();
 
     for (_, def) in &module.types {
         emit_cpp_type_test(&mut w, def, module, opts);
@@ -1586,7 +1915,9 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                                 }))
                                 .collect();
                             if sets.is_empty() {
-                                format!("{t}{{}}")
+                                // Required boxed members hold a value
+                                // (dgtlrift/cddlc#156).
+                                cpp_filled(n, module)
                             } else {
                                 format!("[] {{ {t} v{{}}; {} return v; }}()", sets.join(" "))
                             }
@@ -1603,6 +1934,12 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
         }
         TypeDef::Struct(s) => {
             w.line(&format!("{type_name} original{{}};"));
+            // A required boxed member holds a value (dgtlrift/cddlc#156).
+            for f in s.fields.iter().filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name)) {
+                if let Some(n) = boxed_named(&f.ty, _opts) {
+                    w.line(&format!("original.{} = {};", to_snake_case(&f.name), cpp_filled(n, module)));
+                }
+            }
             // A repeated member gets as many (default) items as it needs
             // (dgtlrift/cddlc#134).
             for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
@@ -1710,6 +2047,13 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
             }
         }
         // A table with one entry under a text key.
+        // A value that holds the table again has no valid default (its
+        // required `Box` is empty), so that table stays empty
+        // (dgtlrift/cddlc#156).
+        TypeDef::Map(m) if matches!(m.key_ty, TypeRef::Primitive(Primitive::Tstr))
+            && cddlc_codegen::is_indirect(&m.name, &m.val_ty, module) => {
+            w.line(&format!("{type_name} original{{}};"));
+        }
         TypeDef::Map(m) if matches!(m.key_ty, TypeRef::Primitive(Primitive::Tstr)) => {
             w.line(&format!("{type_name} original{{}};"));
             if is_heap(_opts) {
@@ -1732,7 +2076,7 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
     w.line(&format!("{type_name} decoded{{}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line("assert(decode(&dec, decoded) == 0);");
+    w.line("assert(decode(&dec, decoded, test_cb) == 0);");
     // An enum with a map variant whose members an earlier one has too: it
     // decodes as the earlier one, to the same encoding (dgtlrift/cddlc#192).
     let ambiguous = matches!(def, TypeDef::Enum(e) if e.variants.iter().enumerate()
@@ -1870,6 +2214,8 @@ fn emit_header_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("#include <vector>");
     w.line("#include <optional>");
     w.line("#include <variant>");
+    w.line("#include <new>");
+    w.line("#include <utility>");
     w.line("#include <stdexcept>");
     w.line("#include <nlohmann/json.hpp>");
     w.blank();
@@ -1881,9 +2227,25 @@ fn emit_header_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("std::vector<uint8_t> b64url_decode(const std::string& s);");
     w.blank();
 
-    // Emit type declarations
-    for (_, def) in &module.types {
-        emit_cpp_json_type_decl(&mut w, def, opts);
+    // A type that holds itself again does so through a `Box`, declared
+    // ahead (dgtlrift/cddlc#156).
+    if BOXED.with(|b| !b.borrow().is_empty()) {
+        for (_, def) in &module.types {
+            if matches!(def, TypeDef::Struct(_)) || matches!(def, TypeDef::Enum(e) if !e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)))) {
+                w.line(&format!("struct {};", to_pascal_case(def.name())));
+            }
+        }
+        w.blank();
+        for line in BOX_TEMPLATE.lines() {
+            if line.is_empty() { w.blank() } else { w.line(line) }
+        }
+        w.blank();
+    }
+
+    // Emit type declarations, after what each holds by value
+    for tname in cddlc_codegen::inline_decl_order(module) {
+        let Some(def) = module.get(&tname) else { continue };
+        emit_cpp_json_type_decl(&mut w, def, module, opts);
         w.blank();
     }
 
@@ -1921,7 +2283,7 @@ fn cpp_json_field_type_with_occ(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOp
     }
 }
 
-fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions) {
+fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => {
             let ctype = to_pascal_case(&s.name);
@@ -1931,7 +2293,13 @@ fn emit_cpp_json_type_decl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOp
             for f in &s.fields {
                 cddlc_codegen::emit_doc_lines(w, f.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
                 let fname = to_snake_case(&f.name);
-                let ty    = cpp_json_field_type_with_occ(&f.ty, &f.occurrence, opts);
+                // A member that holds this type again is a `Box`, empty when
+                // an optional one is absent (dgtlrift/cddlc#156).
+                let ty    = if is_boxed(&s.name, &f.name) {
+                    format!("Box<{}>", json_box_target(&f.ty, module, opts))
+                } else {
+                    cpp_json_field_type_with_occ(&f.ty, &f.occurrence, opts)
+                };
                 w.line(&format!("{ty} {fname}{{}};"));
             }
             // The map's other entries (dgtlrift/cddlc#82).
@@ -2197,7 +2565,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                 if f.occurrence.is_repeated() {
                     w.line(&format!("for (const auto& v : this->{fname}) j.push_back({});", cpp_json_to_val(&f.ty, "v", module)));
                 } else {
-                    w.line(&format!("j.push_back({});", cpp_json_to_val(&f.ty, &format!("this->{fname}"), module)));
+                    w.line(&format!("j.push_back({});", cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)));
                 }
             }
             w.line("auto s = j.dump();");
@@ -2253,7 +2621,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                         cpp_json_to_val(&f.ty, &format!("this->{fname}.value()"), module)
                     ));
                 } else {
-                    w.line(&format!("j.push_back({});", cpp_json_to_val(&f.ty, &format!("this->{fname}"), module)));
+                    w.line(&format!("j.push_back({});", cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)));
                 }
             }
             w.line("auto s = j.dump();");
@@ -2307,7 +2675,7 @@ fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions
                         w.line(&format!("if ({fname}.has_value()) j[{key:?}] = {val};", fname=format!("this->{fname}"), val=cpp_json_to_val(&f.ty, &format!("this->{fname}.value()"), module)));
                     }
                     _ => {
-                        w.line(&format!("j[{key:?}] = {};", cpp_json_to_val(&f.ty, &format!("this->{fname}"), module)));
+                        w.line(&format!("j[{key:?}] = {};", cpp_json_to_val(&f.ty, &json_member(&s.name, f), module)));
                     }
                 }
             }
@@ -2515,6 +2883,12 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 if let Some(r) = &s.rest {
                     w.line(&format!("original.{}[\"other-key\"] = {{}};", to_snake_case(&r.name)));
                 }
+                // A required boxed member holds a value (dgtlrift/cddlc#156).
+                for f in s.fields.iter().filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name)) {
+                    if let Some(n) = boxed_named(&f.ty, opts) {
+                        w.line(&format!("original.{} = {};", to_snake_case(&f.name), cpp_filled(n, module)));
+                    }
+                }
                 // A repeated member gets as many (default) items as it needs
                 // (dgtlrift/cddlc#134).
                 for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
@@ -2575,7 +2949,11 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.line(&format!("void test_{ctype}() {{"));
                 w.indent();
                 w.line(&format!("{ctype} original{{}};"));
-                w.line("original[\"k\"] = {};");
+                // A value that holds the table again has no valid default
+                // (dgtlrift/cddlc#156).
+                if !cddlc_codegen::is_indirect(&m.name, &m.val_ty, module) {
+                    w.line("original[\"k\"] = {};");
+                }
                 w.line(&format!("auto encoded = encode_{ctype}(original);"));
                 w.line(&format!("auto decoded = decode_{ctype}(encoded);"));
                 w.line("assert(decoded == original);");

@@ -106,10 +106,9 @@ for schema in crates/backend-buildtest/schemas/*.cddl; do
         echo "== $lang $name: not for this language (dgtlrift/cddlc#181)"
         continue
     fi
-    # Recursive types: C++ (dgtlrift/cddlc#156) and Go (dgtlrift/cddlc#221)
-    # don't hold them yet.
-    if [[ "$name" == recursive && " cpp go " =~ " $lang " ]]; then
-        echo "== $lang $name: not for this language yet (dgtlrift/cddlc#156)"
+    # Recursive types: Go doesn't hold them yet (dgtlrift/cddlc#221).
+    if [[ "$name" == recursive && " go " =~ " $lang " ]]; then
+        echo "== $lang $name: not for this language yet (dgtlrift/cddlc#221)"
         continue
     fi
     "$cddlc" generate "$schema" -l "$lang" --interop --interop-langs "$lang" -o "$out" >/dev/null 2>"$work/generate.log" \

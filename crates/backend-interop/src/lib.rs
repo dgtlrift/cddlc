@@ -917,8 +917,14 @@ fn emit_cpp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
     w.line("#include <cstring>");
     w.line("#include <cstdio>");
     w.line("#include <array>");
+    w.line("#include <new>");
     w.blank();
     w.line(&format!("using namespace {ns};"));
+    w.blank();
+    // A recursive member's memory (dgtlrift/cddlc#156).
+    w.line("static void *interop_alloc(void *, std::size_t n) { return ::operator new(n); }");
+    w.line("static void interop_release(void *, void *p) { ::operator delete(p); }");
+    w.line("static const Callbacks interop_cb = [] { Callbacks c{}; c.alloc = interop_alloc; c.release = interop_release; return c; }();");
     w.blank();
 
     for (i, v) in vectors.iter().enumerate() {
@@ -936,7 +942,7 @@ fn emit_cpp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
         w.line("nanocbor_value_t dec;");
         w.line(&format!("nanocbor_decoder_init(&dec, buf, kVec{i}.size());"));
         w.line(&format!("{} decoded{{}};", to_pascal_case(&v.type_name)));
-        w.line("assert(decode(&dec, decoded) == 0);");
+        w.line("assert(decode(&dec, decoded, interop_cb) == 0);");
         w.blank();
 
         for f in &v.fields {
