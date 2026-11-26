@@ -658,6 +658,10 @@ cddlc/
 
 ## Code Style
 
+cddlc's sources are formatted by rustfmt: run `cargo fmt --all` before
+committing. CI and `scripts/test-all.sh` run `cargo fmt --all --check`, which
+fails, printing the changes it would make, when a file isn't formatted.
+
 Lists that many changes add to (the `pub use` lists in `cddlc-codegen`, the
 reserved-name lists) hold one item per line, sorted, with a trailing comma, and
 carry `#[rustfmt::skip]` so `cargo fmt` keeps them that way. Branches that each
