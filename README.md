@@ -565,7 +565,9 @@ and the test fails when one starts working, so the list stays current.
   `ErrorCode::AllocFailed` without them. A copy is made on the heap. JSON boxes use the heap.
   A repeated member, or a map's other entries, that holds its own type again isn't supported
   yet (#156).
-- **Go**: recursive types don't compile yet (#221).
+- **Go**: a required member or variant that holds its own type again, by value, is a pointer
+  (`Lhs *Expr`); an optional member is one already, and a slice or map ends the cycle. `Validate`
+  rejects a nil required pointer, and `NewExprBinop(x)` takes the value.
 
 ### Schema language gaps
 

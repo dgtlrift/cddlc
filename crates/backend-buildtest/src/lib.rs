@@ -54,10 +54,8 @@ pub const SCHEMAS: &[(&str, &str)] = &[
 /// - A map's other entries with integer keys can't be JSON (JSON objects
 ///   have text keys), and Node, Java, Lua and Dart don't hold them yet
 ///   (dgtlrift/cddlc#181).
-/// - Recursive types: Go doesn't hold them yet (dgtlrift/cddlc#221).
 const LIMITED_SCHEMAS: &[(&str, &[&str], bool)] = &[
     ("other-keys", &["rs", "h", "hpp", "cs", "py", "go"], true),
-    ("recursive", &["rs", "h", "hpp", "cs", "py", "java", "ts", "lua", "dart"], false),
 ];
 
 /// Whether a reference schema is built with this backend and format.
