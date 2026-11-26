@@ -30,6 +30,11 @@ impl Backend for CBackend {
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "C", true)?;
+        // A rule whose `<rule>_t` the C library or the runtime already has
+        // (`mode_t`, `time_t`, `cbor_str_t`) is `<module>_<rule>_t`
+        // (dgtlrift/cddlc#154).
+        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::c_reserved_renames(module));
+        let module = &renamed;
         let name      = module.name.as_str();
         let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
