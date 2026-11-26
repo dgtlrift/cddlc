@@ -125,11 +125,41 @@ pub fn java_package_name(module: &str, namespace: Option<&str>) -> String {
 
 /// Class names that would hide a `java.lang` or `java.util` type the generated
 /// code uses, or the runtime class.
+#[rustfmt::skip]
 const RESERVED_TYPES: &[&str] = &[
-    "Cddl", "Object", "String", "Long", "Integer", "Short", "Byte", "Float", "Double", "Boolean",
-    "Character", "Number", "Math", "System", "Record", "Enum", "Override", "Deprecated", "Class",
-    "Void", "Iterable", "Exception", "RuntimeException", "IllegalArgumentException", "List", "Map",
-    "ArrayList", "LinkedHashMap", "Arrays", "Objects", "Test", "RoundtripTest", "InteropTest",
+    "ArrayList",
+    "Arrays",
+    "Boolean",
+    "Byte",
+    "Cddl",
+    "Character",
+    "Class",
+    "Deprecated",
+    "Double",
+    "Enum",
+    "Exception",
+    "Float",
+    "IllegalArgumentException",
+    "Integer",
+    "InteropTest",
+    "Iterable",
+    "LinkedHashMap",
+    "List",
+    "Long",
+    "Map",
+    "Math",
+    "Number",
+    "Object",
+    "Objects",
+    "Override",
+    "Record",
+    "RoundtripTest",
+    "RuntimeException",
+    "Short",
+    "String",
+    "System",
+    "Test",
+    "Void",
 ];
 
 /// The Java class name of a CDDL rule.
@@ -139,9 +169,24 @@ pub fn java_type_name(name: &str) -> String {
 }
 
 /// Member names that would clash with a generated method.
+#[rustfmt::skip]
 const RESERVED_MEMBERS: &[&str] = &[
-    "encode", "decode", "validate", "toRaw", "fromRaw", "kind", "equals", "hashCode", "toString",
-    "getClass", "notify", "notifyAll", "wait", "clone", "finalize", "that",
+    "clone",
+    "decode",
+    "encode",
+    "equals",
+    "finalize",
+    "fromRaw",
+    "getClass",
+    "hashCode",
+    "kind",
+    "notify",
+    "notifyAll",
+    "that",
+    "toRaw",
+    "toString",
+    "validate",
+    "wait",
 ];
 
 /// The Java name of a struct member (record component): camelCase.

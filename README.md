@@ -656,6 +656,14 @@ cddlc/
 └── test_all                   Shell script: run all backend smoke tests
 ```
 
+## Code Style
+
+Lists that many changes add to (the `pub use` lists in `cddlc-codegen`, the
+reserved-name lists) hold one item per line, sorted, with a trailing comma, and
+carry `#[rustfmt::skip]` so `cargo fmt` keeps them that way. Branches that each
+add an item then touch different lines, and git merges them without a conflict
+unless the two items sort next to each other.
+
 ## Releasing
 
 Releases are made with [release-plz](https://release-plz.dev): a release PR bumps the workspace version and writes `CHANGELOG.md` from the conventional commit messages (`feat(scope): …`, `fix(scope): …`), and merging it tags `v<version>` and makes the GitHub release, with a static x86-64 Linux binary attached. Nothing is published to crates.io. Release PRs are opened with `scripts/release.sh pr` (with release-plz, rustup and gh installed). When one is merged, `.github/workflows/release-plz.yml` makes the release and attaches the binary; `release` and `binary` do the same by hand. The workflow never opens pull requests, as that needs the repository setting that lets Actions create and approve them, which stays off.
