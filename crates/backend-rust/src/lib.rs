@@ -205,6 +205,51 @@ fn lift_inline_choices(module: &IrModule) -> IrModule {
     out
 }
 
+/// The runtime's `AnyItem`: a CBOR data item of any type, held as its
+/// encoding, which decoding keeps and encoding writes back unchanged
+/// (dgtlrift/cddlc#178).
+fn emit_any_item(w: &mut IndentWriter, opts: &CodegenOptions) {
+    let (bytes, null) = if opts.no_std {
+        (format!("heapless::Vec<u8, {}>", opts.max_str), "heapless::Vec::from_slice(&[0xf6]).expect(\"fits its capacity\")".to_owned())
+    } else {
+        ("Vec<u8>".to_owned(), "vec![0xf6]".to_owned())
+    };
+    w.line("/// A data item of any type (CDDL `any`), held as its CBOR encoding:");
+    w.line("/// decoding keeps the item's bytes, and encoding writes them back unchanged.");
+    w.line("#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]");
+    w.line(&format!("pub struct AnyItem(pub {bytes});"));
+    w.blank();
+    w.line("impl AnyItem {");
+    w.line("    /// The item's CBOR encoding.");
+    w.line("    pub fn as_bytes(&self) -> &[u8] { &self.0 }");
+    w.line("}");
+    w.blank();
+    w.line("/// `null`, the item an empty `AnyItem` would otherwise fail to be.");
+    w.line("impl Default for AnyItem {");
+    w.line(&format!("    fn default() -> Self {{ AnyItem({null}) }}"));
+    w.line("}");
+    w.blank();
+    w.line("impl<C> Encode<C> for AnyItem {");
+    w.line("    fn encode<W: Write>(&self, e: &mut Encoder<W>, _: &mut C) -> Result<(), EncodeError<W::Error>> {");
+    w.line("        e.writer_mut().write_all(&self.0).map_err(EncodeError::write)");
+    w.line("    }");
+    w.line("}");
+    w.blank();
+    w.line("impl<'b, C> Decode<'b, C> for AnyItem {");
+    w.line("    fn decode(d: &mut Decoder<'b>, _: &mut C) -> Result<Self, DecodeError> {");
+    w.line("        let start = d.position();");
+    w.line("        d.skip()?;");
+    w.line("        let item = &d.input()[start..d.position()];");
+    if opts.no_std {
+        w.line("        heapless::Vec::from_slice(item).map(AnyItem).map_err(|_| DecodeError::message(\"item longer than its capacity\"))");
+    } else {
+        w.line("        Ok(AnyItem(item.to_vec()))");
+    }
+    w.line("    }");
+    w.line("}");
+    w.blank();
+}
+
 /// `--no-std`: a fixed-capacity `heapless::Vec<u8, N>` from the `&[u8]` expression `expr`.
 fn no_std_bytes(expr: &str) -> String {
     format!("cddlc_bytes({expr}).expect(\"fits its capacity\")")
@@ -215,7 +260,11 @@ fn no_std_bytes(expr: &str) -> String {
 fn rust_primitive(p: &Primitive, opts: &CodegenOptions) -> String {
     match p {
         Primitive::Tstr if opts.no_std => format!("heapless::String<{}>", opts.max_str),
-        Primitive::Bstr | Primitive::Any if opts.no_std => format!("heapless::Vec<u8, {}>", opts.max_str),
+        // `any` is the encoded data item (dgtlrift/cddlc#178): the runtime's
+        // `AnyItem` in CBOR, and any JSON value in JSON.
+        Primitive::Any if opts.is_json() => "serde_json::Value".to_owned(),
+        Primitive::Any => "AnyItem".to_owned(),
+        Primitive::Bstr if opts.no_std => format!("heapless::Vec<u8, {}>", opts.max_str),
         _ => primitive_to_rust(p, false).to_owned(),
     }
 }
@@ -435,6 +484,10 @@ fn emit_header(w: &mut IndentWriter, module: &IrModule, opts: &CodegenOptions) {
         w.blank();
     }
 
+    if cddlc_codegen::module_uses_any(module) {
+        emit_any_item(w, opts);
+    }
+
     // Error types, in a module of their own so a rule of the same name
     // (WebDriver BiDi's `ErrorCode`) can't collide with them; re-exported at
     // the crate root unless a schema type takes the name (dgtlrift/cddlc#149).
@@ -557,7 +610,7 @@ fn rest_test_value(r: &cddlc_ir::MapRest, module: &IrModule, opts: &CodegenOptio
     // A plain alias of a byte string is a `ByteVec` outside `--no-std`, which
     // has no `Default` (dgtlrift/cddlc#179).
     let val = match plain_alias(&r.val_ty, Some(module)) {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if !opts.no_std && !matches!(r.val_ty, TypeRef::Primitive(_)) =>
+        TypeRef::Primitive(Primitive::Bstr) if !opts.no_std && !matches!(r.val_ty, TypeRef::Primitive(_)) =>
             "minicbor::bytes::ByteVec::from(Vec::<u8>::new())".to_owned(),
         resolved => primitive_default_expr(resolved, opts),
     };
@@ -1229,9 +1282,12 @@ fn emit_enum_encode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
             TypeRef::Primitive(Primitive::Tstr) => {
                 w.line(&format!("{}::{}(s) => {{ e.str(s.as_str())?; }}", type_vname, vname));
             }
-            // `any` is held as bytes, as a member of type `any` is.
-            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+            TypeRef::Primitive(Primitive::Bstr) => {
                 w.line(&format!("{}::{}(b) => {{ e.bytes(b.as_slice())?; }}", type_vname, vname));
+            }
+            // The encoded item, written back unchanged (dgtlrift/cddlc#178).
+            TypeRef::Primitive(Primitive::Any) => {
+                w.line(&format!("{}::{}(x) => {{ e.encode(x)?; }}", type_vname, vname));
             }
             TypeRef::Primitive(Primitive::Undefined) => {
                 w.line(&format!("{}::{}(_) => {{ e.undefined()?; }}", type_vname, vname));
@@ -1412,9 +1468,11 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
         w.line("}");
     }
 
-    // Byte strings (`any` is held as bytes), null, undefined and floats.
+    // Byte strings, null, undefined and floats.
     let first = |pred: &dyn Fn(&Primitive) -> bool| e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(p) if pred(p)));
-    if let Some(v) = first(&|p| *p == Primitive::Bstr).or_else(|| first(&|p| *p == Primitive::Any)) {
+    // An `any` variant takes whatever no other variant does (dgtlrift/cddlc#178).
+    let any = first(&|p| *p == Primitive::Any).map(|v| format!("Ok({enum_name}::{}(d.decode::<AnyItem>()?))", to_pascal_case(&v.name)));
+    if let Some(v) = first(&|p| *p == Primitive::Bstr) {
         let val = if opts.no_std { "cddlc_bytes(d.bytes()?)?" } else { "d.bytes()?.to_vec()" };
         w.line(&format!("minicbor::data::Type::Bytes => Ok({enum_name}::{}({val})),", to_pascal_case(&v.name)));
     }
@@ -1464,9 +1522,14 @@ fn emit_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, mo
                 w.line("}");
             }
         }
-        w.line("Err(DecodeError::message(\"no enum variant matched\"))");
+        match &any {
+            Some(x) => w.line(x),
+            None => w.line("Err(DecodeError::message(\"no enum variant matched\"))"),
+        }
         w.dedent();
         w.line("}");
+    } else if let Some(x) = &any {
+        w.line(&format!("_ => {x},"));
     } else {
         w.line("_ => Err(DecodeError::message(\"unexpected CBOR type for enum\")),");
     }
@@ -1781,8 +1844,8 @@ fn sized_value(ty: &TypeRef, n: usize, opts: &CodegenOptions) -> Option<String> 
     match ty {
         TypeRef::Primitive(Primitive::Tstr) if opts.no_std => Some(no_std_text(&format!("{:?}", "a".repeat(n)))),
         TypeRef::Primitive(Primitive::Tstr) => Some(format!("{:?}.to_string()", "a".repeat(n))),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if opts.no_std => Some(no_std_bytes(&format!("&[0u8; {n}]"))),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => Some(format!("vec![0u8; {n}]")),
+        TypeRef::Primitive(Primitive::Bstr) if opts.no_std => Some(no_std_bytes(&format!("&[0u8; {n}]"))),
+        TypeRef::Primitive(Primitive::Bstr) => Some(format!("vec![0u8; {n}]")),
         _ => None,
     }
 }
@@ -2074,7 +2137,7 @@ fn encode_call_for_primitive(p: &Primitive, expr: &str) -> String {
         // For owned String / Vec<u8>, use original expr so (*v).as_str() is correct
         Primitive::Tstr    => format!("e.str({expr}.as_str())"),
         Primitive::Bstr    => format!("e.bytes({expr}.as_slice())"),
-        Primitive::Any     => format!("e.bytes({expr}.as_slice())"),
+        Primitive::Any     => format!("e.encode(&{expr})"),
     }
 }
 
@@ -2092,10 +2155,11 @@ fn decode_expr_for_in_module(ty: &TypeRef, opts: &CodegenOptions, module: Option
                 // Owned String types need .to_string() / .to_vec()
                 Primitive::Tstr if !opts.no_std =>
                     format!("d.str()?.to_string()"),
-                Primitive::Bstr | Primitive::Any if !opts.no_std =>
+                Primitive::Any => "d.decode::<AnyItem>()?".into(),
+                Primitive::Bstr if !opts.no_std =>
                     format!("d.bytes()?.to_vec()"),
                 Primitive::Tstr => "cddlc_text(d.str()?)?".into(),
-                Primitive::Bstr | Primitive::Any => "cddlc_bytes(d.bytes()?)?".into(),
+                Primitive::Bstr => "cddlc_bytes(d.bytes()?)?".into(),
                 _ => format!("d.{fn_name}()?"),
             }
         }
@@ -2201,7 +2265,7 @@ fn member_type(struct_name: &str, f: &FieldDef, opts: &CodegenOptions, module: &
 /// can't hold, as it has no `Default` (dgtlrift/cddlc#179).
 fn member_alias<'a>(ty: &'a TypeRef, module: &'a IrModule, opts: &CodegenOptions) -> &'a TypeRef {
     match plain_alias(ty, Some(module)) {
-        p @ TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if !opts.no_std && !opts.is_json() => p,
+        p @ TypeRef::Primitive(Primitive::Bstr) if !opts.no_std && !opts.is_json() => p,
         _ => ty,
     }
 }
@@ -2747,7 +2811,12 @@ fn default_value_expr(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> 
 
 fn primitive_default_expr(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if opts.no_std => no_std_bytes("&[0xf6u8]"),
+        // `any`: the item `1` (dgtlrift/cddlc#178), not `null`, which an
+        // optional member would read as absent.
+        TypeRef::Primitive(Primitive::Any) if opts.is_json() => "serde_json::Value::from(1)".into(),
+        TypeRef::Primitive(Primitive::Any) if opts.no_std => format!("AnyItem({})", no_std_bytes("&[0x01u8]")),
+        TypeRef::Primitive(Primitive::Any) => "AnyItem(vec![0x01u8])".into(),
+        TypeRef::Primitive(Primitive::Bstr) if opts.no_std => no_std_bytes("&[0xf6u8]"),
         TypeRef::Primitive(Primitive::Tstr) if opts.no_std => no_std_text("\"hello\""),
         TypeRef::Primitive(p) => match p {
             Primitive::Bool               => "true".into(),
@@ -2756,7 +2825,8 @@ fn primitive_default_expr(ty: &TypeRef, opts: &CodegenOptions) -> String {
             Primitive::Int                => "-1i64".into(),
             Primitive::Float16 | Primitive::Float32 => "1.0f32".into(),
             Primitive::Float64 | Primitive::Float   => "1.0f64".into(),
-            Primitive::Bstr | Primitive::Any        => "vec![0xf6u8]".into(),
+            Primitive::Bstr                         => "vec![0xf6u8]".into(),
+            Primitive::Any                          => "AnyItem(vec![0x01u8])".into(),
             Primitive::Tstr               => r#""hello".to_string()"#.into(),
         },
         TypeRef::Named(n)      => format!("{}::default()", to_pascal_case(n)),
@@ -2943,7 +3013,7 @@ fn emit_module_json(module: &IrModule, opts: &CodegenOptions) -> String {
 }
 
 fn is_bytes_type(ty: &TypeRef) -> bool {
-    matches!(ty, TypeRef::Primitive(Primitive::Bstr | Primitive::Any))
+    matches!(ty, TypeRef::Primitive(Primitive::Bstr))
 }
 
 /// How a type holds byte strings, for the `base64url_serde` helpers.
@@ -2959,7 +3029,7 @@ enum ByteShape {
 /// A constrained or tagged `bstr` alias is a newtype that serializes itself, so it is `None`.
 fn byte_shape(ty: &TypeRef, module: &IrModule) -> Option<ByteShape> {
     match ty {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => Some(ByteShape::One),
+        TypeRef::Primitive(Primitive::Bstr) => Some(ByteShape::One),
         TypeRef::Tagged(_, inner) => byte_shape(inner, module),
         TypeRef::Named(n) => match module.get(n) {
             Some(TypeDef::Alias(a)) if a.constraints.is_empty() && a.tagged.is_none() => {
@@ -3492,7 +3562,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
                             Primitive::Int  => "0i64".to_owned(),
                             Primitive::Bool => "false".to_owned(),
                             Primitive::Tstr => "String::new()".to_owned(),
-                            Primitive::Bstr | Primitive::Any => "Vec::new()".to_owned(),
+                            Primitive::Bstr => "Vec::new()".to_owned(),
                             _ => "Default::default()".to_owned(),
                         };
                         let attr = match byte_shape(&v.ty, module) {

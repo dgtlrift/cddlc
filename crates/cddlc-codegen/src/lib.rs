@@ -50,6 +50,7 @@ pub use emit::{
     literal_to_c,
     literal_to_rust,
     map_with_non_text_rest,
+    module_uses_any,
     module_uses_bits,
     primitive_to_c,
     primitive_to_rust,
