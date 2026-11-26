@@ -765,6 +765,39 @@ pub fn csharp_reserved_renames(module: &cddlc_ir::IrModule) -> std::collections:
     reserved_renames(module, RESERVED_CSHARP_TYPES, crate::to_pascal_case)
 }
 
+/// Names a Dart rule's class can't take (dgtlrift/cddlc#222). A class
+/// declared in the library hides an imported one of the same name, so these
+/// are the names the generated library and tests use from elsewhere:
+/// `dart:core`'s types (a class `List` breaks `List<int>`), `dart:typed_data`'s
+/// and `package:cbor`'s, and `package:test`'s, which the tests import beside
+/// the library (two imports of one name are ambiguous).
+const RESERVED_DART_TYPES: &[&str] = &[
+    // dart:core
+    "BigInt", "Comparable", "DateTime", "Deprecated", "Duration", "Enum", "Error",
+    "Exception", "Expando", "FormatException", "Function", "Future", "Invocation",
+    "Iterable", "Iterator", "List", "Map", "MapEntry", "Never", "Null", "Object",
+    "Pattern", "Record", "RegExp", "Set", "Sink", "StackTrace", "Stopwatch", "Stream",
+    "String", "StringBuffer", "Symbol", "Type", "Uri", "WeakReference",
+    "ArgumentError", "AssertionError", "RangeError", "StateError", "TypeError",
+    "UnimplementedError", "UnsupportedError",
+    // dart:typed_data
+    "ByteBuffer", "ByteData", "Endian", "Float32List", "Float64List", "Int8List",
+    "Int16List", "Int32List", "Int64List", "TypedData", "Uint8List", "Uint16List",
+    "Uint32List", "Uint64List",
+    // package:cbor
+    "Cbor", "CborBigInt", "CborBool", "CborBytes", "CborDecodeException", "CborFloat",
+    "CborInt", "CborList", "CborMap", "CborNull", "CborSimpleValue", "CborSmallInt",
+    "CborString", "CborUndefined", "CborValue",
+    // package:test
+    "Matcher", "OnPlatform", "Retry", "Skip", "Tags", "TestOn", "Timeout",
+];
+
+/// The rules to rename so their Dart classes don't clash with one in
+/// [`RESERVED_DART_TYPES`]: each to `<module>-<rule>`.
+pub fn dart_reserved_renames(module: &cddlc_ir::IrModule) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
+    reserved_renames(module, RESERVED_DART_TYPES, crate::to_pascal_case)
+}
+
 // ── Recursion in languages that hold values inline (C, C++) ──────────────────
 
 /// The named types `ty` holds inline: itself, under any tag, and each named

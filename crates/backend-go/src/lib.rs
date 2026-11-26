@@ -33,6 +33,8 @@ impl Backend for GoBackend {
 
     fn generate(&self, module: &IrModule, opts: &CodegenOptions) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "Go", true)?;
+        // Members and variants held through a pointer (dgtlrift/cddlc#221).
+        POINTERS.with(|p| *p.borrow_mut() = pointer_items(module));
         let name = module.name.as_str();
         let dir  = format!("{name}-{}", fmt_tag(opts));
         let pkg  = go_package_name(name, opts.namespace.as_deref());
@@ -828,6 +830,96 @@ fn is_repeated(occ: &Occurrence) -> bool {
     matches!(occ, Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. } | Occurrence::Bounded { .. })
 }
 
+// ── Recursion (dgtlrift/cddlc#221) ───────────────────────────────────────────
+
+thread_local! {
+    /// The required members and variants held through a pointer, as (owner,
+    /// item) names: set for each `generate`. (An optional member is a pointer
+    /// already.)
+    static POINTERS: std::cell::RefCell<std::collections::HashSet<(String, String)>> = Default::default();
+}
+
+/// Each required member and variant that holds its owner again, by value: a
+/// pointer, as a Go type can't contain itself.
+fn pointer_items(module: &IrModule) -> std::collections::HashSet<(String, String)> {
+    let mut out = std::collections::HashSet::new();
+    for (name, def) in &module.types {
+        match def {
+            TypeDef::Struct(s) => for f in &s.fields {
+                if matches!(f.occurrence, Occurrence::Required) && holds_by_value(name, &f.ty, module) {
+                    out.insert((name.to_string(), f.name.to_string()));
+                }
+            },
+            TypeDef::Enum(e) => for v in &e.variants {
+                if has_payload(v) && holds_by_value(name, &v.ty, module) {
+                    out.insert((name.to_string(), v.name.to_string()));
+                }
+            },
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether `ty` holds `from` again by value: through required members,
+/// variants and aliases. A slice, a map and an optional member's pointer
+/// already hold it elsewhere, so they end a cycle in Go.
+fn holds_by_value(from: &str, ty: &TypeRef, module: &IrModule) -> bool {
+    fn named(ty: &TypeRef) -> Option<&str> {
+        match ty {
+            TypeRef::Named(n) => Some(n.as_str()),
+            TypeRef::Tagged(_, inner) => named(inner),
+            _ => None,
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut stack: Vec<&str> = named(ty).into_iter().collect();
+    while let Some(n) = stack.pop() {
+        if n == from {
+            return true;
+        }
+        if !seen.insert(n) {
+            continue;
+        }
+        match module.get(n) {
+            Some(TypeDef::Struct(s)) => stack.extend(s.fields.iter()
+                .filter(|f| matches!(f.occurrence, Occurrence::Required))
+                .filter_map(|f| named(&f.ty))),
+            Some(TypeDef::Enum(e)) => stack.extend(e.variants.iter().filter(|v| has_payload(v)).filter_map(|v| named(&v.ty))),
+            Some(TypeDef::Alias(a)) => stack.extend(named(&a.ty)),
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether `owner`'s required member or variant `item` is a pointer.
+fn is_ptr(owner: &str, item: &str) -> bool {
+    POINTERS.with(|p| p.borrow().contains(&(owner.to_owned(), item.to_owned())))
+}
+
+/// A required member as encoding reads it: through its pointer when it has
+/// one (`Validate` has checked it isn't nil).
+fn req_value(owner: &str, f: &cddlc_ir::FieldDef, field: &str) -> String {
+    if is_ptr(owner, &f.name) { format!("*{field}") } else { field.to_owned() }
+}
+
+/// Decodes a required member from `raw` into `field`: through a value whose
+/// address it takes when the member is a pointer.
+fn emit_decode_member(w: &mut IndentWriter, owner: &str, f: &cddlc_ir::FieldDef, raw: &str, field: &str, at: &str) {
+    if !is_ptr(owner, &f.name) {
+        emit_decode(w, &f.ty, raw, field, at);
+        return;
+    }
+    w.line("{");
+    w.indent();
+    w.line(&format!("var x {}", go_type(&f.ty)));
+    emit_decode(w, &f.ty, raw, "x", at);
+    w.line(&format!("{field} = &x"));
+    w.dedent();
+    w.line("}");
+}
+
 fn go_field_type(ty: &TypeRef, occ: &Occurrence) -> String {
     let base = go_type(ty);
     match occ {
@@ -1106,7 +1198,12 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     w.line(&format!("type {name} struct {{"));
     w.indent();
     let mut fields: Vec<_> = s.fields.iter()
-        .map(|f| (f.doc.as_deref(), go_field_name(&f.name), go_field_type(&f.ty, &f.occurrence)))
+        .map(|f| {
+            // A required member that holds this type again is a pointer
+            // (dgtlrift/cddlc#221).
+            let ty = if is_ptr(&s.name, &f.name) { format!("*{}", go_type(&f.ty)) } else { go_field_type(&f.ty, &f.occurrence) };
+            (f.doc.as_deref(), go_field_name(&f.name), ty)
+        })
         .collect();
     // The map's other entries (dgtlrift/cddlc#82).
     if let Some(r) = &s.rest {
@@ -1121,6 +1218,12 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
     w.line("// Validate checks the CDDL constraints of every member.");
     w.line(&format!("func (v {name}) Validate() error {{"));
     w.indent();
+    // A required pointer member must point at a value (dgtlrift/cddlc#221).
+    for f in s.fields.iter().filter(|f| is_ptr(&s.name, &f.name)) {
+        w.line(&format!("if v.{} == nil {{", go_field_name(&f.name)));
+        w.line(&format!("    return fmt.Errorf(\"%s: missing\", {})", go_str(&format!("{name}.{}", f.name))));
+        w.line("}");
+    }
     for f in &s.fields {
         if !has_checks(&f.ty, &f.constraints) || is_repeated(&f.occurrence) { continue; }
         let field = format!("v.{}", go_field_name(&f.name));
@@ -1164,7 +1267,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
                 w.line("}");
             }
             o if is_repeated(o) => w.line(&format!("e.put({key})({})", enc_each(&f.ty, &field))),
-            _ => w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &field))),
+            _ => w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &req_value(&s.name, f, &field)))),
         }
     }
     // The other entries after the named members, in key order.
@@ -1266,7 +1369,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, _module: &IrModule, opts: &C
                 w.line("if !ok {");
                 w.line(&format!("    return fmt.Errorf(\"%s: missing member %q\", {}, {key_text})", go_str(&name)));
                 w.line("}");
-                emit_decode(w, &f.ty, "r", &field, &at);
+                emit_decode_member(w, &s.name, f, "r", &field, &at);
                 w.dedent();
                 w.line("}");
             }
@@ -1339,7 +1442,7 @@ fn emit_record_marshal(w: &mut IndentWriter, s: &StructDef, name: &str, opts: &C
         let field = format!("v.{}", go_field_name(&f.name));
         let key = go_str(&f.name);
         if f.occurrence.is_required() {
-            w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &field)));
+            w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &req_value(&s.name, f, &field))));
         } else {
             if !gap {
                 w.line("gap := false");
@@ -1402,7 +1505,7 @@ fn emit_record_marshal(w: &mut IndentWriter, s: &StructDef, name: &str, opts: &C
             _ => format!("items[{i}]"),
         };
         if f.occurrence.is_required() {
-            emit_decode(w, &f.ty, &item, &field, &at);
+            emit_decode_member(w, &s.name, f, &item, &field, &at);
         } else {
             if let Some(b) = &before {
                 w.line(&format!("if len(items) > {} {{", required + b[i]));
@@ -1466,7 +1569,7 @@ fn emit_record_marshal_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, 
             w.line(&format!("    e.put({key})({})", enc_expr(&f.ty, "x")));
             w.line("}");
         } else {
-            w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &field)));
+            w.line(&format!("e.put({key})({})", enc_expr(&f.ty, &req_value(&s.name, f, &field))));
         }
     }
     let tag = if opts.is_json() { None } else { s.tagged };
@@ -1503,7 +1606,7 @@ fn emit_record_marshal_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, 
             w.line("}");
         } else {
             let item = if i < ri { format!("items[{i}]") } else { format!("items[{}+reps]", i - 1) };
-            emit_decode(w, &f.ty, &item, &field, &at);
+            emit_decode_member(w, &s.name, f, &item, &field, &at);
         }
     }
     w.line("if err := out.Validate(); err != nil {");
@@ -1566,7 +1669,11 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     w.line(&format!("type {name} struct {{"));
     w.indent();
     let mut fields = vec![(None, "Kind".to_owned(), kind_ty.clone())];
-    fields.extend(e.variants.iter().filter(|v| has_payload(v)).map(|v| (None, payload_field(v), go_type(&v.ty))));
+    // A variant that holds this type again is a pointer (dgtlrift/cddlc#221).
+    fields.extend(e.variants.iter().filter(|v| has_payload(v)).map(|v| {
+        let ty = if is_ptr(&e.name, &v.name) { format!("*{}", go_type(&v.ty)) } else { go_type(&v.ty) };
+        (None, payload_field(v), ty)
+    }));
     emit_fields(w, &fields);
     w.dedent();
     w.line("}");
@@ -1589,7 +1696,8 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         let c = go_kind_const(&e.name, &v.name);
         if has_payload(v) {
             w.line(&format!("// New{name}{vname} is the {vname} variant holding x."));
-            w.line(&format!("func New{name}{vname}(x {}) {name} {{ return {name}{{Kind: {c}, {}: x}} }}", go_type(&v.ty), payload_field(v)));
+            let x = if is_ptr(&e.name, &v.name) { "&x" } else { "x" };
+            w.line(&format!("func New{name}{vname}(x {}) {name} {{ return {name}{{Kind: {c}, {}: {x}}} }}", go_type(&v.ty), payload_field(v)));
         } else {
             w.line(&format!("// New{name}{vname} is the {vname} variant."));
             w.line(&format!("func New{name}{vname}() {name} {{ return {name}{{Kind: {c}}} }}"));
@@ -1609,6 +1717,12 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.indent();
         let expr = if let Some(n) = int_literal(v) {
             if n < 0 { format!("marshal(int64({n}))") } else { format!("marshal(uint64({n}))") }
+        } else if has_payload(v) && is_ptr(&e.name, &v.name) {
+            // A pointer variant is written through it; nil is an error.
+            w.line(&format!("if v.{} == nil {{", payload_field(v)));
+            w.line(&format!("    return nil, fmt.Errorf(\"%s: %s is nil\", {at}, {})", go_str(&v.name)));
+            w.line("}");
+            enc_expr(&v.ty, &format!("*v.{}", payload_field(v)))
         } else if has_payload(v) {
             enc_expr(&v.ty, &format!("v.{}", payload_field(v)))
         } else if is_nil(v) {
@@ -1636,6 +1750,8 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         e.variants.iter().find(|v| has_payload(v) && matches!(&v.ty, TypeRef::Primitive(p) if f(p)))
     };
     let set = |v: &EnumVariant, value: Option<&str>| match value {
+        // A pointer variant holds the value's address (dgtlrift/cddlc#221).
+        Some(x) if is_ptr(&e.name, &v.name) => format!("*v = {name}{{Kind: {}, {}: &{x}}}", go_kind_const(&e.name, &v.name), payload_field(v)),
         Some(x) => format!("*v = {name}{{Kind: {}, {}: {x}}}", go_kind_const(&e.name, &v.name), payload_field(v)),
         None => format!("*v = {name}{{Kind: {}}}", go_kind_const(&e.name, &v.name)),
     };
@@ -2246,6 +2362,8 @@ fn go_map_value(m: &MapDef, module: &IrModule, explicit: bool, depth: usize) -> 
 fn go_struct_value(s: &StructDef, module: &IrModule, explicit: bool, depth: usize) -> String {
     let mut fields: Vec<String> = s.fields.iter().map(|f| {
         let v = go_value(&f.ty, &f.occurrence, &f.constraints, module, explicit, depth + 1);
+        // A required pointer member points at a value (dgtlrift/cddlc#221).
+        let v = if is_ptr(&s.name, &f.name) { format!("ptr({v})") } else { v };
         format!("{}: {v}", go_field_name(&f.name))
     }).collect();
     // One other entry when explicit or when the map needs one; else none (nil).

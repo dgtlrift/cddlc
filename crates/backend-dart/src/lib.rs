@@ -28,6 +28,10 @@ impl Backend for DartBackend {
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "Dart", false)?;
+        // A rule whose class would hide a type the generated code uses
+        // (`list` → `List`) is `<module>-<rule>` (dgtlrift/cddlc#222).
+        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::dart_reserved_renames(module));
+        let module = &renamed;
         let name     = module.name.as_str();
         let fmt_tag  = if opts.is_json() { "json" } else { "cbor" };
         let pkg_name = format!("{}_{}", dart_pkg(name), fmt_tag);

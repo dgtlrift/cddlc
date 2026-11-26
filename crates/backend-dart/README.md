@@ -34,6 +34,12 @@ flowchart LR
 
 ## What is generated per IR type
 
+A rule's class is its name in PascalCase. A rule whose class would hide a type
+the generated code uses (`dart:core`'s `List`, `Map`, `String`, `Object`, ...,
+`dart:typed_data`'s, `package:cbor`'s `CborValue`, ..., or `package:test`'s
+`Timeout`, ...) is named `<module>-<rule>` instead, so `list` in `fs.cddl` is
+`FsList` (dgtlrift/cddlc#222).
+
 ### Structs
 
 ```dart
