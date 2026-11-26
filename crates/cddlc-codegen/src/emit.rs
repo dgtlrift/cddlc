@@ -689,9 +689,19 @@ const RESERVED_C_TYPES: &[&str] = &[
 /// The rules to rename so their C types don't clash with one in
 /// [`RESERVED_C_TYPES`]: each to `<module>-<rule>`.
 pub fn c_reserved_renames(module: &cddlc_ir::IrModule) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
+    reserved_renames(module, RESERVED_C_TYPES, crate::to_snake_case)
+}
+
+/// The rules whose name, as a backend writes it (`case`), is one of
+/// `reserved`: each renamed `<module>-<rule>`, to use with [`rename_types`].
+pub fn reserved_renames(
+    module:   &cddlc_ir::IrModule,
+    reserved: &[&str],
+    case:     fn(&str) -> String,
+) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
     let mut out = std::collections::HashMap::new();
     for name in module.types.keys() {
-        if RESERVED_C_TYPES.contains(&crate::to_snake_case(name).as_str()) {
+        if reserved.contains(&case(name).as_str()) {
             let mut to: smol_str::SmolStr = format!("{}-{name}", module.name).into();
             while module.types.contains_key(&to) {
                 to = format!("{to}-type").into();
@@ -700,4 +710,34 @@ pub fn c_reserved_renames(module: &cddlc_ir::IrModule) -> std::collections::Hash
         }
     }
     out
+}
+
+/// Names a Rust rule's type can't take: the prelude's types, traits and
+/// variants, and what the generated crate uses unqualified (minicbor's,
+/// serde's). The runtime's names (`ErrorCode`) a rule may take (#149).
+/// PascalCase, as the type is named.
+const RESERVED_RUST_TYPES: &[&str] = &[
+    "Result", "Option", "Some", "None", "Ok", "Err", "String", "Vec", "Box", "Self",
+    "Default", "Clone", "Copy", "Debug", "PartialEq", "Eq", "PartialOrd", "Ord", "Hash",
+    "Send", "Sync", "Sized", "Drop", "Fn", "FnMut", "FnOnce", "Iterator", "IntoIterator",
+    "Extend", "From", "Into", "TryFrom", "TryInto", "ToString", "ToOwned", "AsRef", "AsMut",
+    "Encode", "Decode", "Encoder", "Decoder", "EncodeError", "DecodeError", "Write",
+    "Serialize", "Deserialize", "Serializer", "Deserializer", "Engine",
+];
+
+/// The rules to rename so their Rust types don't clash with one in
+/// [`RESERVED_RUST_TYPES`] (a rule named `result` hid `Result`,
+/// dgtlrift/cddlc#191): each to `<module>-<rule>`.
+pub fn rust_reserved_renames(module: &cddlc_ir::IrModule) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
+    reserved_renames(module, RESERVED_RUST_TYPES, crate::to_pascal_case)
+}
+
+/// Names a C# rule's class can't take: the members of the `JsonConverter`
+/// it gets, inside which the class is named (`Write`, dgtlrift/cddlc#191).
+const RESERVED_CSHARP_TYPES: &[&str] = &["Read", "Write", "CanConvert", "HandleNull", "Type"];
+
+/// The rules to rename so their C# classes don't clash with one in
+/// [`RESERVED_CSHARP_TYPES`]: each to `<module>-<rule>`.
+pub fn csharp_reserved_renames(module: &cddlc_ir::IrModule) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
+    reserved_renames(module, RESERVED_CSHARP_TYPES, crate::to_pascal_case)
 }

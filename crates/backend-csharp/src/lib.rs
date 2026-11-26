@@ -28,6 +28,10 @@ impl Backend for CSharpBackend {
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "C#", true)?;
+        // A rule whose class would clash with a member of its JSON converter
+        // (`write` → `Write`) is `<module>-<rule>` (dgtlrift/cddlc#191).
+        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::csharp_reserved_renames(module));
+        let module = &renamed;
         let name      = module.name.as_str();
         let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");

@@ -1,5 +1,6 @@
 ; Reference schema: rules named like the C library's types (mode_t, time_t,
-; size_t, pid_t) or the runtime's (cbor_str_t) (dgtlrift/cddlc#154)
+; size_t, pid_t) or the runtime's (cbor_str_t) (dgtlrift/cddlc#154), and like
+; Rust's (Result, Option, Write; dgtlrift/cddlc#191)
 
 file = {
     mode:  mode,
@@ -7,6 +8,10 @@ file = {
     size:  size,
     owner: pid,
     label: cbor-str,
+    outcome: result,
+    ? note: option,
+    sink: write,
+    kind: type,
 }
 
 mode = uint
@@ -14,3 +19,8 @@ time = { sec: int, nsec: uint }
 size = [* uint]
 pid = int / tstr
 cbor-str = tstr
+result = { ok: bool, ? code: int }
+option = tstr
+write = [* uint]
+
+type = uint

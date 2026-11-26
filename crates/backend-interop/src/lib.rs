@@ -65,7 +65,13 @@ pub fn generate(
         GeneratedFile { path: format!("{dir}/vectors.cbor"),  content: emit_cbor_hex(&vectors, opts) },
     ];
 
-    if langs.rust   { files.push(GeneratedFile { path: format!("{dir}/rust/interop_test.rs"),   content: emit_rust_harness(&vectors, name, opts) }); }
+    if langs.rust {
+        // Rust renames a rule whose type would hide one the crate uses
+        // (`result` → `<module>-result`, dgtlrift/cddlc#191).
+        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::rust_reserved_renames(module));
+        let rust_vectors = collect_vectors(&renamed, opts);
+        files.push(GeneratedFile { path: format!("{dir}/rust/interop_test.rs"), content: emit_rust_harness(&rust_vectors, name, opts) });
+    }
     if langs.c {
         // C renames a rule named like a C library type (`mode` → `<module>-mode`,
         // dgtlrift/cddlc#154); its harness uses the same names.
@@ -74,7 +80,13 @@ pub fn generate(
         files.push(GeneratedFile { path: format!("{dir}/c/test_interop.c"), content: emit_c_harness(&c_vectors, name, opts) });
     }
     if langs.cpp    { files.push(GeneratedFile { path: format!("{dir}/cpp/test_interop.cpp"),    content: emit_cpp_harness(&vectors, name, opts) }); }
-    if langs.csharp { files.push(GeneratedFile { path: format!("{dir}/csharp/InteropTests.cs"),  content: emit_csharp_harness(&vectors, name, opts) }); }
+    if langs.csharp {
+        // C# renames a rule whose class would clash with its converter's
+        // members (`write`, dgtlrift/cddlc#191).
+        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::csharp_reserved_renames(module));
+        let cs_vectors = collect_vectors(&renamed, opts);
+        files.push(GeneratedFile { path: format!("{dir}/csharp/InteropTests.cs"), content: emit_csharp_harness(&cs_vectors, name, opts) });
+    }
     if langs.nodejs { files.push(GeneratedFile { path: format!("{dir}/nodejs/interop.test.ts"),  content: emit_nodejs_harness(&vectors, name, opts) }); }
     if langs.python { files.push(GeneratedFile { path: format!("{dir}/python/test_interop.py"),  content: emit_python_harness(&vectors, name, opts) }); }
     if langs.go     { files.push(GeneratedFile { path: format!("{dir}/go/interop_test.go"),      content: emit_go_harness(&vectors, name, opts) }); }
