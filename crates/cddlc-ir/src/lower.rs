@@ -1358,12 +1358,18 @@ impl<'m> LowerCtx<'m> {
             // The array's length says which members it holds: an array of
             // n items holds the first n - required optional members, in order
             // (COSE's `Sig_structure` and `Countersign_structure`,
-            // dgtlrift/cddlc#134). A repeated member isn't supported yet.
-            if st.fields.iter().any(|f| f.occurrence.is_repeated()) {
+            // dgtlrift/cddlc#134). One repeated member, with every other one
+            // required, holds the items that are left (RFC 9171's `bundle =
+            // [primary-block, * extension-block, payload-block]`). With more
+            // than one, or an optional member beside it, the length doesn't
+            // say which items are whose.
+            let repeated = st.fields.iter().filter(|f| f.occurrence.is_repeated()).count();
+            let optional = st.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).count();
+            if repeated > 1 || (repeated == 1 && optional > 0) {
                 return Err(IrError::Unsupported {
                     rule:   name.into(),
-                    reason: "a record array can't repeat a member yet (`[a: uint, * tstr]`, dgtlrift/cddlc#134); \
-                             use a separate array for the repeated part".into(),
+                    reason: "a record array can't repeat a member beside another repeated or optional one yet \
+                             (`[? a: uint, * tstr]`, dgtlrift/cddlc#134); use a separate array for the repeated part".into(),
                 });
             }
         }

@@ -41,6 +41,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("repeated-groups", include_str!("../schemas/repeated_groups.cddl")),
     ("int-keys",    include_str!("../schemas/int_keys.cddl")),
     ("other-keys",  include_str!("../schemas/other_keys.cddl")),
+    ("record-repeats", include_str!("../schemas/record_repeats.cddl")),
 ];
 
 /// Reference schemas only some backends can generate, and only in CBOR: each

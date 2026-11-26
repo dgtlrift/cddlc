@@ -32,7 +32,7 @@ struct Case {
     expect: Expect,
 }
 
-const RECORD: &str = "a record array can't repeat a member yet";
+const RECORD: &str = "a record array can't repeat a member beside another repeated or optional one yet";
 const MAP_GROUP: &str = "a repeated group in a map";
 const COMPUTED_KEYS: &str = "a map with more than one member with a computed key";
 
@@ -48,8 +48,8 @@ const CASES: &[Case] = &[
     Case { files: &["rfc/rfc9115.cddl"], expect: Expect::Fails(MAP_GROUP, 135) },
     Case { files: &["rfc/rfc9164.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9165.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9171.cddl"], expect: Expect::Fails(RECORD, 134) },
-    Case { files: &["rfc/rfc9171.cddl", "rfc/rfc9173.cddl"], expect: Expect::Fails(RECORD, 134) },
+    Case { files: &["rfc/rfc9171.cddl"], expect: Expect::Ok },
+    Case { files: &["rfc/rfc9171.cddl", "rfc/rfc9173.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9177.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9202.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9203.cddl"], expect: Expect::IntKeyedOthers },
@@ -74,7 +74,7 @@ const CASES: &[Case] = &[
     Case { files: &["rfc/rfc9237.cddl", "rfc/rfc9594-example-scope-aif.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9594-example-scope-text.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9594-get_creds.cddl"], expect: Expect::Ok },
-    Case { files: &["rfc/rfc9594-sign_info_entry-with-a-gene.cddl"], expect: Expect::Fails(RECORD, 134) },
+    Case { files: &["rfc/rfc9594-sign_info_entry-with-a-gene.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9594-sign_info-parameter.cddl"], expect: Expect::Ok },
     Case { files: &["rfc/rfc9597.cddl"], expect: Expect::Ok },
     Case { files: &["webdriver-bidi/webdriver-bidi.cddl"], expect: Expect::Ok },

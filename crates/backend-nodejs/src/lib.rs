@@ -614,6 +614,10 @@ fn emit_record_codec(
     dname: &str,
     opts: &CodegenOptions,
 ) {
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        emit_record_codec_repeated(w, s, ri, iname, fname, dname, opts);
+        return;
+    }
     let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
     let total = s.fields.len();
     let want = if required == total { required.to_string() } else { format!("{required} to {total}") };
@@ -736,6 +740,126 @@ fn emit_record_codec(
         } else {
             w.line(&format!("...({local} !== undefined ? {{ {prop}: {local} }} : {{}}),"));
         }
+    }
+    w.dedent();
+    w.line("};");
+    w.dedent();
+    w.line("}");
+}
+
+/// Throws unless a repeated member's item count, `n`, is within its bounds
+/// (dgtlrift/cddlc#134).
+fn emit_ts_repeat_check(w: &mut IndentWriter, iname: &str, f: &cddlc_ir::FieldDef, n: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    if min > 0 {
+        w.line(&format!("if ({n} < {min}) throw new Error({:?});", format!("{iname}.{}: needs at least {min} items", f.name)));
+    }
+    if let Some(max) = max {
+        w.line(&format!("if ({n} > {max}) throw new Error({:?});", format!("{iname}.{}: has more than {max} items", f.name)));
+    }
+}
+
+/// A record with a repeated member (`[primary, * extension, payload]`): the
+/// member's items go inline, and the array's length says how many there are
+/// (dgtlrift/cddlc#134).
+fn emit_record_codec_repeated(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    ri: usize,
+    iname: &str,
+    fname: &str,
+    dname: &str,
+    opts: &CodegenOptions,
+) {
+    let rf = &s.fields[ri];
+    let rprop = to_snake_case(&rf.name);
+    let fixed = s.fields.len() - 1;
+    w.line(&format!("export function {fname}(val: {iname}): Uint8Array {{"));
+    w.indent();
+    emit_ts_repeat_check(w, iname, rf, &format!("val.{rprop}.length"));
+    if opts.is_json() {
+        w.line("const items: unknown[] = [];");
+        for f in &s.fields {
+            let prop = to_snake_case(&f.name);
+            if f.occurrence.is_repeated() {
+                w.line(&format!("for (const x of val.{prop}) items.push({});", ts_json_encode_expr(&f.ty, "x", opts)));
+            } else {
+                w.line(&format!("items.push({});", ts_json_encode_expr(&f.ty, &format!("val.{prop}"), opts)));
+            }
+        }
+        w.line("return new TextEncoder().encode(JSON.stringify(items));");
+    } else {
+        w.line("const enc = new CborEncoder();");
+        if let Some(tag) = s.tagged {
+            w.line(&format!("enc.tag({});", tag.0));
+        }
+        w.line(&format!("enc.startArray({fixed} + val.{rprop}.length);"));
+        for f in &s.fields {
+            let prop = to_snake_case(&f.name);
+            if f.occurrence.is_repeated() {
+                w.line(&format!("for (const x of val.{prop}) {{"));
+                w.indent();
+                emit_ts_encode_primitive_or_named(w, &f.ty, "x", opts);
+                w.dedent();
+                w.line("}");
+            } else {
+                emit_ts_encode_value(w, &f.ty, &format!("val.{prop}"), &f.occurrence, opts);
+            }
+        }
+        w.line("enc.endArray();");
+        w.line("return enc.finish();");
+    }
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    if opts.is_json() {
+        w.line(&format!("export function {dname}(data: Uint8Array): {iname} {{"));
+        w.indent();
+        w.line("const rec: unknown = JSON.parse(new TextDecoder().decode(data));");
+    } else {
+        open_cbor_decoder(w, &s.name, iname);
+        w.line(&format!("const rec: unknown = {};", untag_expr(s.tagged, iname)));
+    }
+    w.line("if (!Array.isArray(rec)) {");
+    w.line(&format!("  throw new Error({:?});", format!("{iname}: expected an array")));
+    w.line("}");
+    w.line("const a = rec as unknown[];");
+    w.line(&format!("if (a.length < {fixed}) {{"));
+    w.line(&format!("  throw new Error(`{iname}: expected at least {fixed} items, got ${{a.length}}`);"));
+    w.line("}");
+    w.line(&format!("const reps = a.length - {fixed};"));
+    emit_ts_repeat_check(w, iname, rf, "reps");
+    for (i, f) in s.fields.iter().enumerate() {
+        let prop = to_snake_case(&f.name);
+        let local = field_local(&prop);
+        let ty = ts_struct_field_type(f, opts);
+        let conv_of = |item: &str| if opts.is_json() {
+            ts_json_decode_expr(&f.ty, item, &f.name, opts)
+        } else {
+            ts_convert_expr(&f.ty, item, opts)
+        };
+        if f.occurrence.is_repeated() {
+            w.line(&format!("const {local}: {ty} = a.slice({i}, {i} + reps).map((x) => {});", conv_of("x")));
+            if !f.constraints.is_empty() {
+                w.line(&format!("for (const x of {local}) {{"));
+                w.indent();
+                emit_ts_validation(w, &f.constraints, "x", &f.name, opts.is_json());
+                w.dedent();
+                w.line("}");
+            }
+        } else {
+            let item = if i < ri { format!("a[{i}]") } else { format!("a[{} + reps]", i - 1) };
+            let conv = pin_bool_literal(f, conv_of(&item));
+            w.line(&format!("const {local}: {ty} = {conv};"));
+            emit_ts_validation(w, &f.constraints, &local, &f.name, opts.is_json());
+        }
+    }
+    w.line("return {");
+    w.indent();
+    for f in &s.fields {
+        let prop = to_snake_case(&f.name);
+        w.line(&format!("{prop}: {},", field_local(&prop)));
     }
     w.dedent();
     w.line("};");
@@ -2550,9 +2674,14 @@ fn ts_test_value(
     let n = if opts.is_json() { "" } else { "n" };
     match occ {
         Occurrence::Optional => "undefined".into(),
+        // As many items as the member needs (`+`: one; dgtlrift/cddlc#134).
         Occurrence::ZeroOrMore { .. }
         | Occurrence::OneOrMore { .. }
-        | Occurrence::Bounded { .. } => "[]".into(),
+        | Occurrence::Bounded { .. } => {
+            let item = ts_test_value(ty, &Occurrence::Required, module, opts, explicit, depth);
+            let items: Vec<String> = (0..cddlc_codegen::repeat_bounds(occ).0).map(|_| item.clone()).collect();
+            format!("[{}]", items.join(", "))
+        }
         Occurrence::Required => match ty {
             TypeRef::Primitive(Primitive::Uint) if explicit => format!("42{n}"),
             TypeRef::Primitive(Primitive::Int) if explicit => format!("-1{n}"),

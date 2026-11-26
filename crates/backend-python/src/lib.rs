@@ -541,6 +541,10 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
 /// values, in order. Optional members come last: those present are written up
 /// to the first absent one, and one set after an absent one is an error.
 fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        emit_record_raw_repeated(w, s, ri, class_name, opts);
+        return;
+    }
     w.line("def _to_raw(self) -> Any:");
     w.indent();
     w.line("a: list[Any] = []");
@@ -632,6 +636,84 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: 
             if named.len() == 1 { "," } else { "" }
         ));
         args.push(format!("{rname}=f_{rname}"));
+    }
+    w.line(&format!("return cls({})", args.join(", ")));
+    w.dedent();
+    w.blank();
+}
+
+/// Raises unless a repeated member's item count, `n`, is within its bounds
+/// (dgtlrift/cddlc#134).
+fn emit_py_repeat_check(w: &mut IndentWriter, class_name: &str, f: &cddlc_ir::FieldDef, n: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    let mut conds = Vec::new();
+    if min > 0 { conds.push((format!("{n} < {min}"), format!("needs at least {min} items"))); }
+    if let Some(max) = max { conds.push((format!("{n} > {max}"), format!("has more than {max} items"))); }
+    for (cond, msg) in conds {
+        w.line(&format!("if {cond}:"));
+        w.indent();
+        w.line(&format!("raise ValueError(\"{class_name}.{}: {msg}\")", f.name));
+        w.dedent();
+    }
+}
+
+/// A record with a repeated member (`[primary, * extension, payload]`): the
+/// member's items go inline, and the array's length says how many there are
+/// (dgtlrift/cddlc#134).
+fn emit_record_raw_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, class_name: &str, opts: &CodegenOptions) {
+    let rf = &s.fields[ri];
+    let rname = to_snake_case(&rf.name);
+    let fixed = s.fields.len() - 1;
+    w.line("def _to_raw(self) -> Any:");
+    w.indent();
+    emit_py_repeat_check(w, class_name, rf, &format!("len(self.{rname})"));
+    w.line("a: list[Any] = []");
+    for f in &s.fields {
+        let fname = to_snake_case(&f.name);
+        if f.occurrence.is_repeated() {
+            w.line(&format!("a.extend({} for item in self.{fname})", py_to_raw(&f.ty, "item", opts)));
+        } else {
+            w.line(&format!("a.append({})", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
+        }
+    }
+    return_tagged(w, s.tagged, "a", opts);
+    w.dedent();
+    w.blank();
+
+    w.line("@classmethod");
+    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.indent();
+    untag_raw(w, s.tagged, class_name, opts);
+    w.line("if not isinstance(raw, list):");
+    w.indent();
+    w.line(&format!("raise ValueError(\"{class_name}: expected an array\")"));
+    w.dedent();
+    w.line(&format!("if len(raw) < {fixed}:"));
+    w.indent();
+    w.line(&format!("raise ValueError(f\"{class_name}: expected at least {fixed} items, got {{len(raw)}}\")"));
+    w.dedent();
+    w.line(&format!("reps = len(raw) - {fixed}"));
+    emit_py_repeat_check(w, class_name, rf, "reps");
+    let mut args = Vec::new();
+    for (i, f) in s.fields.iter().enumerate() {
+        let fname = to_snake_case(&f.name);
+        let at    = format!("{class_name}.{}", f.name);
+        let local = format!("f_{fname}");
+        if f.occurrence.is_repeated() {
+            let conv = py_from_raw(&f.ty, "item", &at, opts);
+            w.line(&format!("{local} = [{conv} for item in raw[{i}:{i} + reps]]"));
+            if !f.constraints.is_empty() {
+                w.line(&format!("for item in {local}:"));
+                w.indent();
+                emit_constraint_checks(w, &f.constraints, "item", &at);
+                w.dedent();
+            }
+        } else {
+            let index = if i < ri { i.to_string() } else { format!("{} + reps", i - 1) };
+            w.line(&format!("{local} = {}", py_from_raw(&f.ty, &format!("raw[{index}]"), &at, opts)));
+            emit_constraint_checks(w, &f.constraints, &local, &at);
+        }
+        args.push(format!("{fname}={local}"));
     }
     w.line(&format!("return cls({})", args.join(", ")));
     w.dedent();
@@ -1415,9 +1497,13 @@ fn py_value(
 ) -> String {
     match occ {
         Occurrence::Optional if !explicit => return "None".into(),
-        Occurrence::ZeroOrMore { .. } | Occurrence::Bounded { .. } => return "[]".into(),
-        Occurrence::OneOrMore { .. } => {
-            return format!("[{}]", py_value(ty, &Occurrence::Required, constraints, module, opts, explicit, depth));
+        // As many items as the member needs (`+`: one, `2*3`: two).
+        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. } | Occurrence::Bounded { .. } => {
+            let min = cddlc_codegen::repeat_bounds(occ).0;
+            if min == 0 {
+                return "[]".into();
+            }
+            return format!("[{}] * {min}", py_value(ty, &Occurrence::Required, constraints, module, opts, explicit, depth));
         }
         _ => {}
     }

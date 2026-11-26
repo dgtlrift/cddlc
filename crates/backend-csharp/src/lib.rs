@@ -298,6 +298,10 @@ fn cs_key_write(key: &cddlc_ir::FieldKey) -> String {
 }
 
 fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: &CodegenOptions) {
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        emit_record_cbor_repeated(w, s, ri, type_name, opts);
+        return;
+    }
     let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
     let required = s.fields.len() - optional.len();
     w.line("public void Encode(CborWriter writer)");
@@ -398,10 +402,165 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
     w.line("}");
 }
 
+/// Throws (`exc`) unless a repeated member's item count, `n`, is within its
+/// bounds (dgtlrift/cddlc#134).
+fn emit_cs_repeat_check(w: &mut IndentWriter, type_name: &str, f: &cddlc_ir::FieldDef, n: &str, exc: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    if min > 0 {
+        w.line(&format!("if ({n} < {min}) throw new {exc}({:?});", format!("{type_name}.{}: needs at least {min} items", f.name)));
+    }
+    if let Some(max) = max {
+        w.line(&format!("if ({n} > {max}) throw new {exc}({:?});", format!("{type_name}.{}: has more than {max} items", f.name)));
+    }
+}
+
+/// A record with a repeated member (`[primary, * extension, payload]`), in
+/// CBOR: the member's items go inline, and the array's length says how many
+/// there are (dgtlrift/cddlc#134).
+fn emit_record_cbor_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, type_name: &str, opts: &CodegenOptions) {
+    let rf = &s.fields[ri];
+    let rp = to_pascal_case(&rf.name);
+    let fixed = s.fields.len() - 1;
+    w.line("public void Encode(CborWriter writer)");
+    w.line("{");
+    w.indent();
+    emit_cs_repeat_check(w, type_name, rf, &format!("this.{rp}.Count"), "InvalidOperationException");
+    if let Some(tag) = s.tagged {
+        w.line(&format!("writer.WriteTag((CborTag){});", tag.0));
+    }
+    w.line(&format!("writer.WriteStartArray({fixed} + this.{rp}.Count);"));
+    for f in &s.fields {
+        let expr = format!("this.{}", to_pascal_case(&f.name));
+        if f.occurrence.is_repeated() {
+            w.line(&format!("foreach (var item in {expr})"));
+            w.line("{");
+            w.indent();
+            emit_cs_encode_typeref(w, &f.ty, "item", opts);
+            w.dedent();
+            w.line("}");
+        } else {
+            emit_cs_encode_value(w, &f.ty, &expr, &f.occurrence, opts);
+        }
+    }
+    w.line("writer.WriteEndArray();");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+    w.line("{");
+    w.indent();
+    if let Some(tag) = s.tagged {
+        w.line("var tag = reader.ReadTag();");
+        w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+    }
+    for f in &s.fields {
+        let ty    = cs_field_type(&f.ty, &f.occurrence, opts);
+        let local = to_snake_case(&f.name);
+        let def   = cs_default_value(&f.ty, &f.occurrence, opts);
+        w.line(&format!("{ty} {local} = {def};"));
+    }
+    // Count the items first, on a copy of the array's encoding.
+    w.line("var encoded = reader.ReadEncodedValue();");
+    w.line("var probe = new CborReader(encoded, reader.ConformanceMode);");
+    w.line("probe.ReadStartArray();");
+    w.line("int count = 0;");
+    w.line("while (probe.PeekState() != CborReaderState.EndArray) { probe.SkipValue(); count++; }");
+    w.line("reader = new CborReader(encoded, reader.ConformanceMode);");
+    w.line(&format!("if (count < {fixed}) throw new CborContentException({:?});", format!("{type_name}: too few items")));
+    w.line(&format!("int reps = count - {fixed};"));
+    emit_cs_repeat_check(w, type_name, rf, "reps", "CborContentException");
+    w.line("reader.ReadStartArray();");
+    for f in &s.fields {
+        let local = to_snake_case(&f.name);
+        if f.occurrence.is_repeated() {
+            w.line(&format!("for (int k = 0; k < reps; k++) {local}.Add({});", cs_decode_expr(&f.ty, opts)));
+        } else {
+            emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &f.occurrence, opts);
+        }
+    }
+    w.line("reader.ReadEndArray();");
+    w.line(&format!("return new {type_name}"));
+    w.line("{");
+    w.indent();
+    for f in &s.fields {
+        w.line(&format!("{} = {},", to_pascal_case(&f.name), to_snake_case(&f.name)));
+    }
+    w.dedent();
+    w.line("};");
+    w.dedent();
+    w.line("}");
+}
+
+/// A record with a repeated member, in JSON: its items go inline, and the
+/// array's length says how many there are (dgtlrift/cddlc#134).
+fn emit_record_json_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, type_name: &str, opts: &CodegenOptions) {
+    let rf = &s.fields[ri];
+    let fixed = s.fields.len() - 1;
+    w.line(&format!("public sealed class {type_name}JsonConverter : JsonConverter<{type_name}>"));
+    w.line("{");
+    w.indent();
+    w.line(&format!(
+        "public override {type_name} Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)"
+    ));
+    w.line("{");
+    w.indent();
+    w.line("using var doc = JsonDocument.ParseValue(ref reader);");
+    w.line("var a = doc.RootElement;");
+    w.line(&format!("if (a.ValueKind != JsonValueKind.Array || a.GetArrayLength() < {fixed})"));
+    w.line(&format!("    throw new JsonException({:?});", format!("{type_name}: expected an array of at least {fixed} items")));
+    w.line(&format!("int reps = a.GetArrayLength() - {fixed};"));
+    emit_cs_repeat_check(w, type_name, rf, "reps", "JsonException");
+    let local = to_snake_case(&rf.name);
+    w.line(&format!("var {local} = {};", cs_default_value(&rf.ty, &rf.occurrence, opts).trim()));
+    w.line(&format!("for (int k = 0; k < reps; k++) {local}.Add({});", cs_json_from_element(&rf.ty, &format!("a[{ri} + k]"), opts)));
+    w.line(&format!("return new {type_name}"));
+    w.line("{");
+    w.indent();
+    for (i, f) in s.fields.iter().enumerate() {
+        let pname = to_pascal_case(&f.name);
+        if i == ri {
+            w.line(&format!("{pname} = {local},"));
+        } else {
+            let el = if i < ri { format!("a[{i}]") } else { format!("a[{} + reps]", i - 1) };
+            w.line(&format!("{pname} = {},", cs_json_from_element(&f.ty, &el, opts)));
+        }
+    }
+    w.dedent();
+    w.line("};");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line(&format!(
+        "public override void Write(Utf8JsonWriter writer, {type_name} value, JsonSerializerOptions options)"
+    ));
+    w.line("{");
+    w.indent();
+    emit_cs_repeat_check(w, type_name, rf, &format!("value.{}.Count", to_pascal_case(&rf.name)), "JsonException");
+    w.line("writer.WriteStartArray();");
+    for f in &s.fields {
+        let expr = format!("value.{}", to_pascal_case(&f.name));
+        if f.occurrence.is_repeated() {
+            w.line(&format!("foreach (var item in {expr}) {}", cs_json_write_stmt(&f.ty, "item", opts)));
+        } else {
+            w.line(&cs_json_write_stmt(&f.ty, &expr, opts));
+        }
+    }
+    w.line("writer.WriteEndArray();");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+}
+
 /// System.Text.Json writes a class as an object, so a record gets a converter:
 /// a JSON array of its members' values, in order, optional ones at the end
 /// left off when absent.
 fn emit_record_json_converter(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: &CodegenOptions) {
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        emit_record_json_repeated(w, s, ri, type_name, opts);
+        return;
+    }
     let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
     let required = s.fields.len() - optional.len();
     let total = s.fields.len();
@@ -2057,6 +2216,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
         let val = match &f.occurrence {
             Occurrence::Optional => "null".into(),
             Occurrence::Required if !f.constraints.is_empty() => cs_valid_constrained_value(&f.constraints, &f.ty, opts),
+            occ if cddlc_codegen::repeat_bounds(occ).0 > 0 => cs_needed_items(f, opts),
             occ => cs_default_value(&f.ty, occ, opts).trim().to_owned(),
         };
         w.line(&format!("{pname} = {val},"));
@@ -2080,6 +2240,7 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
         let pname = to_pascal_case(&f.name);
         let val = match &f.occurrence {
             Occurrence::Required if !f.constraints.is_empty() => cs_valid_constrained_value(&f.constraints, &f.ty, opts),
+            occ if cddlc_codegen::repeat_bounds(occ).0 > 0 => cs_needed_items(f, opts),
             occ => cs_explicit_value(&f.ty, occ, opts),
         };
         w.line(&format!("{pname} = {val},"));
@@ -2237,6 +2398,15 @@ fn emit_roundtrip_assert_json(w: &mut IndentWriter, type_name: &str) {
 }
 
 // ── Test value helpers ────────────────────────────────────────────────────────
+
+/// A repeated member's test value with as many items as it needs (`+`: one;
+/// dgtlrift/cddlc#134).
+fn cs_needed_items(f: &cddlc_ir::FieldDef, opts: &CodegenOptions) -> String {
+    let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
+    let item = cs_explicit_value(&f.ty, &Occurrence::Required, opts);
+    let items: Vec<String> = (0..min).map(|_| item.clone()).collect();
+    format!("new List<{}> {{ {} }}", cs_typeref(&f.ty, opts), items.join(", "))
+}
 
 fn cs_explicit_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     match occ {

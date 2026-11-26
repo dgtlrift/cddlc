@@ -271,11 +271,23 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let ty_str = cpp_field_type(&f.ty, &f.occurrence, opts);
         let fname  = to_snake_case(&f.name);
         w.line(&format!("{ty_str} {fname}{{}};"));
+        // A fixed-capacity repeated member says how many items it holds
+        // (dgtlrift/cddlc#134).
+        if f.occurrence.is_repeated() && !is_heap(opts) {
+            w.line(&format!("std::size_t {fname}_count{{0}};"));
+        }
     }
     // The map's other entries (dgtlrift/cddlc#82): any number with `--alloc
     // heap`, else up to their capacity.
     let mut eqs: Vec<String> = s.fields.iter()
-        .map(|f| format!("{} == o.{}", to_snake_case(&f.name), to_snake_case(&f.name)))
+        .map(|f| {
+            let n = to_snake_case(&f.name);
+            if f.occurrence.is_repeated() && !is_heap(opts) {
+                format!("{n}_count == o.{n}_count && std::equal({n}.begin(), {n}.begin() + {n}_count, o.{n}.begin())")
+            } else {
+                format!("{n} == o.{n}")
+            }
+        })
         .collect();
     if let Some(r) = &s.rest {
         let rname = to_snake_case(&r.name);
@@ -573,6 +585,24 @@ fn emit_cpp_array_item_decode(w: &mut IndentWriter, a: &ArrayDef, module: &IrMod
     }
 }
 
+/// A repeated member's item count, in `obj` (`val`, `out`).
+fn repeat_len(f: &cddlc_ir::FieldDef, obj: &str, opts: &CodegenOptions) -> String {
+    let n = to_snake_case(&f.name);
+    if is_heap(opts) { format!("{obj}.{n}.size()") } else { format!("{obj}.{n}_count") }
+}
+
+/// Fails (returns -1) unless a repeated member's item count, `n`, is within
+/// its bounds (dgtlrift/cddlc#134).
+fn emit_cpp_repeat_check(w: &mut IndentWriter, f: &cddlc_ir::FieldDef, n: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    if min > 0 {
+        w.line(&format!("if ({n} < {min}) return -1; // too few '{}' items", f.name));
+    }
+    if let Some(max) = max {
+        w.line(&format!("if ({n} > {max}) return -1; // too many '{}' items", f.name));
+    }
+}
+
 /// Whether a map's other entries have plain `tstr` keys, held as
 /// `std::string_view` (otherwise they hold their key type; dgtlrift/cddlc#136).
 fn text_rest(r: &cddlc_ir::MapRest) -> bool {
@@ -632,7 +662,16 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 let opt_sum: String = opt_fields.iter()
                     .map(|f| format!(" + (val.{}.has_value() ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
-                w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});"));
+                // A repeated member's items go inline (dgtlrift/cddlc#134).
+                match cddlc_codegen::record_repeated(s) {
+                    Some(ri) => {
+                        let rf = &s.fields[ri];
+                        let n = repeat_len(rf, "val", opts);
+                        emit_cpp_repeat_check(w, rf, &n);
+                        w.line(&format!("nanocbor_fmt_array(enc, {}u + {n});", req_count - 1));
+                    }
+                    None => w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});")),
+                }
             } else {
                 let rest_count = match &s.rest {
                     Some(r) if is_heap(opts) => format!(" + val.{}.size()", to_snake_case(&r.name)),
@@ -651,6 +690,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                     w.indent();
                     if !record { w.line(&cpp_key_write(&f.key)); }
                     emit_cpp_encode_field(w, &f.ty, &format!("(*val.{fname})"), &f.occurrence, opts);
+                    w.dedent();
+                    w.line("}");
+                } else if record && f.occurrence.is_repeated() {
+                    w.line(&format!("for (std::size_t i = 0; i < {}; i++) {{", repeat_len(f, "val", opts)));
+                    w.indent();
+                    emit_cpp_encode_field(w, &f.ty, &format!("val.{fname}[i]"), &Occurrence::Required, opts);
                     w.dedent();
                     w.line("}");
                 } else {
@@ -859,14 +904,37 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                 // array holds every member, so count the items on a copy
                 // (dgtlrift/cddlc#134).
                 let before = cddlc_codegen::record_optionals_before(s);
+                let repeated = cddlc_codegen::record_repeated(s);
                 let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
-                if before.is_some() {
+                if before.is_some() || repeated.is_some() {
                     w.line("std::size_t count = 0;");
                     w.line("{ nanocbor_value_t probe = arr; while (!nanocbor_at_end(&probe)) { if (nanocbor_skip(&probe) < 0) return -1; count++; } }");
                 }
+                // A repeated member holds the items the others leave.
+                if let Some(ri) = repeated {
+                    let rf = &s.fields[ri];
+                    w.line(&format!("if (count < {required}) return -1; /* too few items */"));
+                    w.line(&format!("std::size_t reps = count - {required};"));
+                    if !is_heap(opts) {
+                        let cap = capacity_value(rf.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)), opts.max_array);
+                        w.line(&format!("if (reps > {cap}) return -1; /* more items than its capacity */"));
+                    }
+                    emit_cpp_repeat_check(w, rf, "reps");
+                }
                 for (i, f) in s.fields.iter().enumerate() {
                     let fname = to_snake_case(&f.name);
-                    if matches!(f.occurrence, Occurrence::Optional) {
+                    if f.occurrence.is_repeated() {
+                        if is_heap(opts) {
+                            w.line(&format!("out.{fname}.resize(reps);"));
+                        } else {
+                            w.line(&format!("out.{fname}_count = reps;"));
+                        }
+                        w.line("for (std::size_t i = 0; i < reps; i++) {");
+                        w.indent();
+                        emit_cpp_decode_field(w, &f.ty, &format!("out.{fname}[i]"), &f.constraints, &f.name, "&arr", opts);
+                        w.dedent();
+                        w.line("}");
+                    } else if matches!(f.occurrence, Occurrence::Optional) {
                         if let Some(b) = &before {
                             w.line(&format!("if (count > {}) {{", required + b[i]));
                         } else {
@@ -1521,6 +1589,19 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
         }
         TypeDef::Struct(s) => {
             w.line(&format!("{type_name} original{{}};"));
+            // A repeated member gets as many (default) items as it needs
+            // (dgtlrift/cddlc#134).
+            for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
+                let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
+                let fname = to_snake_case(&f.name);
+                if min > 0 {
+                    if is_heap(_opts) {
+                        w.line(&format!("original.{fname}.resize({min});"));
+                    } else {
+                        w.line(&format!("original.{fname}_count = {min};"));
+                    }
+                }
+            }
             for f in &s.fields {
                 let fname = to_snake_case(&f.name);
                 // Skip optional and repeated fields
@@ -1969,6 +2050,18 @@ fn emit_source_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("i += 4;");
     w.dedent();
     w.line("}");
+    // The unpadded tail: 2 characters are one byte, 3 are two.
+    w.line("if (n - i >= 2) {");
+    w.indent();
+    w.line("int a=DEC[(uint8_t)s[i]],b=DEC[(uint8_t)s[i+1]];");
+    w.line("if(a>=0&&b>=0) {");
+    w.indent();
+    w.line("out.push_back((a<<2)|(b>>4));");
+    w.line("if (n - i >= 3) { int c=DEC[(uint8_t)s[i+2]]; if(c>=0) out.push_back((b<<4)|(c>>2)); }");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
     w.line("return out;");
     w.dedent();
     w.line("}");
@@ -2051,6 +2144,65 @@ fn cpp_json_from_val(ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: &I
 
 fn emit_cpp_json_impl(w: &mut IndentWriter, def: &TypeDef, opts: &CodegenOptions, module: &IrModule) {
     match def {
+        // A record with a repeated member (`[primary, * extension, payload]`):
+        // its items go inline, and the array's length says how many there
+        // are (dgtlrift/cddlc#134).
+        TypeDef::Struct(s) if cddlc_codegen::record_repeated(s).is_some() => {
+            let ri = cddlc_codegen::record_repeated(s).expect("checked");
+            let ctype = to_pascal_case(&s.name);
+            let rf = &s.fields[ri];
+            let rname = to_snake_case(&rf.name);
+            let fixed = s.fields.len() - 1;
+            let (min, max) = cddlc_codegen::repeat_bounds(&rf.occurrence);
+            let bounds = |w: &mut IndentWriter, n: &str| {
+                if min > 0 {
+                    w.line(&format!("if ({n} < {min}) throw std::runtime_error({:?});", format!("{ctype}.{}: needs at least {min} items", rf.name)));
+                }
+                if let Some(max) = max {
+                    w.line(&format!("if ({n} > {max}) throw std::runtime_error({:?});", format!("{ctype}.{}: has more than {max} items", rf.name)));
+                }
+            };
+            w.line(&format!("std::vector<uint8_t> {ctype}::encode() const {{"));
+            w.indent();
+            bounds(w, &format!("this->{rname}.size()"));
+            w.line("nlohmann::json j = nlohmann::json::array();");
+            for f in &s.fields {
+                let fname = to_snake_case(&f.name);
+                if f.occurrence.is_repeated() {
+                    w.line(&format!("for (const auto& v : this->{fname}) j.push_back({});", cpp_json_to_val(&f.ty, "v", module)));
+                } else {
+                    w.line(&format!("j.push_back({});", cpp_json_to_val(&f.ty, &format!("this->{fname}"), module)));
+                }
+            }
+            w.line("auto s = j.dump();");
+            w.line("return std::vector<uint8_t>(s.begin(), s.end());");
+            w.dedent();
+            w.line("}");
+            w.blank();
+            w.line(&format!("{ctype} {ctype}::decode(const std::vector<uint8_t>& data) {{"));
+            w.indent();
+            w.line("auto j = nlohmann::json::parse(data.begin(), data.end());");
+            w.line(&format!("if (!j.is_array() || j.size() < {fixed}) {{"));
+            w.line(&format!("    throw std::runtime_error({:?});", format!("{ctype}: expected an array of at least {fixed} items")));
+            w.line("}");
+            w.line(&format!("std::size_t reps = j.size() - {fixed};"));
+            bounds(w, "reps");
+            w.line(&format!("{ctype} out{{}};"));
+            for (i, f) in s.fields.iter().enumerate() {
+                let fname = to_snake_case(&f.name);
+                if f.occurrence.is_repeated() {
+                    let conv = cpp_json_from_val(&f.ty, &format!("j.at({i} + k)"), opts, module);
+                    w.line(&format!("for (std::size_t k = 0; k < reps; k++) out.{fname}.push_back({conv});"));
+                } else {
+                    let index = if i < ri { i.to_string() } else { format!("{} + reps", i - 1) };
+                    let conv = cpp_json_from_val(&f.ty, &format!("j.at({index})"), opts, module);
+                    w.line(&format!("out.{fname} = {conv};"));
+                }
+            }
+            w.line("return out;");
+            w.dedent();
+            w.line("}");
+        }
         TypeDef::Struct(s) if s.encoding == cddlc_ir::StructEncoding::Array => {
             // A record (RFC 8610 §3.4): a JSON array of the members' values, in
             // order; optional members come last, and one present after an absent
@@ -2336,6 +2488,14 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                 w.line(&format!("{ctype} original{{}};"));
                 if let Some(r) = &s.rest {
                     w.line(&format!("original.{}[\"other-key\"] = {{}};", to_snake_case(&r.name)));
+                }
+                // A repeated member gets as many (default) items as it needs
+                // (dgtlrift/cddlc#134).
+                for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
+                    let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
+                    if min > 0 {
+                        w.line(&format!("original.{}.resize({min});", to_snake_case(&f.name)));
+                    }
                 }
                 w.line("auto encoded = original.encode();");
                 w.line(&format!("auto decoded = {ctype}::decode(encoded);"));

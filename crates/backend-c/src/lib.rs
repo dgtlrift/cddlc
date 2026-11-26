@@ -260,7 +260,11 @@ fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) 
         emit_c_doc(w, f.doc.as_deref());
         let ty_str = c_field_type(&f.ty, &f.occurrence, opts);
         let fname  = to_snake_case(&f.name);
-        w.line(&format!("{ty_str} {fname};"));
+        if ty_str.contains("{name}") {
+            w.line(&format!("{};", ty_str.replace("{name}", &fname)));
+        } else {
+            w.line(&format!("{ty_str} {fname};"));
+        }
         // bool present flag for optional fields
         if matches!(f.occurrence, Occurrence::Optional) {
             w.line(&format!("bool {fname}_present;"));
@@ -440,6 +444,18 @@ fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m StructDef> 
     }
 }
 
+/// Fails (returns -1) unless a repeated member's item count, `n`, is within
+/// its bounds (dgtlrift/cddlc#134).
+fn emit_c_repeat_check(w: &mut IndentWriter, f: &cddlc_ir::FieldDef, n: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    if min > 0 {
+        w.line(&format!("if ({n} < {min}) return -1; /* too few '{}' items */", f.name));
+    }
+    if let Some(max) = max {
+        w.line(&format!("if ({n} > {max}) return -1; /* too many '{}' items */", f.name));
+    }
+}
+
 /// Whether an enum variant is a text literal (`"on"`), not any text (`tstr`).
 fn is_text_literal(v: &cddlc_ir::EnumVariant) -> bool {
     v.constraints.iter().any(|c| matches!(c, Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
@@ -502,7 +518,16 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 let opt_sum: String = opt_fields.iter()
                     .map(|f| format!(" + (val->{}_present ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
-                w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});"));
+                // A repeated member's items go inline (dgtlrift/cddlc#134).
+                match cddlc_codegen::record_repeated(s) {
+                    Some(ri) => {
+                        let rf = &s.fields[ri];
+                        let rname = to_snake_case(&rf.name);
+                        emit_c_repeat_check(w, rf, &format!("val->{rname}_count"));
+                        w.line(&format!("nanocbor_fmt_array(enc, {}u + val->{rname}_count);", req_count - 1));
+                    }
+                    None => w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});")),
+                }
             } else {
                 let rest_count = s.rest.as_ref()
                     .map(|r| format!(" + val->{}_count", to_snake_case(&r.name)))
@@ -520,6 +545,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                     w.indent();
                     if !record { w.line(&c_key_write(&f.key)); }
                     emit_c_encode_field(w, &f.ty, &format!("val->{fname}"), &f.occurrence, mod_name, opts);
+                    w.dedent();
+                    w.line("}");
+                } else if record && f.occurrence.is_repeated() {
+                    w.line(&format!("for (size_t i = 0; i < val->{fname}_count; i++) {{"));
+                    w.indent();
+                    emit_c_encode_field(w, &f.ty, &format!("val->{fname}[i]"), &Occurrence::Required, mod_name, opts);
                     w.dedent();
                     w.line("}");
                 } else {
@@ -751,14 +782,31 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 // array holds every member, so count the items on a copy
                 // (dgtlrift/cddlc#134).
                 let before = cddlc_codegen::record_optionals_before(s);
-                if before.is_some() {
+                let repeated = cddlc_codegen::record_repeated(s);
+                if before.is_some() || repeated.is_some() {
                     w.line("size_t count = 0;");
                     w.line("{ nanocbor_value_t probe = arr; while (!nanocbor_at_end(&probe)) { if (nanocbor_skip(&probe) < 0) return -1; count++; } }");
                 }
                 let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+                // A repeated member holds the items the others leave.
+                if let Some(ri) = repeated {
+                    let rf = &s.fields[ri];
+                    let cap = capacity_value(rf.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)), opts.max_array);
+                    w.line(&format!("if (count < {required}) return -1; /* too few items */"));
+                    w.line(&format!("size_t reps = count - {required};"));
+                    w.line(&format!("if (reps > {cap}) return -1; /* more items than its capacity */"));
+                    emit_c_repeat_check(w, rf, "reps");
+                }
                 for (i, f) in s.fields.iter().enumerate() {
                     let fname = to_snake_case(&f.name);
-                    if matches!(f.occurrence, Occurrence::Optional) {
+                    if f.occurrence.is_repeated() {
+                        w.line("for (size_t i = 0; i < reps; i++) {");
+                        w.indent();
+                        emit_c_decode_field(w, &f.ty, &format!("out->{fname}[i]"), &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
+                        w.dedent();
+                        w.line("}");
+                        w.line(&format!("out->{fname}_count = reps;"));
+                    } else if matches!(f.occurrence, Occurrence::Optional) {
                         if let Some(b) = &before {
                             w.line(&format!("if (count > {}) {{", required + b[i]));
                         } else {
@@ -1344,10 +1392,14 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
         if matches!(f.occurrence, Occurrence::Optional) { continue; }
         // A choice's zeroed union is its first alternative's zero.
         if is_prim_choice_c(&f.ty) { continue; }
-        let fname = to_snake_case(&f.name);
+        // A repeated member gets as many items as it needs, each like the
+        // first (dgtlrift/cddlc#134); one that may be empty stays empty.
+        if f.occurrence.is_repeated() && cddlc_codegen::repeat_bounds(&f.occurrence).0 == 0 { continue; }
+        let base = to_snake_case(&f.name);
+        let fname = if f.occurrence.is_repeated() { format!("{}[0]", to_snake_case(&f.name)) } else { to_snake_case(&f.name) };
         if let TypeRef::Named(n) = &f.ty {
             if let Some(n) = tstr_size_constraint_for(n, module) {
-                w.line(&format!("original.{fname}.value.ptr = _{fname}_data;"));
+                w.line(&format!("original.{fname}.value.ptr = _{base}_data;"));
                 w.line(&format!("original.{fname}.value.len = {n};"));
                 continue;
             }
@@ -1355,13 +1407,13 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
         match effective_primitive(&f.ty) {
             Some(Primitive::Tstr) => {
                 let len = text_literal_of(f).map_or(5, str::len);
-                w.line(&format!("original.{fname}.ptr = _{fname}_str;"));
+                w.line(&format!("original.{fname}.ptr = _{base}_str;"));
                 w.line(&format!("original.{fname}.len = {len};"));
                 continue;
             }
             Some(Primitive::Bstr) if bits_of(f).is_some() => {
                 let n = cddlc_codegen::bits_mask_bytes(bits_of(f).expect("checked")).len();
-                w.line(&format!("original.{fname}.ptr = _{fname}_cbor;"));
+                w.line(&format!("original.{fname}.ptr = _{base}_cbor;"));
                 w.line(&format!("original.{fname}.len = {n};"));
                 continue;
             }
@@ -1371,7 +1423,7 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
                 continue;
             }
             Some(Primitive::Bstr | Primitive::Any) => {
-                w.line(&format!("original.{fname}.ptr = _{fname}_cbor;"));
+                w.line(&format!("original.{fname}.ptr = _{base}_cbor;"));
                 w.line(&format!("original.{fname}.len = 1; /* CBOR null 0xf6 */"));
                 continue;
             }
@@ -1383,6 +1435,13 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
         if let Some(v) = val {
             w.line(&format!("original.{fname} = {v};"));
         }
+    }
+    for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
+        let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
+        if min == 0 || is_prim_choice_c(&f.ty) { continue; }
+        let fname = to_snake_case(&f.name);
+        w.line(&format!("for (size_t i = 1; i < {min}; i++) original.{fname}[i] = original.{fname}[0];"));
+        w.line(&format!("original.{fname}_count = {min};"));
     }
     w.blank();
 
@@ -1403,6 +1462,10 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
     // Assert equality for scalar fields
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
+        if f.occurrence.is_repeated() {
+            w.line(&format!("assert(original.{fname}_count == decoded.{fname}_count);"));
+            continue;
+        }
         match &f.ty {
             TypeRef::Primitive(Primitive::Tstr | Primitive::Bstr | Primitive::Any) => {
                 w.line(&format!("assert(original.{fname}.len == decoded.{fname}.len);"));
@@ -1563,7 +1626,9 @@ fn c_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String
         | Occurrence::Bounded { capacity, .. } => {
             let cap  = capacity_value(capacity, opts.max_array);
             let base = typeref_to_c(ty, opts);
-            format!("{base} items[{cap}]; size_t count")
+            // `T name[cap]; size_t name_count`: the declaration puts the
+            // member's name in (dgtlrift/cddlc#134).
+            format!("{base} {{name}}[{cap}]; size_t {{name}}_count")
         }
         _ => typeref_to_c(ty, opts),
     }
@@ -1715,7 +1780,9 @@ fn c_field_type_json(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> S
         | Occurrence::Bounded { capacity, .. } => {
             let cap  = capacity_value(capacity, opts.max_array);
             let base = typeref_to_c_json(ty);
-            format!("{base} items[{cap}]; size_t count")
+            // `T name[cap]; size_t name_count`: the declaration puts the
+            // member's name in (dgtlrift/cddlc#134).
+            format!("{base} {{name}}[{cap}]; size_t {{name}}_count")
         }
         _ => typeref_to_c_json(ty),
     }
@@ -1730,7 +1797,11 @@ fn emit_struct_decl_json(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOpti
         emit_c_doc(w, f.doc.as_deref());
         let ty_str = c_field_type_json(&f.ty, &f.occurrence, opts);
         let fname  = to_snake_case(&f.name);
-        w.line(&format!("{ty_str} {fname};"));
+        if ty_str.contains("{name}") {
+            w.line(&format!("{};", ty_str.replace("{name}", &fname)));
+        } else {
+            w.line(&format!("{ty_str} {fname};"));
+        }
         if matches!(f.occurrence, Occurrence::Optional) {
             w.line(&format!("bool {fname}_present;"));
         }
@@ -2135,6 +2206,10 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
 /// values, in order. Optional members come last: one present after an absent
 /// one can't be written, so to_json returns NULL.
 fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        emit_json_record_repeated(w, s, ri, mod_name, pfx, ctype, opts);
+        return;
+    }
     let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
     w.indent();
@@ -2191,6 +2266,70 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, pf
             w.line("}");
         } else {
             w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {});", index(i)));
+            json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
+        }
+    }
+    w.line("return true;");
+    w.dedent();
+    w.line("}");
+    w.blank();
+}
+
+/// A record with a repeated member (`[primary, * extension, payload]`): its
+/// items go inline, where it stands, and the array's length says how many
+/// there are (dgtlrift/cddlc#134).
+fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
+    let rf = &s.fields[ri];
+    let rname = to_snake_case(&rf.name);
+    let fixed = s.fields.len() - 1;
+    let (min, max) = cddlc_codegen::repeat_bounds(&rf.occurrence);
+    let cap = capacity_value(rf.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)), opts.max_array);
+    let bounds = |w: &mut IndentWriter, n: &str, fail: &str| {
+        if min > 0 { w.line(&format!("if ({n} < {min}) return {fail};")); }
+        if let Some(max) = max { w.line(&format!("if ({n} > {max}) return {fail};")); }
+    };
+    w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
+    w.indent();
+    bounds(w, &format!("obj->{rname}_count"), "NULL");
+    w.line("cJSON* j = cJSON_CreateArray();");
+    w.line("if (!j) return NULL;");
+    for f in &s.fields {
+        let fname = to_snake_case(&f.name);
+        if f.occurrence.is_repeated() {
+            let val_expr = json_value_expr(&f.ty, &format!("obj->{fname}[i]"), mod_name);
+            w.line(&format!("for (size_t i = 0; i < obj->{fname}_count; i++) cJSON_AddItemToArray(j, {val_expr});"));
+        } else {
+            let val_expr = json_value_expr(&f.ty, &format!("obj->{fname}"), mod_name);
+            w.line(&format!("cJSON_AddItemToArray(j, {val_expr});"));
+        }
+    }
+    w.line("return j;");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.indent();
+    w.line("if (!cJSON_IsArray(j)) return false;");
+    w.line("int n = cJSON_GetArraySize(j);");
+    w.line(&format!("if (n < {fixed}) return false;"));
+    w.line(&format!("int reps = n - {fixed};"));
+    w.line(&format!("if (reps > {cap}) return false;"));
+    bounds(w, "reps", "false");
+    w.line("memset(out, 0, sizeof(*out));");
+    for (i, f) in s.fields.iter().enumerate() {
+        let fname = to_snake_case(&f.name);
+        if f.occurrence.is_repeated() {
+            w.line("for (int k = 0; k < reps; k++) {");
+            w.indent();
+            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {i} + k);"));
+            json_decode_field(w, &f.ty, &format!("{fname}[k]"), &format!("_{fname}"), mod_name, opts);
+            w.dedent();
+            w.line("}");
+            w.line(&format!("out->{fname}_count = (size_t)reps;"));
+        } else {
+            let index = if i < ri { i.to_string() } else { format!("{} + reps", i - 1) };
+            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {index});"));
             json_decode_field(w, &f.ty, &fname, &format!("_{fname}"), mod_name, opts);
         }
     }
@@ -2591,6 +2730,14 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));
+            // A repeated member gets as many (zeroed) items as it needs
+            // (dgtlrift/cddlc#134).
+            for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
+                let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
+                if min > 0 {
+                    w.line(&format!("original.{}_count = {min};", to_snake_case(&f.name)));
+                }
+            }
             w.line(&format!("char* encoded = {pfx}_encode(&original);"));
             w.line("assert(encoded != NULL);");
             w.line(&format!("{ctype} decoded = {{0}};"));

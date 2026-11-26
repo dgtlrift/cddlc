@@ -1005,6 +1005,10 @@ fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
 /// values, in order. Optional members come last: those present are written up
 /// to the first absent one, and one set after an absent one is an error.
 fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class: &str) {
+    if let Some(ri) = cddlc_codegen::record_repeated(s) {
+        emit_record_raw_repeated(w, s, ri, class);
+        return;
+    }
     w.line("/** This value in the format-neutral value model: an array of its members. */");
     w.line("public Object toRaw() {");
     w.indent();
@@ -1067,6 +1071,75 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class: &str) {
             w.line(&format!("{} {local} = {conv};", member_type(f)));
         } else {
             w.line(&format!("{} {local} = {present} ? {conv} : null;", member_type(f)));
+        }
+        args.push(local);
+    }
+    w.line(&format!("{class} out = new {class}({});", args.join(", ")));
+    w.line("out.validate();");
+    w.line("return out;");
+    w.dedent();
+    w.line("}");
+}
+
+/// Throws unless a repeated member's item count, `n`, is within its bounds
+/// (dgtlrift/cddlc#134).
+fn emit_java_repeat_check(w: &mut IndentWriter, class: &str, f: &FieldDef, n: &str) {
+    let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
+    let at = java_str(&format!("{class}.{}", f.name));
+    if min > 0 {
+        w.line(&format!("if ({n} < {min}) throw Cddl.invalid({at}, \"needs at least {min} items, got \" + {n});"));
+    }
+    if let Some(max) = max {
+        w.line(&format!("if ({n} > {max}) throw Cddl.invalid({at}, \"has more than {max} items, got \" + {n});"));
+    }
+}
+
+/// A record with a repeated member (`[primary, * extension, payload]`): the
+/// member's items go inline, and the array's length says how many there are
+/// (dgtlrift/cddlc#134).
+fn emit_record_raw_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, class: &str) {
+    let rf = &s.fields[ri];
+    let fixed = s.fields.len() - 1;
+    w.line("/** This value in the format-neutral value model: an array of its members. */");
+    w.line("public Object toRaw() {");
+    w.indent();
+    w.line("validate();");
+    emit_java_repeat_check(w, class, rf, &format!("this.{}.size()", java_member_name(&rf.name)));
+    w.line("List<Object> a = new ArrayList<>();");
+    for f in &s.fields {
+        let member = format!("this.{}", java_member_name(&f.name));
+        if f.occurrence.is_required() {
+            w.line(&format!("a.add({});", to_raw(&f.ty, &member)));
+        } else {
+            w.line(&format!("for (var x : {member}) a.add({});", to_raw(&f.ty, "x")));
+        }
+    }
+    let ret = match s.tagged { Some(t) => format!("Cddl.tag({}L, a)", t.0), None => "a".into() };
+    w.line(&format!("return {ret};"));
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("/** Reads a {class} from the value model, checking each member's type and constraints. */"));
+    w.line(&format!("public static {class} fromRaw(Object raw) {{"));
+    w.indent();
+    let raw = match s.tagged { Some(t) => format!("Cddl.untag(raw, {}L, {})", t.0, java_str(class)), None => "raw".into() };
+    w.line(&format!("List<Object> a = Cddl.asList({raw}, {});", java_str(class)));
+    w.line(&format!("if (a.size() < {fixed}) {{"));
+    w.line(&format!("    throw Cddl.invalid({}, \"expected at least {fixed} items, got \" + a.size());", java_str(class)));
+    w.line("}");
+    w.line(&format!("int reps = a.size() - {fixed};"));
+    emit_java_repeat_check(w, class, rf, "reps");
+    let mut args = Vec::new();
+    for (i, f) in s.fields.iter().enumerate() {
+        let local = format!("f_{}", java_member_name(&f.name));
+        let at = format!("{class}.{}", f.name);
+        if f.occurrence.is_required() {
+            let index = if i < ri { i.to_string() } else { format!("{} + reps", i - 1) };
+            w.line(&format!("{} {local} = {};", member_type(f), from_raw(&f.ty, &format!("a.get({index})"), &at, None)));
+        } else {
+            w.line(&format!("{} {local} = new ArrayList<>();", member_type(f)));
+            w.line(&format!("for (int k = 0; k < reps; k++) {local}.add({});", from_raw(&f.ty, &format!("a.get({i} + k)"), &at, None)));
         }
         args.push(local);
     }
@@ -1694,8 +1767,12 @@ fn java_variant_value(cx: &Cx, e: &EnumDef, v: &EnumVariant, depth: usize) -> St
 fn java_value(cx: &Cx, ty: &TypeRef, occ: &Occurrence, constraints: &[Constraint], explicit: bool, depth: usize) -> String {
     match occ {
         Occurrence::Optional if !explicit => return "null".into(),
-        Occurrence::ZeroOrMore { .. } | Occurrence::Bounded { .. } => return "List.of()".into(),
-        Occurrence::OneOrMore { .. } => return format!("List.of({})", java_value(cx, ty, &Occurrence::Required, constraints, explicit, depth)),
+        // As many items as the member needs (`+`: one, `2*3`: two).
+        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. } | Occurrence::Bounded { .. } => {
+            let item = java_value(cx, ty, &Occurrence::Required, constraints, explicit, depth);
+            let items: Vec<String> = (0..cddlc_codegen::repeat_bounds(occ).0).map(|_| item.clone()).collect();
+            return format!("List.of({})", items.join(", "));
+        }
         _ => {}
     }
     if let Some(p) = base_primitive(ty) {

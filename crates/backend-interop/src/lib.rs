@@ -225,7 +225,12 @@ fn write_struct(
         _ => 0,
     };
     if record {
-        enc.array(fields.len() as u64).ok()?;
+        // A repeated member's items go inline: as many as it needs
+        // (dgtlrift/cddlc#134).
+        let items: u64 = fields.iter()
+            .map(|f| if f.occurrence.is_repeated() { cddlc_codegen::repeat_bounds(&f.occurrence).0 } else { 1 })
+            .sum();
+        enc.array(items).ok()?;
     } else {
         enc.map(fields.len() as u64 + extra).ok()?;
     }
@@ -239,6 +244,15 @@ fn write_struct(
                 cddlc_ir::FieldKey::Uint(n) => { enc.u64(*n).ok()?; }
                 cddlc_ir::FieldKey::Int(n) => { enc.i64(*n).ok()?; }
             }
+        }
+        if record && f.occurrence.is_repeated() {
+            for _ in 0..cddlc_codegen::repeat_bounds(&f.occurrence).0 {
+                match member_value(f, explicit) {
+                    Some(val) => encode_field_val(enc, &val)?,
+                    None => write_sample(enc, &f.ty, module, explicit, opts, depth + 1)?,
+                }
+            }
+            continue;
         }
         match member_value(f, explicit) {
             Some(val) => {
