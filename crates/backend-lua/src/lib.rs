@@ -465,7 +465,7 @@ fn emit_checks(w: &mut IndentWriter, ty: &TypeRef, constraints: &[Constraint], x
 fn struct_fields<'a>(s: &'a StructDef, cx: &Cx) -> Vec<&'a FieldDef> {
     let mut fs: Vec<_> = s.fields.iter().collect();
     if cx.opts.dcbor {
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
     }
     fs
 }
@@ -520,7 +520,7 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     if let Some(r) = &s.rest {
         let m = format!("v.{}", lua_member_name(&r.name));
         let at = format!("{t}.{}", r.name);
-        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&f.name))).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&cddlc_codegen::field_key_json(&f.key)))).collect();
         w.line(&format!("if {m} ~= nil then"));
         w.indent();
         w.line(&format!("R.want_table({m}, {})", lua_str(&at)));
@@ -553,7 +553,13 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     w.line("local m = {}");
     for f in struct_fields(s, cx) {
         let m = format!("v.{}", lua_member_name(&f.name));
-        let key = lua_str(&f.name);
+        // An integer key is an integer item; JSON's keys are text
+        // (dgtlrift/cddlc#176).
+        let key = match &f.key {
+            cddlc_ir::FieldKey::Text(t) => lua_str(t),
+            _ if cx.json() => lua_str(&cddlc_codegen::field_key_json(&f.key)),
+            other => format!("R.int({})", cddlc_codegen::field_key_json(other)),
+        };
         match &f.occurrence {
             Occurrence::Optional => w.line(&format!("if {m} ~= nil then m[#m + 1] = {{ {key}, {} }} end", to_raw(&f.ty, &m))),
             o if is_repeated(o) => {
@@ -597,7 +603,7 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     // A map has only the members its schema gives it (RFC 8610 §3.5;
     // dgtlrift/cddlc#102), unless it has other entries.
     if s.rest.is_none() {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&f.name))).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&cddlc_codegen::field_key_json(&f.key)))).collect();
         w.line(&format!(
             "for k in pairs(m) do if not ({{ {} }})[k] then R.fail({}, \"unknown member \" .. k) end end",
             named.join(", "),
@@ -606,8 +612,8 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     }
     for f in &s.fields {
         let m = format!("v.{}", lua_member_name(&f.name));
-        let key = lua_str(&f.name);
-        let at = format!("{t}.{}", f.name);
+        let key = lua_str(&cddlc_codegen::field_key_json(&f.key));
+        let at = format!("{t}.{}", cddlc_codegen::field_key_json(&f.key));
         match &f.occurrence {
             Occurrence::Optional => {
                 // A present `nil` member is null; for any other type null means absent.
@@ -626,7 +632,7 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
     }
     // Keys no member has are the map's other entries; none leaves the member nil.
     if let Some(r) = &s.rest {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&f.name))).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("[{}] = true", lua_str(&cddlc_codegen::field_key_json(&f.key)))).collect();
         let field = format!("v.{}", lua_member_name(&r.name));
         w.line(&format!("local named = {{ {} }}", named.join(", ")));
         w.line("for k, x in pairs(m) do");

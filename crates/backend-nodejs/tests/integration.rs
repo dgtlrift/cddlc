@@ -712,7 +712,7 @@ fn test_cbor_tags_decode_through_cbor_tagged() {
     let src = &out.source;
     assert!(src.contains("export class CborTagged {"), "{src}");
     assert!(src.contains("const CBOR_DECODE_OPTIONS = { tags: cborTagDecoders([\n  1,\n  100,\n  200,\n]) };"), "{src}");
-    assert!(src.contains("return fromCborOuter(cborgDecode(data, cborDecodeOptions(data)));"), "{src}");
+    assert!(src.contains("return fromCborOuter(decodeCbor(data));"), "{src}");
 
     // A top-level tag, a tagged member, and a tagged array are each unwrapped.
     assert!(src.contains("const map: unknown = expectTag(raw, 100, \"TaggedSensor\");"), "{src}");

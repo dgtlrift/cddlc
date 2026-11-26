@@ -473,7 +473,7 @@ fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
     w.indent();
     let fields: Vec<_> = if s.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
         fs
     } else {
         s.fields.iter().collect()
@@ -562,7 +562,7 @@ fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
     w.indent();
     let fields: Vec<_> = if s.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
         fs
     } else {
         s.fields.iter().collect()

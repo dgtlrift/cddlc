@@ -329,7 +329,7 @@ fn open_cbor_decoder(w: &mut IndentWriter, name: &str, type_name: &str) {
     let from = from_cbor_fn_name(name);
     w.line(&format!("export function {dname}(data: Uint8Array): {type_name} {{"));
     w.indent();
-    w.line(&format!("return {from}(cborgDecode(data, cborDecodeOptions(data)));"));
+    w.line(&format!("return {from}(decodeCbor(data));"));
     w.dedent();
     w.line("}");
     w.blank();
@@ -435,8 +435,30 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
             w.line(&format!("{t},"));
         }
         w.dedent();
-        w.line("]) };");
+        // A map with integer keys (`1 => tstr`) needs cborg's `useMaps`; the
+        // decoded Maps become objects whose keys are the keys' text, which is
+        // how the generated code reads them, as in JSON (dgtlrift/cddlc#176).
+        let int_keys = module.types.values().any(|d| matches!(d, TypeDef::Struct(s) if cddlc_codegen::has_int_keys(s)));
+        if int_keys {
+            w.line("]), useMaps: true };");
+        } else {
+            w.line("]) };");
+        }
         w.blank();
+        if int_keys {
+            w.line("/** A decoded value with each Map an object keyed by its keys' text (`1` is `\"1\"`). */");
+            w.line("function cddlcObjects(v: unknown): unknown {");
+            w.line("  if (v instanceof Map) {");
+            w.line("    const o: Record<string, unknown> = {};");
+            w.line("    for (const [k, x] of v) o[String(k)] = cddlcObjects(x);");
+            w.line("    return o;");
+            w.line("  }");
+            w.line("  if (Array.isArray(v)) return v.map(cddlcObjects);");
+            w.line("  if (v instanceof CborTagged) return new CborTagged(v.tag, cddlcObjects(v.value));");
+            w.line("  return v;");
+            w.line("}");
+            w.blank();
+        }
         for line in CBOR_FLOAT_HELPER.lines() {
             w.line(line);
         }
@@ -459,6 +481,15 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
             w.dedent();
             w.line("}");
         }
+        w.blank();
+        w.line("/** Decodes one CBOR item as the generated converters read it. */");
+        w.line("function decodeCbor(data: Uint8Array): unknown {");
+        if int_keys {
+            w.line("  return cddlcObjects(cborgDecode(data, cborDecodeOptions(data)));");
+        } else {
+            w.line("  return cborgDecode(data, cborDecodeOptions(data));");
+        }
+        w.line("}");
     }
 
     if module_has_bool_literal(module) {
@@ -563,6 +594,17 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
 /// A record's encoder and decoder (RFC 8610 §3.4): an array of the members'
 /// values, in order. Optional members come last: those present are written up
 /// to the first absent one, and one set after an absent one is an error.
+/// Writes a map member's key: its text, or an integer key as an integer
+/// (dgtlrift/cddlc#176).
+fn ts_key_write(key: &cddlc_ir::FieldKey) -> String {
+    match key {
+        cddlc_ir::FieldKey::Text(t) => format!("enc.text({:?});", t.as_str()),
+        cddlc_ir::FieldKey::Uint(n) => format!("enc.uint({n}n);"),
+        cddlc_ir::FieldKey::Int(n) if *n >= 0 => format!("enc.uint({n}n);"),
+        cddlc_ir::FieldKey::Int(n) => format!("enc.int({n}n);"),
+    }
+}
+
 fn emit_record_codec(
     w: &mut IndentWriter,
     s: &StructDef,
@@ -709,7 +751,7 @@ fn emit_struct_encode_json(
 ) {
     let fields: Vec<_> = if opts.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
         fs
     } else {
         s.fields.iter().collect()
@@ -722,7 +764,8 @@ fn emit_struct_encode_json(
     w.line("const _map: Record<string, unknown> = {};");
     for f in &fields {
         let prop = to_snake_case(&f.name);
-        let key = f.name.as_str();
+        let key_text = cddlc_codegen::field_key_json(&f.key);
+        let key = key_text.as_str();
         let expr = ts_json_encode_expr(&f.ty, &format!("val.{prop}"), opts);
         match &f.occurrence {
             Occurrence::Optional => {
@@ -758,7 +801,7 @@ fn emit_struct_encode_cbor(
 ) {
     let fields: Vec<_> = if opts.dcbor {
         let mut fs: Vec<_> = s.fields.iter().collect();
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
         fs
     } else {
         s.fields.iter().collect()
@@ -798,17 +841,17 @@ fn emit_struct_encode_cbor(
         if matches!(f.occurrence, Occurrence::Optional) {
             w.line(&format!("if ({expr} !== undefined) {{"));
             w.indent();
-            w.line(&format!("enc.text({:?});", f.name.as_str()));
+            w.line(&ts_key_write(&f.key));
             emit_ts_encode_primitive_or_named(w, &f.ty, &expr, opts);
             w.dedent();
             w.line("}");
         } else {
-            w.line(&format!("enc.text({:?});", f.name.as_str()));
+            w.line(&ts_key_write(&f.key));
             emit_ts_encode_value(w, &f.ty, &expr, &f.occurrence, opts);
         }
     }
     if let Some(r) = &s.rest {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key))).collect();
         w.line(&format!("for (const [key, value] of val.{}) {{", to_snake_case(&r.name)));
         w.indent();
         w.line(&format!("if ([{}].includes(key)) throw new Error(`{iname}: other entry ${{key}} is a named member's key`);", named.join(", ")));
@@ -851,7 +894,7 @@ fn emit_struct_decode_json(
     // A map has only the members its schema gives it (RFC 8610 §3.5;
     // dgtlrift/cddlc#102), unless it has other entries.
     if s.rest.is_none() {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key))).collect();
         w.line(&format!(
             "for (const key of Object.keys(m)) if (![{}].includes(key)) throw new Error(`{iname}: unknown member ${{key}}`);",
             named.join(", ")
@@ -862,7 +905,8 @@ fn emit_struct_decode_json(
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
-        let key = f.name.as_str();
+        let key_text = cddlc_codegen::field_key_json(&f.key);
+        let key = key_text.as_str();
         let ty = ts_struct_field_type(f, opts);
         match &f.occurrence {
             Occurrence::Optional => {
@@ -888,7 +932,7 @@ fn emit_struct_decode_json(
     w.blank();
 
     if let Some(r) = &s.rest {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key))).collect();
         let val = ts_json_decode_expr(&r.val_ty, "value", &format!("{iname} value"), opts);
         w.line(&format!(
             "const rest = new Map(Object.entries(m).filter(([key]) => ![{}].includes(key)).map(([key, value]) => [key, {val}] as const));",
@@ -929,7 +973,7 @@ fn emit_struct_decode_cbor(
     // A map has only the members its schema gives it (RFC 8610 §3.5;
     // dgtlrift/cddlc#102), unless it has other entries.
     if s.rest.is_none() {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key))).collect();
         w.line(&format!(
             "for (const key of Object.keys(m)) if (![{}].includes(key)) throw new Error(`{iname}: unknown member ${{key}}`);",
             named.join(", ")
@@ -940,7 +984,8 @@ fn emit_struct_decode_cbor(
     for f in &s.fields {
         let prop = to_snake_case(&f.name);
         let local = field_local(&prop);
-        let key = f.name.as_str();
+        let key_text = cddlc_codegen::field_key_json(&f.key);
+        let key = key_text.as_str();
         let ty = ts_struct_field_type(f, opts);
         match &f.occurrence {
             Occurrence::Optional => {
@@ -970,7 +1015,7 @@ fn emit_struct_decode_cbor(
     w.blank();
 
     if let Some(r) = &s.rest {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key))).collect();
         let val = ts_convert_expr(&r.val_ty, "value", opts);
         w.line(&format!(
             "const rest = new Map(Object.entries(m).filter(([key]) => ![{}].includes(key)).map(([key, value]) => [key, {val}] as const));",

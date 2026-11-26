@@ -1,0 +1,14 @@
+; Reference schema: map members with integer keys, as in COSE headers and CWT
+; claims (RFC 8392). The keys are integers on the wire, not the members' names;
+; JSON objects have text keys, so JSON writes them as decimal text ("1").
+
+claims = {
+    1 => tstr,          ; iss
+    ? 4 => uint,        ; exp
+    -1 => int,          ; a negative label, as COSE_Key uses
+    name: tstr,
+    ? 0 => bool,
+}
+
+; Only integer keys
+header = { ? 1 => int, ? 4 => bstr }

@@ -437,6 +437,17 @@ fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m StructDef> 
     }
 }
 
+/// Writes a map member's key: its text, or an integer key as an integer
+/// (dgtlrift/cddlc#176).
+fn c_key_write(key: &cddlc_ir::FieldKey) -> String {
+    match key {
+        cddlc_ir::FieldKey::Text(t) => format!("nanocbor_put_tstr(enc, {:?});", t.as_str()),
+        cddlc_ir::FieldKey::Uint(n) => format!("nanocbor_fmt_uint(enc, {n}ULL);"),
+        cddlc_ir::FieldKey::Int(n) if *n >= 0 => format!("nanocbor_fmt_uint(enc, {n}ULL);"),
+        cddlc_ir::FieldKey::Int(n) => format!("nanocbor_fmt_int(enc, {n}LL);"),
+    }
+}
+
 fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
     let type_name = to_snake_case(def.name());
     let pfx       = to_snake_case(mod_name);
@@ -455,7 +466,7 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             // dCBOR: sort keys — for now emit in definition order
             let fields: Vec<_> = if opts.dcbor {
                 let mut fs: Vec<_> = s.fields.iter().collect();
-                fs.sort_by(|a, b| a.name.cmp(&b.name));
+                fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
                 fs
             } else {
                 s.fields.iter().collect()
@@ -493,12 +504,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (val->{fname}_present) {{"));
                     w.indent();
-                    if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
+                    if !record { w.line(&c_key_write(&f.key)); }
                     emit_c_encode_field(w, &f.ty, &format!("val->{fname}"), &f.occurrence, mod_name, opts);
                     w.dedent();
                     w.line("}");
                 } else {
-                    if !record { w.line(&format!("nanocbor_put_tstr(enc, {:?});", f.name.as_str())); }
+                    if !record { w.line(&c_key_write(&f.key)); }
                     emit_c_encode_field(w, &f.ty, &format!("val->{fname}"), &f.occurrence, mod_name, opts);
                 }
             }
@@ -770,17 +781,34 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
 
             w.line("while (!nanocbor_at_end(&map)) {");
             w.indent();
-            w.line("const uint8_t *key_ptr; size_t key_len;");
-            w.line("if (nanocbor_get_tstr(&map, &key_ptr, &key_len) < 0) return -1;");
+            // A map with integer keys (`1 => tstr`) reads each key as text or
+            // an integer (dgtlrift/cddlc#176).
+            let int_keys = cddlc_codegen::has_int_keys(s);
+            w.line("const uint8_t *key_ptr = NULL; size_t key_len = 0;");
+            if int_keys {
+                w.line("bool key_is_int = false; int64_t key_int = 0;");
+                w.line("if (nanocbor_get_type(&map) == NANOCBOR_TYPE_TSTR) {");
+                w.line("    if (nanocbor_get_tstr(&map, &key_ptr, &key_len) < 0) return -1;");
+                w.line("} else {");
+                w.line("    if (nanocbor_get_int64(&map, &key_int) < 0) return -1;");
+                w.line("    key_is_int = true;");
+                w.line("}");
+            } else {
+                w.line("if (nanocbor_get_tstr(&map, &key_ptr, &key_len) < 0) return -1;");
+            }
             w.blank();
 
             for f in &s.fields {
                 let fname  = to_snake_case(&f.name);
-                let fkey   = f.name.as_str();
-                w.line(&format!(
-                    "if (key_len == {} && memcmp(key_ptr, {:?}, {}) == 0) {{",
-                    fkey.len(), fkey, fkey.len()
-                ));
+                let cond = match &f.key {
+                    cddlc_ir::FieldKey::Text(t) => {
+                        let text = format!("key_len == {} && memcmp(key_ptr, {:?}, {}) == 0", t.len(), t.as_str(), t.len());
+                        if int_keys { format!("!key_is_int && {text}") } else { text }
+                    }
+                    cddlc_ir::FieldKey::Int(n) => format!("key_is_int && key_int == {n}LL"),
+                    cddlc_ir::FieldKey::Uint(n) => format!("key_is_int && key_int == {}LL", (*n).min(i64::MAX as u64)),
+                };
+                w.line(&format!("if ({cond}) {{"));
                 w.indent();
                 emit_c_decode_field(w, &f.ty, &format!("out->{fname}"), &f.constraints, &fname, &pfx, &pfx_upper, "&map", opts);
                 if matches!(f.occurrence, Occurrence::Optional) {
@@ -799,6 +827,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                     r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
                     opts.max_array,
                 );
+                if int_keys {
+                    w.line("if (key_is_int) return -1; /* the other entries have text keys */ else");
+                }
                 w.line("{");
                 w.indent();
                 w.line(&format!(
@@ -1971,7 +2002,8 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
     w.line("if (!j) return NULL;");
     for f in &s.fields {
         let fname    = to_snake_case(&f.name);
-        let key      = f.name.as_str();
+        let key_text = cddlc_codegen::field_key_json(&f.key);
+        let key      = key_text.as_str();
         let access   = format!("obj->{fname}");
         let val_expr = json_value_expr(&f.ty, &access, mod_name);
         match &f.occurrence {
@@ -2001,7 +2033,7 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
     w.line("memset(out, 0, sizeof(*out));");
     // A map has only the members its schema gives it (dgtlrift/cddlc#102).
     if s.rest.is_none() {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("strcmp(k->string, {:?}) == 0", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("strcmp(k->string, {:?}) == 0", cddlc_codegen::field_key_json(&f.key))).collect();
         w.line(&format!(
             "{{ cJSON* k; cJSON_ArrayForEach(k, j) {{ if (!({})) return false; }} }}",
             if named.is_empty() { "0".into() } else { named.join(" || ") }
@@ -2009,7 +2041,8 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
     }
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
-        let key   = f.name.as_str();
+        let key_text = cddlc_codegen::field_key_json(&f.key);
+        let key   = key_text.as_str();
         w.line(&format!("cJSON* _{fname} = cJSON_GetObjectItemCaseSensitive(j, {key:?});"));
         match &f.occurrence {
             Occurrence::Optional => {
@@ -2034,7 +2067,7 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, mod_name: &str, op
             r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
             opts.max_array,
         );
-        let named: Vec<String> = s.fields.iter().map(|f| format!("strcmp(item->string, {:?}) == 0", f.name.as_str())).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| format!("strcmp(item->string, {:?}) == 0", cddlc_codegen::field_key_json(&f.key))).collect();
         w.line("cJSON* item; cJSON_ArrayForEach(item, j) {");
         w.indent();
         if !named.is_empty() {

@@ -786,7 +786,7 @@ fn emit_content_equality(w: &mut IndentWriter, class: &str, members: &[String]) 
 fn struct_fields<'a>(s: &'a StructDef, cx: &Cx) -> Vec<&'a FieldDef> {
     let mut fs: Vec<_> = s.fields.iter().collect();
     if cx.opts.dcbor {
-        fs.sort_by(|a, b| a.name.cmp(&b.name));
+        fs.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
     }
     fs
 }
@@ -854,7 +854,7 @@ fn emit_struct(w: &mut IndentWriter, cx: &Cx, s: &StructDef) {
         let m = format!("this.{}", java_member_name(&r.name));
         let at = java_str(&format!("{class}.{}", r.name));
         w.line(&format!("if ({m} == null) throw Cddl.invalid({at}, \"missing\");"));
-        let named: Vec<String> = s.fields.iter().map(|f| java_str(&f.name)).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| java_str(&cddlc_codegen::field_key_json(&f.key))).collect();
         w.line(&format!(
             "for (Map.Entry<String, {}> e : {m}.entrySet()) {{",
             java_type(&r.val_ty, true, None)
@@ -898,10 +898,16 @@ fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
     w.line("public Object toRaw() {");
     w.indent();
     w.line("validate();");
-    w.line("Map<String, Object> m = new LinkedHashMap<>();");
+    w.line("Map<Object, Object> m = new LinkedHashMap<>();");
     for f in struct_fields(s, cx) {
         let member = format!("this.{}", java_member_name(&f.name));
-        let key = java_str(&f.name);
+        // An integer key is a Long, which the CBOR writer writes as an
+        // integer key; JSON's keys are text (dgtlrift/cddlc#176).
+        let key = match &f.key {
+            cddlc_ir::FieldKey::Text(t) => java_str(t),
+            _ if cx.json() => java_str(&cddlc_codegen::field_key_json(&f.key)),
+            other => format!("{}L", cddlc_codegen::field_key_json(other)),
+        };
         match &f.occurrence {
             Occurrence::Optional => {
                 w.line(&format!("if ({member} != null) m.put({key}, {});", to_raw(&f.ty, &member)));
@@ -942,7 +948,7 @@ fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
     // A map has only the members its schema gives it (RFC 8610 §3.5;
     // dgtlrift/cddlc#102), unless it has other entries.
     if s.rest.is_none() {
-        let named: Vec<String> = s.fields.iter().map(|f| java_str(&f.name)).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| java_str(&cddlc_codegen::field_key_json(&f.key))).collect();
         w.line(&format!(
             "for (String k : m.keySet()) if (!List.<String>of({}).contains(k)) throw Cddl.invalid({}, \"unknown member \" + k);",
             named.join(", "),
@@ -951,8 +957,9 @@ fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
     }
     for f in &s.fields {
         let local = format!("f_{}", java_member_name(&f.name));
-        let key = java_str(&f.name);
-        let at = format!("{class}.{}", f.name);
+        // Read keys are text: an integer key as its decimal text.
+        let key = java_str(&cddlc_codegen::field_key_json(&f.key));
+        let at = format!("{class}.{}", cddlc_codegen::field_key_json(&f.key));
         match &f.occurrence {
             Occurrence::Optional => {
                 let is_null = matches!(base_primitive(&f.ty), Some(Primitive::Null | Primitive::Undefined));
@@ -974,7 +981,7 @@ fn emit_map_raw(w: &mut IndentWriter, cx: &Cx, s: &StructDef, class: &str) {
     }
     if let Some(r) = &s.rest {
         let val = java_type(&r.val_ty, true, None);
-        let named: Vec<String> = s.fields.iter().map(|f| java_str(&f.name)).collect();
+        let named: Vec<String> = s.fields.iter().map(|f| java_str(&cddlc_codegen::field_key_json(&f.key))).collect();
         w.line(&format!("Map<String, {val}> rest = new LinkedHashMap<>();"));
         w.line("for (Map.Entry<String, Object> e : m.entrySet()) {");
         w.indent();

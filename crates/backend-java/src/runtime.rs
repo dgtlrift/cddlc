@@ -137,8 +137,12 @@ public final class Cddl {
 
     @SuppressWarnings("unchecked")
     public static Map<String, Object> asMap(Object v, String at) {
-        if (v instanceof Map) return (Map<String, Object>) v;
-        throw mismatch(at, "a map", v);
+        if (!(v instanceof Map<?, ?> in)) throw mismatch(at, "a map", v);
+        // Keys are read as text: an integer key (a Long from toRaw, or text
+        // from the parser) as its decimal text (dgtlrift/cddlc#176).
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : in.entrySet()) out.put(String.valueOf(e.getKey()), e.getValue());
+        return out;
     }
 
     @SuppressWarnings("unchecked")
@@ -252,7 +256,9 @@ pub const CBOR_JACKSON: &str = r#"
         } else if (v instanceof Map<?, ?> m) {
             g.writeStartObject(m, m.size());
             for (Map.Entry<?, ?> e : m.entrySet()) {
-                g.writeFieldName((String) e.getKey());
+                // An integer key (a Long) is written as an integer (dgtlrift/cddlc#176).
+                if (e.getKey() instanceof Long id) g.writeFieldId(id);
+                else g.writeFieldName((String) e.getKey());
                 write(g, e.getValue());
             }
             g.writeEndObject();

@@ -1134,6 +1134,9 @@ impl<'m> LowerCtx<'m> {
                     cddlc_parser::MemberKey::Bareword(id) => id.0.clone(),
                     cddlc_parser::MemberKey::Value(Value::Text(s)) => s.as_str().into(),
                     cddlc_parser::MemberKey::Value(Value::Uint(n)) => format!("field_{n}").into(),
+                    // `field_minus1` for `-1`: `field_-1` would read as `field_1`
+                    // once the `-` is dropped (dgtlrift/cddlc#176).
+                    cddlc_parser::MemberKey::Value(Value::Int(n)) if *n < 0 => format!("field_minus{}", n.unsigned_abs()).into(),
                     cddlc_parser::MemberKey::Value(Value::Int(n))  => format!("field_{n}").into(),
                     _ => "unknown_key".into(),
                 };

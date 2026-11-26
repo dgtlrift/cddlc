@@ -211,7 +211,7 @@ fn write_struct(
         .filter(|f| !matches!(f.occurrence, Occurrence::Optional))
         .collect();
     if opts.dcbor {
-        fields.sort_by(|a, b| a.name.cmp(&b.name));
+        fields.sort_by(|a, b| cddlc_codegen::dcbor_key_order(a, b));
     }
     if let Some(tag) = s.tagged {
         enc.tag(minicbor::data::Tag::new(tag.0)).ok()?;
@@ -232,8 +232,13 @@ fn write_struct(
 
     let mut field_values = Vec::new();
     for f in fields {
+        // The member's key (an integer key is an integer; dgtlrift/cddlc#176).
         if !record {
-            enc.str(f.name.as_str()).ok()?;
+            match &f.key {
+                cddlc_ir::FieldKey::Text(t) => { enc.str(t.as_str()).ok()?; }
+                cddlc_ir::FieldKey::Uint(n) => { enc.u64(*n).ok()?; }
+                cddlc_ir::FieldKey::Int(n) => { enc.i64(*n).ok()?; }
+            }
         }
         match member_value(f, explicit) {
             Some(val) => {

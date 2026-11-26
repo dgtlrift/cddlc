@@ -39,6 +39,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("names",       include_str!("../schemas/names.cddl")),
     ("bits",        include_str!("../schemas/bits.cddl")),
     ("repeated-groups", include_str!("../schemas/repeated_groups.cddl")),
+    ("int-keys",    include_str!("../schemas/int_keys.cddl")),
 ];
 
 // ── Result types ──────────────────────────────────────────────────────────────
