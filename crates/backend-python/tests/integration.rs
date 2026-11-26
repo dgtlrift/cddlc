@@ -160,8 +160,12 @@ fn test_struct_optional_field() {
 
 #[test]
 fn test_struct_repeated_field_is_list() {
-    let g = compile("msg = { id: uint, * tag: tstr }");
+    // A record's repeated member is a list; a map's is optional, as a map
+    // holds a key once (dgtlrift/cddlc#184).
+    let g = compile("msg = [id: uint, * tag: tstr]");
     assert!(g.source.contains("list[str]"));
+    let g = compile("msg = { id: uint, * tag: tstr }");
+    assert!(g.source.contains("Optional[str]"));
 }
 
 #[test]

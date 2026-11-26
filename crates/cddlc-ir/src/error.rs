@@ -88,6 +88,9 @@ pub enum IrWarningKind {
     /// A control operator cddlc can't check (`.abnf`, or an operand it can't
     /// reduce): neither `cddlc validate` nor generated code enforces it.
     UncheckedControlOp,
+    /// A map member with an occurrence beyond `?` (`{ * b: tstr }`): a map
+    /// holds a key at most once, so it's optional or required.
+    RepeatedMapMember,
 }
 
 impl std::fmt::Display for IrWarning {

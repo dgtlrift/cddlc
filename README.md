@@ -508,7 +508,10 @@ and the test fails when one starts working, so the list stays current.
   so the array's length says how many items it has; its bounds (`+`, `n*m`) are checked when
   encoding and decoding. A repeated member beside an optional or another repeated one
   (`[type, ? initiator, * option]`, RFC 8990) is rejected as unsupported (#134).
-- **Occurrence in struct fields beyond `?`** (e.g. `* field: T`) is not modelled as repeated struct fields.
+- **A map member that may repeat** (`{ * tag: tstr }`): a map holds a key once (RFC 8610 §3.5),
+  so it's optional, and one that must appear (`+ tag`, `1*3 tag`) is required, each with a
+  warning. One that must appear twice or more (`2*3 tag`) is rejected (#184). A record's
+  repeated member is a list (see above).
 - **Maps with named members and other entries** need text or integer keys (or a choice of
   them) for the other entries; other key types there (`{ a: uint, * bstr => any }`), and
   more than one member with a computed key, are rejected with an "unsupported" error (#136).

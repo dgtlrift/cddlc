@@ -485,6 +485,18 @@ impl<'m> LowerCtx<'m> {
         choices: &[GroupChoice],
         meta:    &PragmaMeta,
     ) -> Result<TypeDef, IrError> {
+        self.lower_struct(name, choices, meta, true)
+    }
+
+    /// A struct from a group's members: a map's (`map`), or a record's, whose
+    /// members may repeat.
+    fn lower_struct(
+        &mut self,
+        name:    &str,
+        choices: &[GroupChoice],
+        meta:    &PragmaMeta,
+        map:     bool,
+    ) -> Result<TypeDef, IrError> {
         let expanded = self.expand_groups(name, choices, false)?;
         if expanded.len() > 1 {
             return self.lower_alternatives(name, &expanded, meta, false);
@@ -525,6 +537,33 @@ impl<'m> LowerCtx<'m> {
                 }
                 _ => fields.push(self.lower_member_entry(e, name)?),
             }
+        }
+        // A map holds a key at most once (RFC 8610 §3.5), so a member that may
+        // repeat (`* b: tstr`) is optional, and one that must appear (`+ b`)
+        // is required (dgtlrift/cddlc#184).
+        for f in fields.iter_mut().filter(|_| map) {
+            if !f.occurrence.is_repeated() {
+                continue;
+            }
+            let (min, max) = match &f.occurrence {
+                Occurrence::OneOrMore { .. } => (1, None),
+                Occurrence::Bounded { min, max, .. } => (*min, *max),
+                _ => (0, None),
+            };
+            if min > 1 {
+                return Err(IrError::Unsupported {
+                    rule:   name.into(),
+                    reason: format!("member '{}' must appear {min} times, but a map holds a key once", f.name),
+                });
+            }
+            let _ = max;
+            let (occ, what) = if min == 1 { (Occurrence::Required, "required") } else { (Occurrence::Optional, "optional") };
+            self.warnings.push(IrWarning {
+                rule:    Some(name.to_owned()),
+                message: format!("member '{}' may repeat, but a map holds a key once: it's {what}", f.name),
+                kind:    crate::error::IrWarningKind::RepeatedMapMember,
+            });
+            f.occurrence = occ;
         }
         let rest = computed.map(|(key_ty, val_ty, occurrence)| {
             let taken = |n: &str| fields.iter().any(|f: &FieldDef| f.name == n);
@@ -1335,7 +1374,7 @@ impl<'m> LowerCtx<'m> {
 
         // Multi-entry array → a record: a struct encoded as an array
         // (RFC 8610 §3.4), its members positional.
-        let mut def = self.lower_map_as_struct(name, choices, meta)?;
+        let mut def = self.lower_struct(name, choices, meta, false)?;
         if let TypeDef::Struct(st) = &mut def {
             st.encoding = StructEncoding::Array;
             // A member without a key (`[uint, tstr]`) is named after its type
