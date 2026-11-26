@@ -24,21 +24,36 @@
 #   - the Java group runs its Maven builds one at a time, as `mvn` doesn't
 #     share `~/.m2` safely. npm, pub, NuGet, Go and Cargo lock their caches.
 #
-# Other machines (CDDLC_TEST_HOSTS="user@host1 user@host2", spaces or commas):
-# the groups are shared between this machine and those, longest first, to
-# whichever has the least work so far. Each host, over ssh (BatchMode, so a
-# key must log in), keeps a checkout under
-# ${CDDLC_TEST_REMOTE_DIR:-~/cddlc-dist-build}/<branch>/repo: cloned from
-# `origin` once, then checked out at this branch's pushed commit (its
-# upstream, or its merge base with origin/main), and overwritten with every
-# file that differs here (committed, uncommitted or untracked; files deleted
-# here are deleted there). Its `target/` is kept, so builds stay warm. The
-# host runs its share with its own scripts/test-all.sh, and its logs are
-# copied back here, under the same layout. A host that can't be reached or
-# synced has its groups run here instead. The host needs the toolchains and
-# git; CDDLC_TEST_REMOTE_ENV (e.g. "CDDLC_PYTHON=/home/me/venv/bin/python") is set
-# for its run, and CDDLC_REQUIRE_TOOLS, CDDLC_REQUIRE_REGISTRIES and
-# CDDLC_NETWORK_RETRIES are passed on.
+# By default everything runs on this machine (localhost). Other machines are
+# used only when CDDLC_TEST_HOSTS is set:
+#
+#   CDDLC_TEST_HOSTS       hosts to share the groups with, as user@hostname,
+#                          separated by spaces or commas. Unset or empty: this
+#                          machine only, and the other CDDLC_TEST_* variables
+#                          are ignored.
+#   CDDLC_TEST_REMOTE_DIR  where each host keeps its checkout (default
+#                          ~/cddlc-dist-build, on the host): <dir>/<branch>/repo,
+#                          and each run's logs in <dir>/<branch>/out/<run>.
+#   CDDLC_TEST_REMOTE_ENV  variables for the host's run, e.g.
+#                          "CDDLC_PYTHON=/home/me/venv/bin/python".
+#
+# ssh must log in to each host without a password or passphrase prompt (a key
+# in the host's ~/.ssh/authorized_keys, loaded in ssh-agent if it has a
+# passphrase): it runs with BatchMode, so `ssh -o BatchMode=yes user@host true`
+# must succeed. A host that doesn't is skipped, and its groups run here.
+#
+# The groups are shared between this machine and the hosts, longest first, to
+# whichever has the least work so far. Each host's checkout is cloned from
+# `origin` once, checked out at this branch's pushed commit (its upstream, or
+# its merge base with origin/main), and overwritten with every file that
+# differs here (committed, uncommitted or untracked; files deleted here are
+# deleted there). Its `target/` is kept, so builds stay warm. The host runs
+# its share with its own scripts/test-all.sh, and its logs are copied back
+# here, under the same layout; summary.txt says where each step ran. A host
+# that can't be reached or synced has its groups run here instead. A host
+# needs git, read access to `origin`, and the toolchains of its groups.
+# CDDLC_REQUIRE_TOOLS, CDDLC_REQUIRE_REGISTRIES and CDDLC_NETWORK_RETRIES are
+# passed on.
 #
 # Toolchains a group needs and lacks are reported and skipped, as the build
 # tests and interop do (CDDLC_REQUIRE_TOOLS makes them fail). Python uses
@@ -59,7 +74,7 @@ while (( $# )); do
         -j) jobs="${2:?-j needs a number}"; shift 2 ;;
         -o) out="${2:?-o needs a directory}"; shift 2 ;;
         --no-interop) interop=0; shift ;;
-        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
         -*) echo "unknown option $1" >&2; exit 2 ;;
         *) want+=("$1"); shift ;;
     esac
@@ -78,7 +93,11 @@ mkdir -p "$out"
 out="$(realpath "$out")"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/cddlc-test-all-XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
-echo "test-all: $out (${#want[@]} groups, $jobs at once)"
+if [[ -n "$(echo "${CDDLC_TEST_HOSTS:-}" | tr -d ', ')" ]]; then
+    echo "test-all: $out (${#want[@]} groups, $jobs at once here; hosts: ${CDDLC_TEST_HOSTS})"
+else
+    echo "test-all: $out (${#want[@]} groups, $jobs at once, this machine only)"
+fi
 
 # ── Build once ────────────────────────────────────────────────────────────────
 
@@ -152,6 +171,7 @@ weight() {
     esac
 }
 
+# Unset or empty CDDLC_TEST_HOSTS: this machine only.
 hosts=()
 read -r -a hosts <<<"$(echo "${CDDLC_TEST_HOSTS:-}" | tr ',' ' ')"
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10)
@@ -215,6 +235,12 @@ run_remote() {
     local groups=("$@") hdir="$out/hosts/$(echo "$host" | tr -c 'A-Za-z0-9._-' '_')"
     local log="$hdir/remote.log" base run
     mkdir -p "$hdir"
+    # BatchMode: a host that would ask for a password or passphrase fails here.
+    if ! ssh "${ssh_opts[@]}" "$host" true >>"$log" 2>&1; then
+        echo "test-all: $host: can't log in without a password (ssh -o BatchMode=yes $host true), running ${groups[*]} here (see $log)"
+        printf '%s\n' "${groups[@]}" >>"$fallback"
+        return 0
+    fi
     base="$(base_commit)"
     echo "test-all: $host: syncing (base $(git rev-parse --short "$base"), ${groups[*]})"
     if ! sync_host "$host" "$base" "$log"; then
