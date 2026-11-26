@@ -111,6 +111,11 @@ for schema in crates/backend-buildtest/schemas/*.cddl; do
         echo "== $lang $name: not for this language yet (dgtlrift/cddlc#221)"
         continue
     fi
+    # `any` as the encoded item: only these languages so far (dgtlrift/cddlc#178).
+    if [[ "$name" == any && ! " rust " =~ " $lang " ]]; then
+        echo "== $lang $name: not for this language yet (dgtlrift/cddlc#178)"
+        continue
+    fi
     "$cddlc" generate "$schema" -l "$lang" --interop --interop-langs "$lang" -o "$out" >/dev/null 2>"$work/generate.log" \
         || { cat "$work/generate.log" >&2; failed+=("$name"); continue; }
     attempt=0
