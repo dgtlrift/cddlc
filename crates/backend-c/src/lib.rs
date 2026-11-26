@@ -190,7 +190,18 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("/* Zero-copy byte slice */");
     w.line("typedef struct { const uint8_t *ptr; size_t len; } cbor_bytes_t;");
     w.line("typedef cbor_bytes_t cbor_slice_t;");
+    w.line("/* A data item of any type (CDDL `any`): its CBOR encoding, in the decode");
+    w.line(" * buffer. Encoding writes it back unchanged (dgtlrift/cddlc#178). */");
     w.line("typedef cbor_bytes_t cbor_any_t;");
+    w.blank();
+    w.line("/* Writes an encoded item as is, as nanocbor writes its own bytes. */");
+    w.line("static inline int cddlc_put_item(nanocbor_encoder_t *enc, const uint8_t *item, size_t len)");
+    w.line("{");
+    w.line("    enc->len += len;");
+    w.line("    if (!enc->fits(enc, enc->context, len)) return NANOCBOR_ERR_END;");
+    w.line("    enc->append(enc, enc->context, item, len);");
+    w.line("    return (int)len;");
+    w.line("}");
     w.blank();
 
     // ── Error codes ───────────────────────────────────────────────────────────
@@ -941,6 +952,10 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                         w.line(&format!("nanocbor_fmt_bool(enc, val->value.{vname});")),
                     TypeRef::Primitive(Primitive::Null) =>
                         w.line("nanocbor_fmt_null(enc);"),
+                    // The encoded item, written back unchanged (dgtlrift/cddlc#178).
+                    TypeRef::Primitive(Primitive::Any) => w.line(&format!(
+                        "if (cddlc_put_item(enc, val->value.{vname}.ptr, val->value.{vname}.len) < 0) return -1;"
+                    )),
                     TypeRef::Named(n) => {
                         let np = to_snake_case(mod_name);
                         let tn = to_snake_case(n);
@@ -1079,8 +1094,11 @@ fn c_encode_call(p: &Primitive, expr: &str) -> String {
         Primitive::Float32            => format!("nanocbor_fmt_float(enc, {expr})"),
         Primitive::Float64 | Primitive::Float => format!("nanocbor_fmt_double(enc, {expr})"),
         Primitive::Float16            => format!("nanocbor_fmt_float(enc, {expr})"),
-        Primitive::Bstr | Primitive::Any =>
+        Primitive::Bstr =>
             format!("nanocbor_put_bstr(enc, {expr}.ptr, {expr}.len)"),
+        // The encoded item, written back unchanged (dgtlrift/cddlc#178).
+        Primitive::Any =>
+            format!("cddlc_put_item(enc, {expr}.ptr, {expr}.len)"),
         Primitive::Tstr               =>
             format!("nanocbor_put_tstrn(enc, {expr}.ptr, {expr}.len)"),
     }
@@ -1382,17 +1400,21 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             }
 
             // Peek at type
+            // An `any` alternative takes what the others don't (dgtlrift/cddlc#178),
+            // so text that matches no alternative is read from a probe.
+            let any = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Any)));
             w.line("uint8_t major = nanocbor_get_type(dec);");
             w.line("if (major == NANOCBOR_TYPE_TSTR) {");
             w.indent();
             w.line("const uint8_t *s; size_t slen;");
-            w.line("if (nanocbor_get_tstr(dec, &s, &slen) < 0) return -1;");
+            w.line("nanocbor_value_t _t = *dec;");
+            w.line("if (nanocbor_get_tstr(&_t, &s, &slen) < 0) return -1;");
             for v in &e.variants {
                 if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v) {
                     let cddl_str = cddlc_codegen::enum_variant_text(v);
                     let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
                     w.line(&format!(
-                        "if (slen == {} && memcmp(s, {:?}, {}) == 0) {{ out->tag = {vconst}; return NANOCBOR_OK; }}",
+                        "if (slen == {} && memcmp(s, {:?}, {}) == 0) {{ *dec = _t; out->tag = {vconst}; return NANOCBOR_OK; }}",
                         cddl_str.len(), cddl_str, cddl_str.len()
                     ));
                 }
@@ -1401,14 +1423,24 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             if let Some(v) = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v)) {
                 let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
                 w.line(&format!(
-                    "out->value.{} = (cbor_str_t){{ (const char*)s, slen }}; out->tag = {vconst}; return NANOCBOR_OK;",
+                    "*dec = _t; out->value.{} = (cbor_str_t){{ (const char*)s, slen }}; out->tag = {vconst}; return NANOCBOR_OK;",
                     to_snake_case(&v.name)
                 ));
             }
-            w.line("return -1; /* unknown variant */");
+            if any.is_none() {
+                w.line("return -1; /* unknown variant */");
+            }
             w.dedent();
             w.line("}");
-            w.line("return -1;");
+            match any {
+                Some(v) => {
+                    let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                    let vname = to_snake_case(&v.name);
+                    w.line(&format!("if (nanocbor_get_subcbor(dec, &out->value.{vname}.ptr, &out->value.{vname}.len) < 0) return -1;"));
+                    w.line(&format!("out->tag = {vconst}; return NANOCBOR_OK;"));
+                }
+                None => w.line("return -1;"),
+            }
         }
 
         TypeDef::Array(a) => {
@@ -1677,8 +1709,11 @@ fn c_decode_call_expr(p: &Primitive, dest: &str, dec_expr: &str) -> String {
             format!("nanocbor_get_double({dec_expr}, &{dest})"),
         Primitive::Tstr =>
             format!("(nanocbor_get_tstr({dec_expr}, (const uint8_t**)&{dest}.ptr, &{dest}.len))"),
-        Primitive::Bstr | Primitive::Any =>
+        Primitive::Bstr =>
             format!("nanocbor_get_bstr({dec_expr}, &{dest}.ptr, &{dest}.len)"),
+        // The whole item's encoding, which nanocbor then skips.
+        Primitive::Any =>
+            format!("nanocbor_get_subcbor({dec_expr}, &{dest}.ptr, &{dest}.len)"),
     }
 }
 
@@ -2173,7 +2208,8 @@ fn c_json_field_type(ty: &TypeRef, opts: &CodegenOptions) -> String {
 fn typeref_to_c_json(ty: &TypeRef) -> String {
     match ty {
         TypeRef::Primitive(Primitive::Tstr)                  => "json_str_t".into(),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "json_bytes_t".into(),
+        TypeRef::Primitive(Primitive::Bstr)                  => "json_bytes_t".into(),
+        TypeRef::Primitive(Primitive::Any)                   => "json_any_t".into(),
         TypeRef::Primitive(p)                                => primitive_to_c(p).to_owned(),
         TypeRef::Named(n)                                    => format!("{}_t", to_snake_case(n)),
         TypeRef::Tagged(_, inner)                            => typeref_to_c_json(inner),
@@ -2259,7 +2295,8 @@ fn emit_enum_decl_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule) {
         match &v.ty {
             TypeRef::Primitive(Primitive::Null)                  => {}
             TypeRef::Primitive(Primitive::Tstr)                  => { w.line(&format!("json_str_t {vname};")); }
-            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => { w.line(&format!("json_bytes_t {vname};")); }
+            TypeRef::Primitive(Primitive::Bstr)                  => { w.line(&format!("json_bytes_t {vname};")); }
+            TypeRef::Primitive(Primitive::Any)                   => { w.line(&format!("json_any_t {vname};")); }
             TypeRef::Primitive(p)                                => { w.line(&format!("{} {vname};", primitive_to_c(p))); }
             TypeRef::Named(_) if indirect(&e.name, &v.ty, module) => { w.line(&format!("{} *{vname};", ptr_type(&v.ty, module))); }
             TypeRef::Named(n)                                    => { w.line(&format!("{}_t {vname};", to_snake_case(n))); }
@@ -2356,6 +2393,10 @@ fn emit_header_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("/* JSON owned-value types */");
     w.line("typedef char json_str_t[256];");
     w.line("typedef struct { uint8_t data[512]; size_t len; } json_bytes_t;");
+    w.line("/* A JSON value of any type (CDDL `any`): its text (dgtlrift/cddlc#178). */");
+    w.line("typedef struct { char data[512]; size_t len; } json_any_t;");
+    w.line("cJSON* cddlc_json_any_to(const json_any_t* a);");
+    w.line("bool cddlc_json_any_from(const cJSON* j, json_any_t* out);");
     w.blank();
 
     // Types something points at are declared ahead (dgtlrift/cddlc#156).
@@ -2421,6 +2462,24 @@ fn emit_source_json(module: &IrModule, opts: &CodegenOptions) -> String {
     // Base64url implementation (RFC 4648 §5, no padding)
     w.line("static const char B64URL[] =");
     w.line("    \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_\";");
+    w.blank();
+    // `any`: a JSON value held as its text (dgtlrift/cddlc#178).
+    w.line("/* The value an `any`'s text holds; `null` for an empty one. */");
+    w.line("cJSON* cddlc_json_any_to(const json_any_t* a) {");
+    w.line("    if (a->len == 0) return cJSON_CreateNull();");
+    w.line("    return cJSON_ParseWithLength(a->data, a->len);");
+    w.line("}");
+    w.blank();
+    w.line("/* Holds `j` as its text; false if the text doesn't fit. */");
+    w.line("bool cddlc_json_any_from(const cJSON* j, json_any_t* out) {");
+    w.line("    char* t = cJSON_PrintUnformatted(j);");
+    w.line("    if (!t) return false;");
+    w.line("    size_t n = strlen(t);");
+    w.line("    bool fits = n <= sizeof(out->data);");
+    w.line("    if (fits) { memcpy(out->data, t, n); out->len = n; }");
+    w.line("    cJSON_free(t);");
+    w.line("    return fits;");
+    w.line("}");
     w.blank();
     w.line("char* cddlc_b64url_encode(const uint8_t* data, size_t len) {");
     w.indent();
@@ -2518,8 +2577,9 @@ fn json_value_expr(ty: &TypeRef, expr: &str, mod_name: &str) -> String {
         TypeRef::Primitive(Primitive::Float32 | Primitive::Float16
             | Primitive::Float64 | Primitive::Float) => format!("cJSON_CreateNumber((double){expr})"),
         TypeRef::Primitive(Primitive::Tstr) => format!("cJSON_CreateString({expr})"),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
+        TypeRef::Primitive(Primitive::Bstr) =>
             format!("cJSON_CreateString(cddlc_b64url_encode(({expr}).data, ({expr}).len))"),
+        TypeRef::Primitive(Primitive::Any) => format!("cddlc_json_any_to(&({expr}))"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "cJSON_CreateNull()".into(),
         TypeRef::Named(n) => {
             let snake = to_snake_case(&n);
@@ -2825,7 +2885,10 @@ fn json_decode_field(w: &mut IndentWriter, ty: &TypeRef, dest: &str, src: &str, 
             w.line(&format!("const char* _s_{v} = cJSON_GetStringValue({src});"));
             w.line(&format!("if (_s_{v}) {{ strncpy(out->{dest}, _s_{v}, sizeof(out->{dest}) - 1); }}"));
         }
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+        TypeRef::Primitive(Primitive::Any) => {
+            w.line(&format!("if (!cddlc_json_any_from({src}, &out->{dest})) return false;"));
+        }
+        TypeRef::Primitive(Primitive::Bstr) => {
             let v = c_ident(dest);
             w.line(&format!("const char* _b64_{v} = cJSON_GetStringValue({src});"));
             w.line(&format!("if (_b64_{v}) {{ size_t _bl; uint8_t* _bd = cddlc_b64url_decode(_b64_{v}, &_bl); if(_bd) {{ memcpy(out->{dest}.data, _bd, _bl); out->{dest}.len = _bl; free(_bd); }} }}"));
@@ -2864,6 +2927,9 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
                 w.line(&format!("return cJSON_CreateNumber((double)obj->value.{vsnake});")),
             TypeRef::Primitive(Primitive::Bool) =>
                 w.line(&format!("return cJSON_CreateBool(obj->value.{vsnake});")),
+            // The value an `any` holds as text (dgtlrift/cddlc#178).
+            TypeRef::Primitive(Primitive::Any) =>
+                w.line(&format!("return cddlc_json_any_to(&obj->value.{vsnake});")),
             // A variant of a named type (dgtlrift/cddlc#102).
             // A pointer alternative is read through it (dgtlrift/cddlc#156).
             TypeRef::Named(n) if indirect(&e.name, &v.ty, module) =>
@@ -2927,7 +2993,11 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
             w.line(&format!("if (strcmp(s, {cddl_str:?}) == 0) {{ out->tag = {vconst}; return true; }}"));
         }
     }
-    w.line("return false;");
+    // An `any` alternative takes what the others don't (dgtlrift/cddlc#178).
+    let any = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Any)));
+    if any.is_none() {
+        w.line("return false;");
+    }
     w.dedent();
     w.line("}");
     let has_num = e.variants.iter().any(|v|
@@ -2953,7 +3023,14 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
         w.dedent();
         w.line("}");
     }
-    w.line("return false;");
+    match any {
+        Some(v) => {
+            let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+            w.line(&format!("if (!cddlc_json_any_from(j, &out->value.{})) return false;", to_snake_case(&v.name)));
+            w.line(&format!("out->tag = {vconst}; return true;"));
+        }
+        None => w.line("return false;"),
+    }
     w.dedent();
     w.line("}");
     w.blank();
@@ -3125,7 +3202,10 @@ fn emit_json_alias_impl(w: &mut IndentWriter, a: &AliasDef, mod_name: &str, opts
                 w.line("if (!_s) return false;");
                 w.line("strncpy(*out, _s, sizeof(*out) - 1);");
             }
-            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+            TypeRef::Primitive(Primitive::Any) => {
+                w.line("if (!cddlc_json_any_from(j, out)) return false;");
+            }
+            TypeRef::Primitive(Primitive::Bstr) => {
                 w.line("const char* _b64 = cJSON_GetStringValue(j);");
                 w.line("if (!_b64) return false;");
                 w.line("size_t _bl; uint8_t* _bd = cddlc_b64url_decode(_b64, &_bl);");
