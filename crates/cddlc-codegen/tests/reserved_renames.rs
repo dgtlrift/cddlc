@@ -35,5 +35,8 @@ fn each_backend_renames_its_own() {
 #[test]
 fn a_taken_new_name_gets_a_suffix() {
     let m = module("file = { a: result, b: fs-result }\nresult = uint\nfs-result = tstr");
-    assert_eq!(rust_reserved_renames(&m).get("result").map(|s| s.as_str()), Some("fs-result-type"));
+    assert_eq!(
+        rust_reserved_renames(&m).get("result").map(|s| s.as_str()),
+        Some("fs-result-type")
+    );
 }

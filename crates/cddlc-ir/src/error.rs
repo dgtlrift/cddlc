@@ -5,27 +5,28 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum IrError {
     // ── Name resolution ───────────────────────────────────────────────────────
-
     #[error("undefined type '{name}' referenced in rule '{in_rule}'")]
     UndefinedType { name: String, in_rule: String },
 
     #[error("duplicate rule name '{name}': first defined at {first}, redefined at {second}")]
     DuplicateRule {
-        name:   String,
-        first:  String,
+        name: String,
+        first: String,
         second: String,
     },
 
     // ── Generics ──────────────────────────────────────────────────────────────
-
     #[error("generic rule '{name}' requires {expected} type argument(s), got {got}")]
-    GenericArgCount { name: String, expected: usize, got: usize },
+    GenericArgCount {
+        name: String,
+        expected: usize,
+        got: usize,
+    },
 
     #[error("type '{name}' is not generic but was given type arguments")]
     NotGeneric { name: String },
 
     // ── Import / file loading ─────────────────────────────────────────────────
-
     #[error("import cycle detected: {}", .cycle.join(" → "))]
     ImportCycle { cycle: Vec<String> },
 
@@ -34,13 +35,12 @@ pub enum IrError {
 
     #[error("I/O error reading '{path}': {source}")]
     Io {
-        path:   PathBuf,
+        path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
     // ── Constraint lowering ───────────────────────────────────────────────────
-
     #[error("invalid .size constraint on '{rule}': {reason}")]
     BadSizeConstraint { rule: String, reason: String },
 
@@ -48,10 +48,13 @@ pub enum IrError {
     BadRangeConstraint { rule: String, reason: String },
 
     #[error("control operator '{op}' is not valid on type '{ty}' in rule '{rule}'")]
-    InvalidControlOp { op: String, ty: String, rule: String },
+    InvalidControlOp {
+        op: String,
+        ty: String,
+        rule: String,
+    },
 
     // ── Structural ────────────────────────────────────────────────────────────
-
     #[error("rule '{rule}' is not supported: {reason}")]
     Unsupported { rule: String, reason: String },
 
@@ -62,7 +65,6 @@ pub enum IrError {
     IncompatibleExtension { name: String, reason: String },
 
     // ── Parse forwarding ─────────────────────────────────────────────────────
-
     #[error("parse error: {0}")]
     Parse(#[from] cddlc_parser::ParseError),
 }
@@ -70,9 +72,9 @@ pub enum IrError {
 /// Non-fatal diagnostic emitted during lowering.
 #[derive(Debug, Clone)]
 pub struct IrWarning {
-    pub rule:    Option<String>,
+    pub rule: Option<String>,
     pub message: String,
-    pub kind:    IrWarningKind,
+    pub kind: IrWarningKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,13 +99,13 @@ impl std::fmt::Display for IrWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.rule {
             Some(r) => write!(f, "warning[{:?}] in '{}': {}", self.kind, r, self.message),
-            None    => write!(f, "warning[{:?}]: {}", self.kind, self.message),
+            None => write!(f, "warning[{:?}]: {}", self.kind, self.message),
         }
     }
 }
 
 /// Accumulated result of lowering.
 pub struct LowerResult {
-    pub module:   crate::types::IrModule,
+    pub module: crate::types::IrModule,
     pub warnings: Vec<IrWarning>,
 }

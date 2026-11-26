@@ -1,3 +1,7 @@
+use backend_cpp::CppBackend;
+use cddlc_codegen::{Backend, CodegenOptions};
+use cddlc_ir::lower;
+use cddlc_parser::parse_cddl;
 /// Integration tests for backend-cpp.
 ///
 /// The backend emits 5 files:
@@ -6,20 +10,15 @@
 ///   files[2] = compat/endian.h
 ///   files[3] = src/<module>.cpp
 ///   files[4] = test/test_roundtrip.cpp
-
 use std::path::PathBuf;
-use backend_cpp::CppBackend;
-use cddlc_codegen::{Backend, CodegenOptions};
-use cddlc_ir::lower;
-use cddlc_parser::parse_cddl;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 struct GeneratedCrate {
-    cmake:  String,
+    cmake: String,
     header: String,
     source: String,
-    tests:  String,
+    tests: String,
 }
 
 fn compile(src: &str) -> GeneratedCrate {
@@ -27,16 +26,18 @@ fn compile(src: &str) -> GeneratedCrate {
 }
 
 fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
-    let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let out     = CppBackend.generate(&lowered.module, &opts).expect("generate");
+    let out = CppBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
     assert_eq!(out.files.len(), 5, "expected 5 output files");
     GeneratedCrate {
-        cmake:  out.files[0].content.clone(),
+        cmake: out.files[0].content.clone(),
         header: out.files[1].content.clone(),
         // files[2] = compat/endian.h (platform shim, not tested here)
         source: out.files[3].content.clone(),
-        tests:  out.files[4].content.clone(),
+        tests: out.files[4].content.clone(),
     }
 }
 
@@ -44,10 +45,10 @@ fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
 
 #[test]
 fn test_emits_four_files() {
-    let opts   = CodegenOptions::default();
+    let opts = CodegenOptions::default();
     let parsed = parse_cddl("x = uint", PathBuf::from("t.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
-    let out    = CppBackend.generate(&lowered.module, &opts).unwrap();
+    let out = CppBackend.generate(&lowered.module, &opts).unwrap();
     assert_eq!(out.files.len(), 5);
     assert!(out.files[0].path.ends_with("CMakeLists.txt"));
     assert!(out.files[1].path.ends_with(".hpp"));
@@ -58,10 +59,10 @@ fn test_emits_four_files() {
 
 #[test]
 fn test_crate_dir_named_after_module() {
-    let opts   = CodegenOptions::default();
+    let opts = CodegenOptions::default();
     let parsed = parse_cddl("x = uint", PathBuf::from("sensor.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
-    let out    = CppBackend.generate(&lowered.module, &opts).unwrap();
+    let out = CppBackend.generate(&lowered.module, &opts).unwrap();
     assert!(out.files[0].path.starts_with("sensor-cbor-cpp/"));
     assert!(out.files[1].path.starts_with("sensor-cbor-cpp/include/"));
     assert!(out.files[2].path.starts_with("sensor-cbor-cpp/compat/"));
@@ -218,7 +219,12 @@ fn test_array_has_count_field() {
 #[test]
 fn test_simple_alias_is_a_struct() {
     let g = compile("device-id = uint");
-    assert!(g.header.contains("struct DeviceId {\n    uint64_t value{};"), "{}", g.header);
+    assert!(
+        g.header
+            .contains("struct DeviceId {\n    uint64_t value{};"),
+        "{}",
+        g.header
+    );
 }
 
 #[test]
@@ -286,7 +292,13 @@ fn test_struct_decode_enters_map() {
 fn test_unknown_field_handled() {
     // An unknown member is reported, then the map is rejected (dgtlrift/cddlc#102).
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("if (cb.on_unknown_field) cb.on_unknown_field(ctx, key);\n            return -1;"), "{}", g.source);
+    assert!(
+        g.source.contains(
+            "if (cb.on_unknown_field) cb.on_unknown_field(ctx, key);\n            return -1;"
+        ),
+        "{}",
+        g.source
+    );
 }
 
 #[test]
@@ -301,21 +313,45 @@ fn test_enum_encode_switches_on_kind() {
 fn test_enum_variants_of_every_type() {
     let g = compile("e = bool / float64 / int / sensor / 7 / \"off\"\nsensor = { id: uint }");
     let h = &g.header;
-    assert!(h.contains("enum class Kind { Bool, Float64, Int, Sensor, Variant7, Off };"), "{h}");
-    assert!(h.contains("using Variant = std::variant<std::monostate, bool, double, int64_t, Sensor>;"), "{h}");
-    assert!(h.contains("static E make_Off() { return E{Kind::Off, Variant{}}; }"), "{h}");
+    assert!(
+        h.contains("enum class Kind { Bool, Float64, Int, Sensor, Variant7, Off };"),
+        "{h}"
+    );
+    assert!(
+        h.contains("using Variant = std::variant<std::monostate, bool, double, int64_t, Sensor>;"),
+        "{h}"
+    );
+    assert!(
+        h.contains("static E make_Off() { return E{Kind::Off, Variant{}}; }"),
+        "{h}"
+    );
     assert!(h.contains("static E make_Variant7() {"), "{h}");
     // The payload is moved in (a `Box` is, for a recursive variant; dgtlrift/cddlc#156).
     assert!(h.contains("static E make_Bool(bool v) { return E{Kind::Bool, Variant(std::in_place_type<bool>, std::move(v))}; }"), "{h}");
 
     let src = &g.source;
-    assert!(src.contains("nanocbor_fmt_bool(enc, std::get<bool>(val.value));"), "{src}");
-    assert!(src.contains("nanocbor_fmt_double(enc, std::get<double>(val.value));"), "{src}");
+    assert!(
+        src.contains("nanocbor_fmt_bool(enc, std::get<bool>(val.value));"),
+        "{src}"
+    );
+    assert!(
+        src.contains("nanocbor_fmt_double(enc, std::get<double>(val.value));"),
+        "{src}"
+    );
     assert!(src.contains("nanocbor_fmt_uint(enc, 7u);"), "{src}");
-    assert!(src.contains("return encode(enc, std::get<Sensor>(val.value));"), "{src}");
+    assert!(
+        src.contains("return encode(enc, std::get<Sensor>(val.value));"),
+        "{src}"
+    );
     assert!(src.contains("case NANOCBOR_TYPE_FLOAT: {"), "{src}");
-    assert!(src.contains("if (u == 7u) { out = E::make_Variant7(); return NANOCBOR_OK; }"), "{src}");
-    assert!(src.contains("nanocbor_value_t tmp = *dec;"), "named variants are tried on a copy: {src}");
+    assert!(
+        src.contains("if (u == 7u) { out = E::make_Variant7(); return NANOCBOR_OK; }"),
+        "{src}"
+    );
+    assert!(
+        src.contains("nanocbor_value_t tmp = *dec;"),
+        "named variants are tried on a copy: {src}"
+    );
 }
 
 #[test]
@@ -371,14 +407,16 @@ fn test_roundtrip_has_main() {
 
 #[test]
 fn test_iot_schema() {
-    let g = compile(r#"
+    let g = compile(
+        r#"
 sensor-message = {
     version:   uint,
     device-id: device-id,
     timestamp: #6.1(uint),
 }
 device-id = tstr .size 16
-"#);
+"#,
+    );
     assert!(g.header.contains("SensorMessage") || g.header.contains("sensor_message"));
     assert!(g.header.contains("DeviceId") || g.header.contains("device_id"));
 }
@@ -390,16 +428,37 @@ fn test_plain_aliases_are_distinct_types() {
     let g = compile("prim-tstr = tstr\nprim-bstr = bstr");
     let h = &g.header;
     assert!(!h.contains("using PrimTstr"), "{h}");
-    assert!(h.contains("struct PrimTstr {\n    std::string_view value{};"), "{h}");
-    assert!(h.contains("struct PrimBstr {\n    std::string_view value{};"), "{h}");
-    assert!(h.contains("int encode(nanocbor_encoder_t *enc, const PrimTstr &val);"), "{h}");
-    assert!(h.contains("int encode(nanocbor_encoder_t *enc, const PrimBstr &val);"), "{h}");
+    assert!(
+        h.contains("struct PrimTstr {\n    std::string_view value{};"),
+        "{h}"
+    );
+    assert!(
+        h.contains("struct PrimBstr {\n    std::string_view value{};"),
+        "{h}"
+    );
+    assert!(
+        h.contains("int encode(nanocbor_encoder_t *enc, const PrimTstr &val);"),
+        "{h}"
+    );
+    assert!(
+        h.contains("int encode(nanocbor_encoder_t *enc, const PrimBstr &val);"),
+        "{h}"
+    );
 
     let src = &g.source;
-    assert!(src.contains("nanocbor_put_tstrn(enc, val.value.data(), val.value.size());"), "{src}");
+    assert!(
+        src.contains("nanocbor_put_tstrn(enc, val.value.data(), val.value.size());"),
+        "{src}"
+    );
     assert!(src.contains("nanocbor_put_bstr(enc, reinterpret_cast<const uint8_t*>(val.value.data()), val.value.size());"), "{src}");
-    assert!(src.contains("nanocbor_get_tstr(dec, &_p, &_l); if (_r >= 0) out.value ="), "{src}");
-    assert!(src.contains("nanocbor_get_bstr(dec, &_p, &_l); if (_r >= 0) out.value ="), "{src}");
+    assert!(
+        src.contains("nanocbor_get_tstr(dec, &_p, &_l); if (_r >= 0) out.value ="),
+        "{src}"
+    );
+    assert!(
+        src.contains("nanocbor_get_bstr(dec, &_p, &_l); if (_r >= 0) out.value ="),
+        "{src}"
+    );
 }
 
 /// Issue #35: an optional member is decoded into its inner type, then assigned to
@@ -425,7 +484,10 @@ fn test_literal_members_use_their_literal_in_tests() {
     assert!(t.contains("original.always = true;"), "{t}");
     assert!(t.contains("original.never = false;"), "{t}");
     assert!(t.contains("original.version = 1u;"), "{t}");
-    assert!(t.contains("original.kind = std::string_view(\"kernel\");"), "{t}");
+    assert!(
+        t.contains("original.kind = std::string_view(\"kernel\");"),
+        "{t}"
+    );
 }
 
 /// Issue #36: a text enum is written and read as its CDDL literal, not a string
@@ -436,23 +498,51 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(g.source.contains("\"free-space\""), "{}", g.source);
     assert!(g.source.contains("\"Log_Distance\""), "{}", g.source);
     assert!(!g.source.contains("\"freespace\""), "{}", g.source);
-    assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
+    assert!(
+        !g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""),
+        "{}",
+        g.source
+    );
 }
 
 /// Issue #50: `--alloc heap` makes arrays `std::vector`s with no capacity limit;
 /// the default keeps a fixed-capacity `std::array` plus a count.
 #[test]
 fn test_alloc_heap_uses_vector() {
-    let heap = CodegenOptions { alloc: cddlc_codegen::AllocStrategy::Heap, ..Default::default() };
+    let heap = CodegenOptions {
+        alloc: cddlc_codegen::AllocStrategy::Heap,
+        ..Default::default()
+    };
     let g = compile_with_opts("nums = [* uint]", heap);
-    assert!(g.header.contains("std::vector<uint64_t> items{};"), "{}", g.header);
+    assert!(
+        g.header.contains("std::vector<uint64_t> items{};"),
+        "{}",
+        g.header
+    );
     assert!(!g.header.contains("std::size_t count"), "{}", g.header);
-    assert!(g.source.contains("nanocbor_fmt_array(enc, val.items.size());"), "{}", g.source);
-    assert!(g.source.contains("out.items.push_back(item);"), "{}", g.source);
+    assert!(
+        g.source
+            .contains("nanocbor_fmt_array(enc, val.items.size());"),
+        "{}",
+        g.source
+    );
+    assert!(
+        g.source.contains("out.items.push_back(item);"),
+        "{}",
+        g.source
+    );
 
     let fixed = compile("nums = [* uint]");
-    assert!(fixed.header.contains("std::array<uint64_t, 16> items{};"), "{}", fixed.header);
-    assert!(fixed.header.contains("std::size_t count{0};"), "{}", fixed.header);
+    assert!(
+        fixed.header.contains("std::array<uint64_t, 16> items{};"),
+        "{}",
+        fixed.header
+    );
+    assert!(
+        fixed.header.contains("std::size_t count{0};"),
+        "{}",
+        fixed.header
+    );
 }
 
 /// Issue #51: the C++ JSON CMake project pins nlohmann/json to a release
@@ -461,11 +551,31 @@ fn test_alloc_heap_uses_vector() {
 fn test_json_cmake_pins_nlohmann() {
     let parsed = parse_cddl("x = { a: uint }", PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..Default::default() };
-    let out = CppBackend.generate(&lowered.module, &opts).expect("generate");
-    let cmake = &out.files.iter().find(|f| f.path.ends_with("CMakeLists.txt")).expect("cmake").content;
-    assert!(cmake.contains("URL      https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz"), "{cmake}");
-    assert!(cmake.contains("URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa"), "{cmake}");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..Default::default()
+    };
+    let out = CppBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
+    let cmake = &out
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("CMakeLists.txt"))
+        .expect("cmake")
+        .content;
+    assert!(
+        cmake.contains(
+            "URL      https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz"
+        ),
+        "{cmake}"
+    );
+    assert!(
+        cmake.contains(
+            "URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa"
+        ),
+        "{cmake}"
+    );
     assert!(!cmake.contains("GIT_TAG        master"), "{cmake}");
 }
 
@@ -473,10 +583,26 @@ fn test_json_cmake_pins_nlohmann() {
 fn compile_json_cpp(src: &str) -> (String, String, String) {
     let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..Default::default() };
-    let out = CppBackend.generate(&lowered.module, &opts).expect("generate");
-    let get = |suffix: &str| out.files.iter().find(|f| f.path.ends_with(suffix)).expect(suffix).content.clone();
-    (get(".hpp"), get(&format!("src/test.cpp")), get("test_roundtrip.cpp"))
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..Default::default()
+    };
+    let out = CppBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
+    let get = |suffix: &str| {
+        out.files
+            .iter()
+            .find(|f| f.path.ends_with(suffix))
+            .expect(suffix)
+            .content
+            .clone()
+    };
+    (
+        get(".hpp"),
+        get(&format!("src/test.cpp")),
+        get("test_roundtrip.cpp"),
+    )
 }
 
 /// Issue #54: C++ JSON members of an enum, array, struct or nil type convert
@@ -491,17 +617,34 @@ fn test_json_named_members_convert_by_kind() {
     );
     // A text enum is a std::string: no encode()/decode() calls on it.
     assert!(src.contains("j[\"status\"] = this->status;"), "{src}");
-    assert!(src.contains("out.status = j.at(\"status\").get<std::string>();"), "{src}");
+    assert!(
+        src.contains("out.status = j.at(\"status\").get<std::string>();"),
+        "{src}"
+    );
     // An array goes through its free functions.
-    assert!(src.contains("j[\"sensors\"] = nlohmann::json::parse(encode_Sensors(this->sensors));"), "{src}");
-    assert!(src.contains("out.sensors = decode_Sensors(json_bytes(j.at(\"sensors\")));"), "{src}");
+    assert!(
+        src.contains("j[\"sensors\"] = nlohmann::json::parse(encode_Sensors(this->sensors));"),
+        "{src}"
+    );
+    assert!(
+        src.contains("out.sensors = decode_Sensors(json_bytes(j.at(\"sensors\")));"),
+        "{src}"
+    );
     // A struct is decoded from one serialization, not two temporaries.
-    assert!(src.contains("out.inner = Sensor::decode(json_bytes(j.at(\"inner\")));"), "{src}");
+    assert!(
+        src.contains("out.inner = Sensor::decode(json_bytes(j.at(\"inner\")));"),
+        "{src}"
+    );
     assert!(!src.contains(".dump().begin(), "), "{src}");
     // A present nil is JSON null.
     assert!(src.contains("j[\"gone\"] = nullptr;"), "{src}");
     // Array elements convert one by one.
-    assert!(src.contains("for (const auto& item : val) arr.push_back(nlohmann::json::parse(item.encode()));"), "{src}");
+    assert!(
+        src.contains(
+            "for (const auto& item : val) arr.push_back(nlohmann::json::parse(item.encode()));"
+        ),
+        "{src}"
+    );
     // Tests compare values.
     assert!(h.contains("bool operator==(const Rec &o) const { return status == o.status && sensors == o.sensors && inner == o.inner && gone == o.gone; }"), "{h}");
     assert!(tests.contains("assert(decoded == original);"), "{tests}");

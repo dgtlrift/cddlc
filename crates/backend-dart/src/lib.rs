@@ -5,50 +5,53 @@
 ///     pubspec.yaml              ← Dart SDK >=3.0.0, optional cbor runtime
 ///     lib/<module>.dart         ← classes + encode/decode
 ///     test/<module>_test.dart   ← package:test roundtrip tests
-
 use cddlc_codegen::{
-    to_pascal_case, to_snake_case,
-    Backend, CodegenError, CodegenOptions, CodegenOutput, GeneratedFile,
-    IndentWriter,
+    to_pascal_case, to_snake_case, Backend, CodegenError, CodegenOptions, CodegenOutput,
+    GeneratedFile, IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, EnumDef, FieldKey, IrModule, MapDef,
-    Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    AliasDef, ArrayDef, EnumDef, FieldKey, IrModule, MapDef, Occurrence, Primitive, StructDef,
+    TypeDef, TypeRef,
 };
 
 pub struct DartBackend;
 
 impl Backend for DartBackend {
-    fn language_name(&self) -> &str { "Dart" }
-    fn file_extension(&self) -> &str { "dart" }
+    fn language_name(&self) -> &str {
+        "Dart"
+    }
+    fn file_extension(&self) -> &str {
+        "dart"
+    }
 
     fn generate(
         &self,
         module: &IrModule,
-        opts:   &CodegenOptions,
+        opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "Dart", false)?;
         // A rule whose class would hide a type the generated code uses
         // (`list` → `List`) is `<module>-<rule>` (dgtlrift/cddlc#222).
-        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::dart_reserved_renames(module));
+        let renamed =
+            cddlc_codegen::rename_types(module, &cddlc_codegen::dart_reserved_renames(module));
         let module = &renamed;
-        let name     = module.name.as_str();
-        let fmt_tag  = if opts.is_json() { "json" } else { "cbor" };
+        let name = module.name.as_str();
+        let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let pkg_name = format!("{}_{}", dart_pkg(name), fmt_tag);
         let lib_name = dart_pkg(name);
 
         Ok(CodegenOutput {
             files: vec![
                 GeneratedFile {
-                    path:    format!("{pkg_name}/pubspec.yaml"),
+                    path: format!("{pkg_name}/pubspec.yaml"),
                     content: emit_pubspec(&pkg_name, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{pkg_name}/lib/{lib_name}.dart"),
+                    path: format!("{pkg_name}/lib/{lib_name}.dart"),
                     content: emit_source(module, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{pkg_name}/test/{lib_name}_test.dart"),
+                    path: format!("{pkg_name}/test/{lib_name}_test.dart"),
                     content: emit_tests(module, &lib_name, opts),
                 },
             ],
@@ -92,7 +95,9 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     let needs_typed_data = module_uses_bstr(module) || !opts.is_json();
     if opts.is_json() {
         w.line("import 'dart:convert';");
-        if needs_typed_data { w.line("import 'dart:typed_data';"); }
+        if needs_typed_data {
+            w.line("import 'dart:typed_data';");
+        }
     } else {
         w.line("import 'dart:typed_data';");
         w.line("import 'package:cbor/cbor.dart';");
@@ -100,10 +105,16 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
     if !opts.is_json() && module_uses_tags(module) {
         let mut helpers = vec![UNTAG_HELPER];
-        if module_uses_any(module) { helpers.push(WITH_TAGS_HELPER); }
+        if module_uses_any(module) {
+            helpers.push(WITH_TAGS_HELPER);
+        }
         for h in helpers {
             for l in h.lines() {
-                if l.is_empty() { w.blank() } else { w.line(l) }
+                if l.is_empty() {
+                    w.blank()
+                } else {
+                    w.line(l)
+                }
             }
             w.blank();
         }
@@ -153,17 +164,17 @@ CborValue _withTags(List<int> tags, CborValue v) {
 fn module_uses_tags(module: &IrModule) -> bool {
     fn tr(t: &TypeRef) -> bool {
         match t {
-            TypeRef::Tagged(..)  => true,
-            TypeRef::Choice(ts)  => ts.iter().any(tr),
-            _                    => false,
+            TypeRef::Tagged(..) => true,
+            TypeRef::Choice(ts) => ts.iter().any(tr),
+            _ => false,
         }
     }
     module.types.values().any(|def| match def {
         TypeDef::Struct(s) => s.tagged.is_some() || s.fields.iter().any(|f| tr(&f.ty)),
-        TypeDef::Enum(e)   => e.tagged.is_some() || e.variants.iter().any(|v| tr(&v.ty)),
-        TypeDef::Array(a)  => a.tagged.is_some() || tr(&a.element),
-        TypeDef::Map(m)    => m.tagged.is_some(),
-        TypeDef::Alias(a)  => a.tagged.is_some() || tr(&a.ty),
+        TypeDef::Enum(e) => e.tagged.is_some() || e.variants.iter().any(|v| tr(&v.ty)),
+        TypeDef::Array(a) => a.tagged.is_some() || tr(&a.element),
+        TypeDef::Map(m) => m.tagged.is_some(),
+        TypeDef::Alias(a) => a.tagged.is_some() || tr(&a.ty),
     })
 }
 
@@ -178,10 +189,10 @@ fn module_uses_any(module: &IrModule) -> bool {
     }
     module.types.values().any(|def| match def {
         TypeDef::Struct(s) => s.fields.iter().any(|f| tr(&f.ty)),
-        TypeDef::Enum(e)   => e.variants.iter().any(|v| tr(&v.ty)),
-        TypeDef::Array(a)  => tr(&a.element),
-        TypeDef::Map(_)    => false,
-        TypeDef::Alias(a)  => tr(&a.ty),
+        TypeDef::Enum(e) => e.variants.iter().any(|v| tr(&v.ty)),
+        TypeDef::Array(a) => tr(&a.element),
+        TypeDef::Map(_) => false,
+        TypeDef::Alias(a) => tr(&a.ty),
     })
 }
 
@@ -192,18 +203,18 @@ fn module_uses_bstr(module: &IrModule) -> bool {
 fn type_uses_bstr(def: &TypeDef) -> bool {
     match def {
         TypeDef::Struct(s) => s.fields.iter().any(|f| typeref_uses_bstr(&f.ty)),
-        TypeDef::Array(a)  => typeref_uses_bstr(&a.element),
-        TypeDef::Alias(a)  => typeref_uses_bstr(&a.ty),
-        _                  => false,
+        TypeDef::Array(a) => typeref_uses_bstr(&a.element),
+        TypeDef::Alias(a) => typeref_uses_bstr(&a.ty),
+        _ => false,
     }
 }
 
 fn typeref_uses_bstr(tr: &TypeRef) -> bool {
     match tr {
-        TypeRef::Primitive(Primitive::Bstr)    => true,
-        TypeRef::Tagged(_, inner)              => typeref_uses_bstr(inner),
-        TypeRef::Choice(trs)                   => trs.iter().any(typeref_uses_bstr),
-        _                                      => false,
+        TypeRef::Primitive(Primitive::Bstr) => true,
+        TypeRef::Tagged(_, inner) => typeref_uses_bstr(inner),
+        TypeRef::Choice(trs) => trs.iter().any(typeref_uses_bstr),
+        _ => false,
     }
 }
 
@@ -222,10 +233,10 @@ fn flat_width(a: &ArrayDef, module: &IrModule) -> Option<usize> {
 fn emit_type(w: &mut IndentWriter, module: &IrModule, def: &TypeDef, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, module, s, opts),
-        TypeDef::Enum(e)   => emit_enum(w, module, e, opts),
-        TypeDef::Array(a)  => emit_array(w, a, opts),
-        TypeDef::Map(m)    => emit_map(w, m, opts),
-        TypeDef::Alias(a)  => emit_alias(w, a, opts),
+        TypeDef::Enum(e) => emit_enum(w, module, e, opts),
+        TypeDef::Array(a) => emit_array(w, a, opts),
+        TypeDef::Map(m) => emit_map(w, m, opts),
+        TypeDef::Alias(a) => emit_alias(w, a, opts),
     }
 }
 
@@ -233,7 +244,9 @@ fn emit_type(w: &mut IndentWriter, module: &IrModule, def: &TypeDef, opts: &Code
 
 fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, s.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
-    if s.deprecated { w.line("@Deprecated('deprecated in schema')"); }
+    if s.deprecated {
+        w.line("@Deprecated('deprecated in schema')");
+    }
 
     let class_name = to_pascal_case(&s.name);
     w.line(&format!("class {class_name} {{"));
@@ -242,13 +255,17 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
     for f in &s.fields {
         cddlc_codegen::emit_doc_lines(w, f.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
         let dart_type = dart_field_type(&f.ty, &f.occurrence, opts);
-        let fname     = dart_field(&f.name);
+        let fname = dart_field(&f.name);
         w.line(&format!("final {dart_type} {fname};"));
     }
     // The map's other entries (dgtlrift/cddlc#82).
     if let Some(r) = &s.rest {
         w.line("/// The map's other entries.");
-        w.line(&format!("final Map<String, {}> {};", typeref_to_dart(&r.val_ty, opts), dart_field(&r.name)));
+        w.line(&format!(
+            "final Map<String, {}> {};",
+            typeref_to_dart(&r.val_ty, opts),
+            dart_field(&r.name)
+        ));
     }
     w.blank();
 
@@ -279,7 +296,8 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
         w.blank();
         w.line(&format!(
             "static {class_name} decode(String s) => \
-             {class_name}.fromJson(jsonDecode(s) as Map<String, dynamic>);"));
+             {class_name}.fromJson(jsonDecode(s) as Map<String, dynamic>);"
+        ));
         w.line("String encode() => jsonEncode(toJson());");
     } else {
         emit_struct_from_cbor(w, module, s, &class_name, opts);
@@ -296,36 +314,58 @@ fn emit_struct(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &Co
 /// first absent one, and one set after an absent one is an error.
 /// Throws (`exc`) unless a repeated member's item count, `n`, is within its
 /// bounds (dgtlrift/cddlc#134).
-fn emit_dart_repeat_check(w: &mut IndentWriter, class_name: &str, f: &cddlc_ir::FieldDef, n: &str, exc: &str) {
+fn emit_dart_repeat_check(
+    w: &mut IndentWriter,
+    class_name: &str,
+    f: &cddlc_ir::FieldDef,
+    n: &str,
+    exc: &str,
+) {
     let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
     if min > 0 {
         w.line(&format!("if ({n} < {min}) throw {exc}('{class_name}.{}: needs at least {min} items, got ${n}');", f.name));
     }
     if let Some(max) = max {
-        w.line(&format!("if ({n} > {max}) throw {exc}('{class_name}.{}: has more than {max} items, got ${n}');", f.name));
+        w.line(&format!(
+            "if ({n} > {max}) throw {exc}('{class_name}.{}: has more than {max} items, got ${n}');",
+            f.name
+        ));
     }
 }
 
 /// A record with a repeated member (`[primary, * extension, payload]`): the
 /// member's items go inline, and the list's length says how many there are
 /// (dgtlrift/cddlc#134).
-fn emit_record_codec_repeated(w: &mut IndentWriter, module: &IrModule, s: &StructDef, ri: usize, class_name: &str, opts: &CodegenOptions) {
+fn emit_record_codec_repeated(
+    w: &mut IndentWriter,
+    module: &IrModule,
+    s: &StructDef,
+    ri: usize,
+    class_name: &str,
+    opts: &CodegenOptions,
+) {
     let json = opts.is_json();
     let rf = &s.fields[ri];
     let fixed = s.fields.len() - 1;
 
     // Decode
     if json {
-        w.line(&format!("static {class_name} decode(String s) => {class_name}.fromJson(jsonDecode(s));"));
+        w.line(&format!(
+            "static {class_name} decode(String s) => {class_name}.fromJson(jsonDecode(s));"
+        ));
         w.blank();
         w.line(&format!("factory {class_name}.fromJson(dynamic raw) {{"));
         w.indent();
-        w.line(&format!("if (raw is! List) throw FormatException('{class_name}: expected an array');"));
+        w.line(&format!(
+            "if (raw is! List) throw FormatException('{class_name}: expected an array');"
+        ));
         w.line("final a = raw;");
     } else {
         w.line(&format!("static {class_name} decode(Uint8List bytes) => {class_name}._fromCborList(cbor.decode(bytes) as CborList);"));
         w.blank();
-        w.line(&format!("factory {class_name}._fromCborList(CborList a) {{"));
+        w.line(&format!(
+            "factory {class_name}._fromCborList(CborList a) {{"
+        ));
         w.indent();
         if let Some(tag) = s.tagged {
             w.line(&format!("_untag({}, a, '{class_name}');", tag.0));
@@ -338,13 +378,26 @@ fn emit_record_codec_repeated(w: &mut IndentWriter, module: &IrModule, s: &Struc
     emit_dart_repeat_check(w, class_name, rf, "reps", "FormatException");
     w.line(&format!("return {class_name}("));
     w.indent();
-    let from = |f: &cddlc_ir::FieldDef, item: &str| if json { json_from_expr(&f.ty, item, module, opts) } else { cbor_from_expr(&f.ty, item, module, opts) };
+    let from = |f: &cddlc_ir::FieldDef, item: &str| {
+        if json {
+            json_from_expr(&f.ty, item, module, opts)
+        } else {
+            cbor_from_expr(&f.ty, item, module, opts)
+        }
+    };
     for (i, f) in s.fields.iter().enumerate() {
         let fname = dart_field(&f.name);
         if f.occurrence.is_repeated() {
-            w.line(&format!("{fname}: [for (var k = 0; k < reps; k++) {}],", from(f, &format!("a[{i} + k]"))));
+            w.line(&format!(
+                "{fname}: [for (var k = 0; k < reps; k++) {}],",
+                from(f, &format!("a[{i} + k]"))
+            ));
         } else {
-            let item = if i < ri { format!("a[{i}]") } else { format!("a[{} + reps]", i - 1) };
+            let item = if i < ri {
+                format!("a[{i}]")
+            } else {
+                format!("a[{} + reps]", i - 1)
+            };
             w.line(&format!("{fname}: {},", from(f, &item)));
         }
     }
@@ -355,7 +408,14 @@ fn emit_record_codec_repeated(w: &mut IndentWriter, module: &IrModule, s: &Struc
     w.blank();
 
     // Encode
-    let (list_ty, method) = if json { ("dynamic", "List<dynamic> toJson()") } else { ("CborValue", "CborValue _toCborValue([List<int> tags = const []])") };
+    let (list_ty, method) = if json {
+        ("dynamic", "List<dynamic> toJson()")
+    } else {
+        (
+            "CborValue",
+            "CborValue _toCborValue([List<int> tags = const []])",
+        )
+    };
     if json {
         w.line("String encode() => jsonEncode(toJson());");
     } else {
@@ -364,8 +424,20 @@ fn emit_record_codec_repeated(w: &mut IndentWriter, module: &IrModule, s: &Struc
     w.blank();
     w.line(&format!("{method} {{"));
     w.indent();
-    emit_dart_repeat_check(w, class_name, rf, &format!("{}.length", dart_field(&rf.name)), "StateError");
-    let to = |f: &cddlc_ir::FieldDef, expr: &str| if json { json_to_expr(&f.ty, expr, module, opts) } else { cbor_to_expr(&f.ty, expr, module, opts) };
+    emit_dart_repeat_check(
+        w,
+        class_name,
+        rf,
+        &format!("{}.length", dart_field(&rf.name)),
+        "StateError",
+    );
+    let to = |f: &cddlc_ir::FieldDef, expr: &str| {
+        if json {
+            json_to_expr(&f.ty, expr, module, opts)
+        } else {
+            cbor_to_expr(&f.ty, expr, module, opts)
+        }
+    };
     w.line(&format!("final items = <{list_ty}>["));
     w.indent();
     for f in &s.fields {
@@ -383,7 +455,7 @@ fn emit_record_codec_repeated(w: &mut IndentWriter, module: &IrModule, s: &Struc
     } else {
         let tags = match s.tagged {
             Some(tag) => add_tag("tags", tag.0),
-            None      => "tags".to_owned(),
+            None => "tags".to_owned(),
         };
         w.line(&format!("return CborList(items, tags: {tags});"));
     }
@@ -391,35 +463,59 @@ fn emit_record_codec_repeated(w: &mut IndentWriter, module: &IrModule, s: &Struc
     w.line("}");
 }
 
-fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
+fn emit_record_codec(
+    w: &mut IndentWriter,
+    module: &IrModule,
+    s: &StructDef,
+    class_name: &str,
+    opts: &CodegenOptions,
+) {
     if let Some(ri) = cddlc_codegen::record_repeated(s) {
         emit_record_codec_repeated(w, module, s, ri, class_name, opts);
         return;
     }
     let json = opts.is_json();
-    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let required = s
+        .fields
+        .iter()
+        .filter(|f| f.occurrence.is_required())
+        .count();
     let total = s.fields.len();
-    let want = if required == total { required.to_string() } else { format!("{required} to {total}") };
+    let want = if required == total {
+        required.to_string()
+    } else {
+        format!("{required} to {total}")
+    };
 
     // Decode
     if json {
-        w.line(&format!("static {class_name} decode(String s) => {class_name}.fromJson(jsonDecode(s));"));
+        w.line(&format!(
+            "static {class_name} decode(String s) => {class_name}.fromJson(jsonDecode(s));"
+        ));
         w.blank();
         w.line(&format!("factory {class_name}.fromJson(dynamic raw) {{"));
         w.indent();
-        w.line(&format!("if (raw is! List) throw FormatException('{class_name}: expected an array');"));
+        w.line(&format!(
+            "if (raw is! List) throw FormatException('{class_name}: expected an array');"
+        ));
         w.line("final a = raw;");
     } else {
         w.line(&format!("static {class_name} decode(Uint8List bytes) => {class_name}._fromCborList(cbor.decode(bytes) as CborList);"));
         w.blank();
-        w.line(&format!("factory {class_name}._fromCborList(CborList a) {{"));
+        w.line(&format!(
+            "factory {class_name}._fromCborList(CborList a) {{"
+        ));
         w.indent();
         if let Some(tag) = s.tagged {
             w.line(&format!("_untag({}, a, '{class_name}');", tag.0));
         }
     }
-    w.line(&format!("if (a.length < {required} || a.length > {total}) {{"));
-    w.line(&format!("  throw FormatException('{class_name}: expected {want} items, got ${{a.length}}');"));
+    w.line(&format!(
+        "if (a.length < {required} || a.length > {total}) {{"
+    ));
+    w.line(&format!(
+        "  throw FormatException('{class_name}: expected {want} items, got ${{a.length}}');"
+    ));
     w.line("}");
     w.line(&format!("return {class_name}("));
     w.indent();
@@ -430,11 +526,21 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
     for (i, f) in s.fields.iter().enumerate() {
         let fname = dart_field(&f.name);
         let item = match &before {
-            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("a[a.length >= {x} ? {i} : {i} - ({x} - a.length)]") }
+            Some(b) if b[i] > 0 => {
+                let x = required + b[i];
+                format!("a[a.length >= {x} ? {i} : {i} - ({x} - a.length)]")
+            }
             _ => format!("a[{i}]"),
         };
-        let conv = if json { json_from_expr(&f.ty, &item, module, opts) } else { cbor_from_expr(&f.ty, &item, module, opts) };
-        let present = match &before { Some(b) => format!("a.length > {}", required + b[i]), None => format!("a.length > {i}") };
+        let conv = if json {
+            json_from_expr(&f.ty, &item, module, opts)
+        } else {
+            cbor_from_expr(&f.ty, &item, module, opts)
+        };
+        let present = match &before {
+            Some(b) => format!("a.length > {}", required + b[i]),
+            None => format!("a.length > {i}"),
+        };
         if f.occurrence.is_required() {
             w.line(&format!("{fname}: {conv},"));
         } else {
@@ -448,8 +554,19 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
     w.blank();
 
     // Encode
-    let optional: Vec<_> = s.fields.iter().filter(|f| !f.occurrence.is_required()).collect();
-    let (list_ty, method) = if json { ("dynamic", "List<dynamic> toJson()") } else { ("CborValue", "CborValue _toCborValue([List<int> tags = const []])") };
+    let optional: Vec<_> = s
+        .fields
+        .iter()
+        .filter(|f| !f.occurrence.is_required())
+        .collect();
+    let (list_ty, method) = if json {
+        ("dynamic", "List<dynamic> toJson()")
+    } else {
+        (
+            "CborValue",
+            "CborValue _toCborValue([List<int> tags = const []])",
+        )
+    };
     if json {
         w.line("String encode() => jsonEncode(toJson());");
     } else {
@@ -458,10 +575,12 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
     w.blank();
     w.line(&format!("{method} {{"));
     w.indent();
-    let value = |f: &cddlc_ir::FieldDef, expr: &str| if json {
-        json_to_expr(&f.ty, expr, module, opts)
-    } else {
-        cbor_to_expr(&f.ty, expr, module, opts)
+    let value = |f: &cddlc_ir::FieldDef, expr: &str| {
+        if json {
+            json_to_expr(&f.ty, expr, module, opts)
+        } else {
+            cbor_to_expr(&f.ty, expr, module, opts)
+        }
     };
     if before.is_some() {
         // Optional members before required ones (dgtlrift/cddlc#134): every
@@ -519,7 +638,7 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
     } else {
         let tags = match s.tagged {
             Some(tag) => add_tag("tags", tag.0),
-            None      => "tags".to_owned(),
+            None => "tags".to_owned(),
         };
         w.line(&format!("return CborList(items, tags: {tags});"));
     }
@@ -529,12 +648,24 @@ fn emit_record_codec(w: &mut IndentWriter, module: &IrModule, s: &StructDef, cla
 
 /// The keys of a struct's named members, as a Dart set literal.
 fn named_keys(s: &StructDef) -> String {
-    let keys: Vec<String> = s.fields.iter().map(|f| format!("'{}'", field_key_str(&f.key))).collect();
+    let keys: Vec<String> = s
+        .fields
+        .iter()
+        .map(|f| format!("'{}'", field_key_str(&f.key)))
+        .collect();
     format!("const <String>{{{}}}", keys.join(", "))
 }
 
-fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
-    w.line(&format!("factory {class_name}.fromJson(Map<String, dynamic> json) {{"));
+fn emit_struct_from_json(
+    w: &mut IndentWriter,
+    module: &IrModule,
+    s: &StructDef,
+    class_name: &str,
+    opts: &CodegenOptions,
+) {
+    w.line(&format!(
+        "factory {class_name}.fromJson(Map<String, dynamic> json) {{"
+    ));
     w.indent();
     // A map has only the members its schema gives it (RFC 8610 §3.5;
     // dgtlrift/cddlc#102), unless it has other entries.
@@ -548,14 +679,17 @@ fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     w.indent();
     for f in &s.fields {
         let fname = dart_field(&f.name);
-        let key   = field_key_str(&f.key);
+        let key = field_key_str(&f.key);
         if matches!(f.occurrence, Occurrence::Optional) {
             let conv = json_from_expr(&f.ty, &format!("json['{key}']"), module, opts);
-            w.line(&format!("{fname}: json.containsKey('{key}') ? {conv} : null,"));
+            w.line(&format!(
+                "{fname}: json.containsKey('{key}') ? {conv} : null,"
+            ));
         } else if f.occurrence.is_repeated() {
             let item_conv = json_from_expr(&f.ty, "e", module, opts);
             w.line(&format!(
-                "{fname}: (json['{key}'] as List).map((e) => {item_conv}).toList(),"));
+                "{fname}: (json['{key}'] as List).map((e) => {item_conv}).toList(),"
+            ));
         } else {
             let conv = json_from_expr(&f.ty, &format!("json['{key}']"), module, opts);
             w.line(&format!("{fname}: {conv},"));
@@ -565,7 +699,8 @@ fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
         let conv = json_from_expr(&r.val_ty, "e.value", module, opts);
         w.line(&format!(
             "{}: {{for (final e in json.entries) if (!{}.contains(e.key)) e.key: {conv}}},",
-            dart_field(&r.name), named_keys(s)
+            dart_field(&r.name),
+            named_keys(s)
         ));
     }
     w.dedent();
@@ -578,7 +713,12 @@ fn emit_struct_from_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     w.line("}");
 }
 
-fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_to_json(
+    w: &mut IndentWriter,
+    module: &IrModule,
+    s: &StructDef,
+    opts: &CodegenOptions,
+) {
     w.line("Map<String, dynamic> toJson() => {");
     w.indent();
     let fields: Vec<_> = if s.dcbor {
@@ -590,7 +730,7 @@ fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
     };
     for f in &fields {
         let fname = dart_field(&f.name);
-        let key   = field_key_str(&f.key);
+        let key = field_key_str(&f.key);
         if matches!(f.occurrence, Occurrence::Optional) {
             let val = json_to_expr(&f.ty, &format!("{fname}!"), module, opts);
             w.line(&format!("if ({fname} != null) '{key}': {val},"));
@@ -599,7 +739,9 @@ fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
             if item_val == "e" {
                 w.line(&format!("'{key}': {fname},"));
             } else {
-                w.line(&format!("'{key}': {fname}.map((e) => {item_val}).toList(),"));
+                w.line(&format!(
+                    "'{key}': {fname}.map((e) => {item_val}).toList(),"
+                ));
             }
         } else {
             let val = json_to_expr(&f.ty, &fname, module, opts);
@@ -608,16 +750,27 @@ fn emit_struct_to_json(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
     }
     if let Some(r) = &s.rest {
         let val = json_to_expr(&r.val_ty, "e.value", module, opts);
-        w.line(&format!("for (final e in {}.entries) e.key: {val},", dart_field(&r.name)));
+        w.line(&format!(
+            "for (final e in {}.entries) e.key: {val},",
+            dart_field(&r.name)
+        ));
     }
     w.dedent();
     w.line("};");
 }
 
-fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, class_name: &str, opts: &CodegenOptions) {
+fn emit_struct_from_cbor(
+    w: &mut IndentWriter,
+    module: &IrModule,
+    s: &StructDef,
+    class_name: &str,
+    opts: &CodegenOptions,
+) {
     w.line(&format!("static {class_name} decode(Uint8List bytes) {{"));
     w.indent();
-    w.line(&format!("return {class_name}._fromCborMap(cbor.decode(bytes) as CborMap);"));
+    w.line(&format!(
+        "return {class_name}._fromCborMap(cbor.decode(bytes) as CborMap);"
+    ));
     w.dedent();
     w.line("}");
     w.blank();
@@ -636,15 +789,18 @@ fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     w.line(&format!("final v = {class_name}("));
     w.indent();
     for f in &s.fields {
-        let fname    = dart_field(&f.name);
+        let fname = dart_field(&f.name);
         let cbor_key = cbor_map_key(&f.key);
         if matches!(f.occurrence, Occurrence::Optional) {
             let conv = cbor_from_expr(&f.ty, &format!("m[{cbor_key}]!"), module, opts);
-            w.line(&format!("{fname}: m.containsKey({cbor_key}) ? {conv} : null,"));
+            w.line(&format!(
+                "{fname}: m.containsKey({cbor_key}) ? {conv} : null,"
+            ));
         } else if f.occurrence.is_repeated() {
             let item_conv = cbor_from_expr(&f.ty, "e", module, opts);
             w.line(&format!(
-                "{fname}: (m[{cbor_key}] as CborList).map((e) => {item_conv}).toList(),"));
+                "{fname}: (m[{cbor_key}] as CborList).map((e) => {item_conv}).toList(),"
+            ));
         } else {
             let conv = cbor_from_expr(&f.ty, &format!("m[{cbor_key}]!"), module, opts);
             w.line(&format!("{fname}: {conv},"));
@@ -667,7 +823,12 @@ fn emit_struct_from_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef,
     w.line("}");
 }
 
-fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts: &CodegenOptions) {
+fn emit_struct_to_cbor(
+    w: &mut IndentWriter,
+    module: &IrModule,
+    s: &StructDef,
+    opts: &CodegenOptions,
+) {
     w.line("Uint8List encode() => Uint8List.fromList(cbor.encode(_toCborValue()));");
     w.blank();
     w.line("CborValue _toCborValue([List<int> tags = const []]) {");
@@ -682,7 +843,7 @@ fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
         s.fields.iter().collect()
     };
     for f in &fields {
-        let fname    = dart_field(&f.name);
+        let fname = dart_field(&f.name);
         let cbor_key = cbor_map_key(&f.key);
         if matches!(f.occurrence, Occurrence::Optional) {
             let val = cbor_to_expr(&f.ty, &format!("{fname}!"), module, opts);
@@ -690,7 +851,8 @@ fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
         } else if f.occurrence.is_repeated() {
             let item_val = cbor_to_expr(&f.ty, "e", module, opts);
             w.line(&format!(
-                "{cbor_key}: CborList({fname}.map((e) => {item_val}).toList()),"));
+                "{cbor_key}: CborList({fname}.map((e) => {item_val}).toList()),"
+            ));
         } else {
             let val = cbor_to_expr(&f.ty, &fname, module, opts);
             w.line(&format!("{cbor_key}: {val},"));
@@ -698,12 +860,15 @@ fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
     }
     if let Some(r) = &s.rest {
         let val = cbor_to_expr(&r.val_ty, "e.value", module, opts);
-        w.line(&format!("for (final e in {}.entries) CborString(e.key): {val},", dart_field(&r.name)));
+        w.line(&format!(
+            "for (final e in {}.entries) CborString(e.key): {val},",
+            dart_field(&r.name)
+        ));
     }
     w.dedent();
     let tags = match s.tagged {
         Some(tag) => add_tag("tags", tag.0),
-        None      => "tags".to_owned(),
+        None => "tags".to_owned(),
     };
     w.line(&format!("}}, tags: {tags});"));
     w.dedent();
@@ -714,7 +879,9 @@ fn emit_struct_to_cbor(w: &mut IndentWriter, module: &IrModule, s: &StructDef, o
 
 fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, e.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
-    if e.deprecated { w.line("@Deprecated('deprecated in schema')"); }
+    if e.deprecated {
+        w.line("@Deprecated('deprecated in schema')");
+    }
 
     let class_name = to_pascal_case(&e.name);
 
@@ -723,7 +890,11 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
     // (dgtlrift/cddlc#102).
     for v in &e.variants {
         if let TypeRef::Named(n) = &v.ty {
-            w.line(&format!("typedef _{class_name}{} = {};", to_pascal_case(&v.name), to_pascal_case(n)));
+            w.line(&format!(
+                "typedef _{class_name}{} = {};",
+                to_pascal_case(&v.name),
+                to_pascal_case(n)
+            ));
         }
     }
 
@@ -746,7 +917,7 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
 
     // Named constructors for each variant
     for v in &e.variants {
-        let vname    = to_pascal_case(&v.name);
+        let vname = to_pascal_case(&v.name);
         let kind_str = variant_kind_str(v);
         match &v.ty {
             // A text literal (`"on"`) is a constant; a `tstr` alternative holds
@@ -757,34 +928,40 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
             }
             TypeRef::Primitive(Primitive::Null | Primitive::Tstr) => {
                 w.line(&format!(
-                    "static const {vname} = {class_name}._({kind_str:?});"));
+                    "static const {vname} = {class_name}._({kind_str:?});"
+                ));
             }
             TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
                 // Variant name encodes the literal (e.g. Variant3 → literal 3)
                 if let Some(lit) = variant_int_literal(&v.name) {
                     w.line(&format!(
-                        "static const {vname} = {class_name}._({kind_str:?}, {lit});"));
+                        "static const {vname} = {class_name}._({kind_str:?}, {lit});"
+                    ));
                 } else {
                     let dart_t = primitive_to_dart(unwrap_primitive(&v.ty));
                     w.line(&format!(
                         "static {class_name} {vname}({dart_t} value) => \
-                         {class_name}._({kind_str:?}, value);"));
+                         {class_name}._({kind_str:?}, value);"
+                    ));
                 }
             }
             TypeRef::Primitive(_) => {
                 let dart_t = primitive_to_dart(unwrap_primitive(&v.ty));
                 w.line(&format!(
                     "static {class_name} {vname}({dart_t} value) => \
-                     {class_name}._({kind_str:?}, value);"));
+                     {class_name}._({kind_str:?}, value);"
+                ));
             }
             TypeRef::Named(_) => {
                 w.line(&format!(
                     "static {class_name} {vname}(_{class_name}{vname} value) => \
-                     {class_name}._({kind_str:?}, value);"));
+                     {class_name}._({kind_str:?}, value);"
+                ));
             }
             _ => {
                 w.line(&format!(
-                    "static const {vname} = {class_name}._({kind_str:?});"));
+                    "static const {vname} = {class_name}._({kind_str:?});"
+                ));
             }
         }
     }
@@ -803,7 +980,9 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
 /// `expr` with a leading `Type.` (a variant's type, hidden inside the enum
 /// class by the variant's constructor) through the private alias for it.
 fn via_alias(expr: String, class_name: &str, v: &cddlc_ir::EnumVariant) -> String {
-    let TypeRef::Named(n) = &v.ty else { return expr };
+    let TypeRef::Named(n) = &v.ty else {
+        return expr;
+    };
     let ty = format!("{}.", to_pascal_case(n));
     match expr.strip_prefix(&ty) {
         Some(rest) => format!("_{class_name}{}.{rest}", to_pascal_case(&v.name)),
@@ -811,7 +990,13 @@ fn via_alias(expr: String, class_name: &str, v: &cddlc_ir::EnumVariant) -> Strin
     }
 }
 
-fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_name: &str, opts: &CodegenOptions) {
+fn emit_enum_json(
+    w: &mut IndentWriter,
+    module: &IrModule,
+    e: &EnumDef,
+    class_name: &str,
+    opts: &CodegenOptions,
+) {
     w.line("String encode() => jsonEncode(toJson());");
     w.blank();
     w.line("dynamic toJson() {");
@@ -823,7 +1008,9 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         let case_val = match &v.ty {
             // `null` is JSON null, not text (dgtlrift/cddlc#147).
             TypeRef::Primitive(Primitive::Null) => "return null;".to_owned(),
-            TypeRef::Primitive(Primitive::Tstr) if !is_text_literal(v) => "return value;".to_owned(),
+            TypeRef::Primitive(Primitive::Tstr) if !is_text_literal(v) => {
+                "return value;".to_owned()
+            }
             TypeRef::Primitive(Primitive::Tstr) => {
                 format!("return {kind_str:?};")
             }
@@ -835,8 +1022,8 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
                 }
             }
             TypeRef::Primitive(_) => "return value;".to_owned(),
-            TypeRef::Named(_)     => "return (value as dynamic).toJson();".to_owned(),
-            _                     => format!("return {kind_str:?};"),
+            TypeRef::Named(_) => "return (value as dynamic).toJson();".to_owned(),
+            _ => format!("return {kind_str:?};"),
         };
         w.line(&format!("case {kind_str:?}: {case_val}"));
     }
@@ -848,17 +1035,27 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     w.blank();
 
     w.line(&format!(
-        "static {class_name} decode(String s) => fromJson(jsonDecode(s));"));
+        "static {class_name} decode(String s) => fromJson(jsonDecode(s));"
+    ));
     w.blank();
     w.line(&format!("static {class_name} fromJson(dynamic raw) {{"));
     w.indent();
 
-    if let Some(v) = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null))) {
-        w.line(&format!("if (raw == null) return {class_name}.{};", to_pascal_case(&v.name)));
+    if let Some(v) = e
+        .variants
+        .iter()
+        .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null)))
+    {
+        w.line(&format!(
+            "if (raw == null) return {class_name}.{};",
+            to_pascal_case(&v.name)
+        ));
     }
     // String variants
-    let has_str = e.variants.iter().any(|v|
-        matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
+    let has_str = e
+        .variants
+        .iter()
+        .any(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
     if has_str {
         w.line("if (raw is String) {");
         w.indent();
@@ -867,14 +1064,23 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         for v in &e.variants {
             if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v) {
                 let kind_str = variant_kind_str(v);
-                let vname    = to_pascal_case(&v.name);
+                let vname = to_pascal_case(&v.name);
                 w.line(&format!("case {kind_str:?}: return {class_name}.{vname};"));
             }
         }
         // Any other text is the `tstr` alternative's.
-        match e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v)) {
-            Some(v) => w.line(&format!("default: return {class_name}.{}(raw);", to_pascal_case(&v.name))),
-            None => w.line(&format!("default: throw ArgumentError('Unknown {class_name}: $raw');")),
+        match e
+            .variants
+            .iter()
+            .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v))
+        {
+            Some(v) => w.line(&format!(
+                "default: return {class_name}.{}(raw);",
+                to_pascal_case(&v.name)
+            )),
+            None => w.line(&format!(
+                "default: throw ArgumentError('Unknown {class_name}: $raw');"
+            )),
         }
         w.dedent();
         w.line("}");
@@ -883,24 +1089,28 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     }
 
     // Integer variants — match specific literal values when known
-    let int_variants: Vec<_> = e.variants.iter()
+    let int_variants: Vec<_> = e
+        .variants
+        .iter()
         .filter(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Uint | Primitive::Int)))
         .collect();
     if !int_variants.is_empty() {
         w.line("if (raw is num) {");
         w.indent();
-        let all_literals = int_variants.iter()
+        let all_literals = int_variants
+            .iter()
             .all(|v| variant_int_literal(&v.name).is_some());
         if all_literals {
             w.line("switch (raw.toInt()) {");
             w.indent();
             for v in &int_variants {
-                let lit   = variant_int_literal(&v.name).unwrap();
+                let lit = variant_int_literal(&v.name).unwrap();
                 let vname = to_pascal_case(&v.name);
                 w.line(&format!("case {lit}: return {class_name}.{vname};"));
             }
             w.line(&format!(
-                "default: throw ArgumentError('Unknown {class_name}: $raw');"));
+                "default: throw ArgumentError('Unknown {class_name}: $raw');"
+            ));
             w.dedent();
             w.line("}");
         } else {
@@ -912,11 +1122,17 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     }
 
     // Float variants
-    let float_variants: Vec<_> = e.variants.iter()
-        .filter(|v| matches!(&v.ty,
-            TypeRef::Primitive(
-                Primitive::Float | Primitive::Float16 |
-                Primitive::Float32 | Primitive::Float64)))
+    let float_variants: Vec<_> = e
+        .variants
+        .iter()
+        .filter(|v| {
+            matches!(
+                &v.ty,
+                TypeRef::Primitive(
+                    Primitive::Float | Primitive::Float16 | Primitive::Float32 | Primitive::Float64
+                )
+            )
+        })
         .collect();
     if !float_variants.is_empty() {
         w.line("if (raw is num) {");
@@ -928,26 +1144,38 @@ fn emit_enum_json(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     }
 
     // Variants of a named type: the first whose decoder accepts the value.
-    for v in e.variants.iter().filter(|v| matches!(v.ty, TypeRef::Named(_))) {
+    for v in e
+        .variants
+        .iter()
+        .filter(|v| matches!(v.ty, TypeRef::Named(_)))
+    {
         w.line(&format!(
             "try {{ return {class_name}._({:?}, {}); }} catch (_) {{ /* next variant */ }}",
             variant_kind_str(v),
             via_alias(json_from_expr(&v.ty, "raw", module, opts), &class_name, v)
         ));
     }
-    w.line(&format!("throw ArgumentError('Cannot decode {class_name}: $raw');"));
+    w.line(&format!(
+        "throw ArgumentError('Cannot decode {class_name}: $raw');"
+    ));
     w.dedent();
     w.line("}");
 }
 
-fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_name: &str, opts: &CodegenOptions) {
+fn emit_enum_cbor(
+    w: &mut IndentWriter,
+    module: &IrModule,
+    e: &EnumDef,
+    class_name: &str,
+    opts: &CodegenOptions,
+) {
     w.line("Uint8List encode() => Uint8List.fromList(cbor.encode(_toCborValue()));");
     w.blank();
     w.line("CborValue _toCborValue([List<int> tags = const []]) {");
     w.indent();
     let tags = match e.tagged {
         Some(tag) => add_tag("tags", tag.0),
-        None      => "tags".to_owned(),
+        None => "tags".to_owned(),
     };
     w.line("switch (kind) {");
     w.indent();
@@ -956,7 +1184,9 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         let cbor_val = match &v.ty {
             // `null` is CBOR null, not text (dgtlrift/cddlc#147).
             TypeRef::Primitive(Primitive::Null) => format!("CborNull(tags: {tags})"),
-            TypeRef::Primitive(Primitive::Tstr) if !is_text_literal(v) => format!("CborString(value as String, tags: {tags})"),
+            TypeRef::Primitive(Primitive::Tstr) if !is_text_literal(v) => {
+                format!("CborString(value as String, tags: {tags})")
+            }
             TypeRef::Primitive(Primitive::Tstr) => {
                 format!("CborString({kind_str:?}, tags: {tags})")
             }
@@ -965,14 +1195,23 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
                     format!("CborSmallInt({lit}, tags: {tags})")
                 } else {
                     cbor_to_expr_tagged(
-                        &TypeRef::Primitive(Primitive::Int), "value as int", module, opts, &tags)
+                        &TypeRef::Primitive(Primitive::Int),
+                        "value as int",
+                        module,
+                        opts,
+                        &tags,
+                    )
                 }
             }
-            TypeRef::Primitive(p) => {
-                cbor_to_expr_tagged(&TypeRef::Primitive(p.clone()), "value as dynamic", module, opts, &tags)
-            }
+            TypeRef::Primitive(p) => cbor_to_expr_tagged(
+                &TypeRef::Primitive(p.clone()),
+                "value as dynamic",
+                module,
+                opts,
+                &tags,
+            ),
             TypeRef::Named(_) => format!("(value as dynamic)._toCborValue({tags})"),
-            _                 => format!("CborString({kind_str:?}, tags: {tags})"),
+            _ => format!("CborString({kind_str:?}, tags: {tags})"),
         };
         w.line(&format!("case {kind_str:?}: return {cbor_val};"));
     }
@@ -985,23 +1224,36 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
 
     w.line(&format!("static {class_name} decode(Uint8List bytes) {{"));
     w.indent();
-    w.line(&format!("return {class_name}._fromCborValue(cbor.decode(bytes));"));
+    w.line(&format!(
+        "return {class_name}._fromCborValue(cbor.decode(bytes));"
+    ));
     w.dedent();
     w.line("}");
     w.blank();
 
-    w.line(&format!("static {class_name} _fromCborValue(CborValue v) {{"));
+    w.line(&format!(
+        "static {class_name} _fromCborValue(CborValue v) {{"
+    ));
     w.indent();
     if let Some(tag) = e.tagged {
         w.line(&format!("_untag({}, v, '{class_name}');", tag.0));
     }
 
-    if let Some(v) = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null))) {
-        w.line(&format!("if (v is CborNull) return {class_name}.{};", to_pascal_case(&v.name)));
+    if let Some(v) = e
+        .variants
+        .iter()
+        .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Null)))
+    {
+        w.line(&format!(
+            "if (v is CborNull) return {class_name}.{};",
+            to_pascal_case(&v.name)
+        ));
     }
     // String variants
-    let has_str = e.variants.iter().any(|v|
-        matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
+    let has_str = e
+        .variants
+        .iter()
+        .any(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)));
     if has_str {
         w.line("if (v is CborString) {");
         w.indent();
@@ -1010,14 +1262,23 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
         for v2 in &e.variants {
             if matches!(&v2.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v2) {
                 let kind_str = variant_kind_str(v2);
-                let vname    = to_pascal_case(&v2.name);
+                let vname = to_pascal_case(&v2.name);
                 w.line(&format!("case {kind_str:?}: return {class_name}.{vname};"));
             }
         }
         // Any other text is the `tstr` alternative's.
-        match e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v)) {
-            Some(v) => w.line(&format!("default: return {class_name}.{}(v.toString());", to_pascal_case(&v.name))),
-            None => w.line(&format!("default: throw ArgumentError('Unknown {class_name}: $v');")),
+        match e
+            .variants
+            .iter()
+            .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v))
+        {
+            Some(v) => w.line(&format!(
+                "default: return {class_name}.{}(v.toString());",
+                to_pascal_case(&v.name)
+            )),
+            None => w.line(&format!(
+                "default: throw ArgumentError('Unknown {class_name}: $v');"
+            )),
         }
         w.dedent();
         w.line("}");
@@ -1026,24 +1287,28 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     }
 
     // Integer variants
-    let int_variants: Vec<_> = e.variants.iter()
+    let int_variants: Vec<_> = e
+        .variants
+        .iter()
         .filter(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Uint | Primitive::Int)))
         .collect();
     if !int_variants.is_empty() {
         w.line("if (v is CborInt) {");
         w.indent();
-        let all_literals = int_variants.iter()
+        let all_literals = int_variants
+            .iter()
             .all(|v2| variant_int_literal(&v2.name).is_some());
         if all_literals {
             w.line("switch (v.toInt()) {");
             w.indent();
             for v2 in &int_variants {
-                let lit   = variant_int_literal(&v2.name).unwrap();
+                let lit = variant_int_literal(&v2.name).unwrap();
                 let vname = to_pascal_case(&v2.name);
                 w.line(&format!("case {lit}: return {class_name}.{vname};"));
             }
             w.line(&format!(
-                "default: throw ArgumentError('Unknown {class_name}: $v');"));
+                "default: throw ArgumentError('Unknown {class_name}: $v');"
+            ));
             w.dedent();
             w.line("}");
         } else {
@@ -1055,14 +1320,20 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
     }
 
     // Variants of a named type: the first whose decoder accepts the value.
-    for v in e.variants.iter().filter(|v| matches!(v.ty, TypeRef::Named(_))) {
+    for v in e
+        .variants
+        .iter()
+        .filter(|v| matches!(v.ty, TypeRef::Named(_)))
+    {
         w.line(&format!(
             "try {{ return {class_name}._({:?}, {}); }} catch (_) {{ /* next variant */ }}",
             variant_kind_str(v),
             via_alias(cbor_from_expr(&v.ty, "v", module, opts), &class_name, v)
         ));
     }
-    w.line(&format!("throw ArgumentError('Cannot decode {class_name}: $v');"));
+    w.line(&format!(
+        "throw ArgumentError('Cannot decode {class_name}: $v');"
+    ));
     w.dedent();
     w.line("}");
 }
@@ -1072,7 +1343,7 @@ fn emit_enum_cbor(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, class_na
 fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
     let class_name = to_pascal_case(&a.name);
-    let elem_type  = typeref_to_dart(&a.element, opts);
+    let elem_type = typeref_to_dart(&a.element, opts);
     // Emit a typedef alias for the list type
     w.line(&format!("typedef {class_name} = List<{elem_type}>;"));
 }
@@ -1082,9 +1353,11 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
 fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
     let class_name = to_pascal_case(&m.name);
-    let key_type   = typeref_to_dart(&m.key_ty, opts);
-    let val_type   = typeref_to_dart(&m.val_ty, opts);
-    w.line(&format!("typedef {class_name} = Map<{key_type}, {val_type}>;"));
+    let key_type = typeref_to_dart(&m.key_ty, opts);
+    let val_type = typeref_to_dart(&m.val_ty, opts);
+    w.line(&format!(
+        "typedef {class_name} = Map<{key_type}, {val_type}>;"
+    ));
 }
 
 // ── Alias ─────────────────────────────────────────────────────────────────────
@@ -1092,7 +1365,7 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("///"));
     let class_name = to_pascal_case(&a.name);
-    let dart_type  = typeref_to_dart(&a.ty, opts);
+    let dart_type = typeref_to_dart(&a.ty, opts);
     w.line(&format!("typedef {class_name} = {dart_type};"));
 }
 
@@ -1152,7 +1425,9 @@ fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts
                     _ => false,
                 })
     });
-    if skip { return; }
+    if skip {
+        return;
+    }
 
     w.line(&format!("test('{class_name} roundtrip', () {{"));
     w.indent();
@@ -1161,10 +1436,12 @@ fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts
     w.line(&format!("final obj = {class_name}("));
     w.indent();
     for f in &s.fields {
-        let fname   = dart_field(&f.name);
+        let fname = dart_field(&f.name);
         let default = match (&f.ty, &f.occurrence) {
             // A member pinned to a literal holds it (dgtlrift/cddlc#157).
-            (_, Occurrence::Required) if dart_literal(f).is_some() => dart_literal(f).expect("checked"),
+            (_, Occurrence::Required) if dart_literal(f).is_some() => {
+                dart_literal(f).expect("checked")
+            }
             (TypeRef::Named(n), Occurrence::Required) => match module.get(n) {
                 Some(TypeDef::Map(m)) => test_table_for(m, opts),
                 _ => test_default_for(&f.ty, &f.occurrence, opts),
@@ -1197,7 +1474,9 @@ fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts
     }
 
     for f in &s.fields {
-        if matches!(f.occurrence, Occurrence::Optional) { continue; }
+        if matches!(f.occurrence, Occurrence::Optional) {
+            continue;
+        }
         let fname = dart_field(&f.name);
         w.line(&format!("expect(decoded.{fname}, equals(obj.{fname}));"));
     }
@@ -1213,8 +1492,10 @@ fn emit_struct_test(w: &mut IndentWriter, module: &IrModule, s: &StructDef, opts
 fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &CodegenOptions) {
     let class_name = to_pascal_case(&e.name);
     // Test the first string-like variant
-    let first_str = e.variants.iter().find(|v|
-        matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)));
+    let first_str = e
+        .variants
+        .iter()
+        .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null)));
     if let Some(v) = first_str {
         let vname = to_pascal_case(&v.name);
         w.line(&format!("test('{class_name} roundtrip', () {{"));
@@ -1240,30 +1521,57 @@ fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &C
     // Each variant of a map type whose members are primitives.
     for v in &e.variants {
         let TypeRef::Named(n) = &v.ty else { continue };
-        let Some(TypeDef::Struct(st)) = module.get(n) else { continue };
-        if st.encoding != cddlc_ir::StructEncoding::Map || st.rest.is_some()
-            || st.fields.iter().any(|f| f.occurrence.is_repeated() || !matches!(f.ty, TypeRef::Primitive(_)))
+        let Some(TypeDef::Struct(st)) = module.get(n) else {
+            continue;
+        };
+        if st.encoding != cddlc_ir::StructEncoding::Map
+            || st.rest.is_some()
+            || st
+                .fields
+                .iter()
+                .any(|f| f.occurrence.is_repeated() || !matches!(f.ty, TypeRef::Primitive(_)))
         {
             continue;
         }
         let vname = to_pascal_case(&v.name);
-        let args: Vec<String> = st.fields.iter()
-            .map(|f| format!("{}: {}", dart_field(&f.name), match (&f.occurrence, dart_literal(f)) {
-                (Occurrence::Required, Some(lit)) => lit,
-                _ => test_default_for(&f.ty, &f.occurrence, opts),
-            }))
+        let args: Vec<String> = st
+            .fields
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}: {}",
+                    dart_field(&f.name),
+                    match (&f.occurrence, dart_literal(f)) {
+                        (Occurrence::Required, Some(lit)) => lit,
+                        _ => test_default_for(&f.ty, &f.occurrence, opts),
+                    }
+                )
+            })
             .collect();
         w.line(&format!("test('{class_name} {vname} roundtrip', () {{"));
         w.indent();
-        w.line(&format!("final obj = {class_name}.{vname}({}({}));", to_pascal_case(n), args.join(", ")));
-        w.line(&format!("final decoded = {class_name}.decode(obj.encode());"));
+        w.line(&format!(
+            "final obj = {class_name}.{vname}({}({}));",
+            to_pascal_case(n),
+            args.join(", ")
+        ));
+        w.line(&format!(
+            "final decoded = {class_name}.decode(obj.encode());"
+        ));
         // A map variant with the same members as an earlier one decodes as
         // that one, to the same encoding (dgtlrift/cddlc#192).
-        if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+        if e.variants
+            .iter()
+            .take_while(|x| x.name != v.name)
+            .any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module))
+        {
             w.line("expect(decoded.encode(), equals(obj.encode()));");
         } else {
             w.line("expect(decoded.kind, equals(obj.kind));");
-            w.line(&format!("expect(decoded.value, isA<{}>());", to_pascal_case(n)));
+            w.line(&format!(
+                "expect(decoded.value, isA<{}>());",
+                to_pascal_case(n)
+            ));
         }
         w.dedent();
         w.line("});");
@@ -1274,24 +1582,23 @@ fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &C
 
 fn primitive_to_dart(p: &Primitive) -> &'static str {
     match p {
-        Primitive::Bool                                           => "bool",
-        Primitive::Null                                           => "Null",
-        Primitive::Undefined                                      => "dynamic",
-        Primitive::Uint | Primitive::Int                          => "int",
-        Primitive::Float16 | Primitive::Float32
-            | Primitive::Float64 | Primitive::Float              => "double",
-        Primitive::Bstr                                           => "Uint8List",
-        Primitive::Tstr                                           => "String",
-        Primitive::Any                                            => "dynamic",
+        Primitive::Bool => "bool",
+        Primitive::Null => "Null",
+        Primitive::Undefined => "dynamic",
+        Primitive::Uint | Primitive::Int => "int",
+        Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => "double",
+        Primitive::Bstr => "Uint8List",
+        Primitive::Tstr => "String",
+        Primitive::Any => "dynamic",
     }
 }
 
 fn typeref_to_dart(tr: &TypeRef, _opts: &CodegenOptions) -> String {
     match tr {
-        TypeRef::Primitive(p)     => primitive_to_dart(p).to_owned(),
-        TypeRef::Named(n)         => to_pascal_case(n),
+        TypeRef::Primitive(p) => primitive_to_dart(p).to_owned(),
+        TypeRef::Named(n) => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => typeref_to_dart(inner, _opts),
-        TypeRef::Choice(_)        => "dynamic".to_owned(),
+        TypeRef::Choice(_) => "dynamic".to_owned(),
     }
 }
 
@@ -1311,7 +1618,7 @@ fn dart_field_type(tr: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Str
 fn unwrap_primitive(tr: &TypeRef) -> &Primitive {
     match tr {
         TypeRef::Primitive(p) => p,
-        _                     => &Primitive::Any,
+        _ => &Primitive::Any,
     }
 }
 
@@ -1320,14 +1627,14 @@ fn unwrap_primitive(tr: &TypeRef) -> &Primitive {
 fn json_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(p) => match p {
-            Primitive::Bool                   => format!("{expr} as bool"),
-            Primitive::Null                   => "null".to_owned(),
-            Primitive::Uint | Primitive::Int  => format!("({expr} as num).toInt()"),
-            Primitive::Float16 | Primitive::Float32
-                | Primitive::Float64 | Primitive::Float
-                                              => format!("({expr} as num).toDouble()"),
-            Primitive::Bstr                   => format!("base64Decode({expr} as String)"),
-            Primitive::Tstr                   => format!("{expr} as String"),
+            Primitive::Bool => format!("{expr} as bool"),
+            Primitive::Null => "null".to_owned(),
+            Primitive::Uint | Primitive::Int => format!("({expr} as num).toInt()"),
+            Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => {
+                format!("({expr} as num).toDouble()")
+            }
+            Primitive::Bstr => format!("base64Decode({expr} as String)"),
+            Primitive::Tstr => format!("{expr} as String"),
             Primitive::Undefined | Primitive::Any => expr.to_owned(),
         },
         TypeRef::Named(n) => {
@@ -1340,7 +1647,12 @@ fn json_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
                 // A repeated group: one record per run of its members (dgtlrift/cddlc#90).
                 Some(TypeDef::Array(a)) if flat_width(a, module).is_some() => {
                     let n = flat_width(a, module).unwrap_or(1);
-                    let item = json_from_expr(&a.element, &format!("({expr} as List).sublist(i, i + {n})"), module, opts);
+                    let item = json_from_expr(
+                        &a.element,
+                        &format!("({expr} as List).sublist(i, i + {n})"),
+                        module,
+                        opts,
+                    );
                     format!("[for (var i = 0; i < ({expr} as List).length; i += {n}) {item}]")
                 }
                 Some(TypeDef::Array(a)) => {
@@ -1377,35 +1689,39 @@ fn json_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
             }
         }
         TypeRef::Tagged(_, inner) => json_from_expr(inner, expr, module, opts),
-        TypeRef::Choice(_)        => expr.to_owned(),
+        TypeRef::Choice(_) => expr.to_owned(),
     }
 }
 
 fn json_to_expr(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(Primitive::Bstr) => format!("base64Encode({field})"),
-        TypeRef::Named(n) => {
-            match module.get(n.as_str()) {
-                Some(TypeDef::Alias(a)) => json_to_expr(&a.ty, field, module, opts),
-                Some(TypeDef::Array(a)) if flat_width(a, module).is_some() => {
-                    let item = json_to_expr(&a.element, "e", module, opts);
-                    format!("[for (final e in {field}) ...({item} as List)]")
-                }
-                Some(TypeDef::Array(a)) => {
-                    let item = json_to_expr(&a.element, "e", module, opts);
-                    if item == "e" { field.to_owned() }
-                    else { format!("{field}.map((e) => {item}).toList()") }
-                }
-                Some(TypeDef::Map(m)) => {
-                    let v = json_to_expr(&m.val_ty, "v", module, opts);
-                    if v == "v" { field.to_owned() }
-                    else { format!("{field}.map((k, v) => MapEntry(k, {v}))") }
-                }
-                _ => format!("{field}.toJson()"),
+        TypeRef::Named(n) => match module.get(n.as_str()) {
+            Some(TypeDef::Alias(a)) => json_to_expr(&a.ty, field, module, opts),
+            Some(TypeDef::Array(a)) if flat_width(a, module).is_some() => {
+                let item = json_to_expr(&a.element, "e", module, opts);
+                format!("[for (final e in {field}) ...({item} as List)]")
             }
-        }
+            Some(TypeDef::Array(a)) => {
+                let item = json_to_expr(&a.element, "e", module, opts);
+                if item == "e" {
+                    field.to_owned()
+                } else {
+                    format!("{field}.map((e) => {item}).toList()")
+                }
+            }
+            Some(TypeDef::Map(m)) => {
+                let v = json_to_expr(&m.val_ty, "v", module, opts);
+                if v == "v" {
+                    field.to_owned()
+                } else {
+                    format!("{field}.map((k, v) => MapEntry(k, {v}))")
+                }
+            }
+            _ => format!("{field}.toJson()"),
+        },
         TypeRef::Tagged(_, inner) => json_to_expr(inner, field, module, opts),
-        _                         => field.to_owned(),
+        _ => field.to_owned(),
     }
 }
 
@@ -1414,62 +1730,73 @@ fn json_to_expr(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOpti
 fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(p) => match p {
-            Primitive::Bool                   => format!("({expr} as CborBool).value"),
-            Primitive::Null                   => "null".to_owned(),
-            Primitive::Uint | Primitive::Int  => format!("({expr} as CborInt).toInt()"),
-            Primitive::Float16 | Primitive::Float32
-                | Primitive::Float64 | Primitive::Float
-                                              => format!("({expr} as CborFloat).value"),
-            Primitive::Bstr                   =>
-                format!("Uint8List.fromList(({expr} as CborBytes).bytes)"),
-            Primitive::Tstr                   => format!("({expr} as CborString).toString()"),
+            Primitive::Bool => format!("({expr} as CborBool).value"),
+            Primitive::Null => "null".to_owned(),
+            Primitive::Uint | Primitive::Int => format!("({expr} as CborInt).toInt()"),
+            Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => {
+                format!("({expr} as CborFloat).value")
+            }
+            Primitive::Bstr => format!("Uint8List.fromList(({expr} as CborBytes).bytes)"),
+            Primitive::Tstr => format!("({expr} as CborString).toString()"),
             Primitive::Undefined | Primitive::Any => format!("({expr}).toObject()"),
         },
-        TypeRef::Named(n) => {
-            match module.get(n.as_str()) {
-                Some(TypeDef::Alias(a)) => match a.tagged {
-                    Some(tag) => cbor_from_expr(&a.ty, &format!("_untag({}, {expr}, '{}')", tag.0, to_pascal_case(n)), module, opts),
-                    None      => cbor_from_expr(&a.ty, expr, module, opts),
-                },
-                Some(TypeDef::Array(a)) if flat_width(a, module).is_some() => {
-                    let n = flat_width(a, module).unwrap_or(1);
-                    let list = format!("({expr} as CborList)");
-                    let item = cbor_from_expr(&a.element, &format!("CborList({list}.sublist(i, i + {n}))"), module, opts);
-                    format!("[for (var i = 0; i < {list}.length; i += {n}) {item}]")
-                }
-                Some(TypeDef::Array(a)) => {
-                    let item = cbor_from_expr(&a.element, "e", module, opts);
-                    format!("({expr} as CborList).map((e) => {item}).toList()")
-                }
-                Some(TypeDef::Map(m)) => {
-                    let raw = match m.tagged {
-                        Some(tag) => format!("_untag({}, {expr}, '{}')", tag.0, to_pascal_case(n)),
-                        None => expr.to_owned(),
-                    };
-                    format!(
-                        "({raw} as CborMap).map<{}, {}>((k, v) => MapEntry({}, {}))",
-                        typeref_to_dart(&m.key_ty, opts),
-                        typeref_to_dart(&m.val_ty, opts),
-                        cbor_from_expr(&m.key_ty, "k", module, opts),
-                        cbor_from_expr(&m.val_ty, "v", module, opts)
-                    )
-                }
-                Some(TypeDef::Enum(_)) => {
-                    let cls = to_pascal_case(n);
-                    format!("{cls}._fromCborValue({expr})")
-                }
-                Some(TypeDef::Struct(st)) if st.encoding == cddlc_ir::StructEncoding::Array => {
-                    format!("{}._fromCborList({expr} as CborList)", to_pascal_case(n))
-                }
-                Some(TypeDef::Struct(_)) | None => {
-                    let cls = to_pascal_case(n);
-                    format!("{cls}._fromCborMap({expr} as CborMap)")
-                }
+        TypeRef::Named(n) => match module.get(n.as_str()) {
+            Some(TypeDef::Alias(a)) => match a.tagged {
+                Some(tag) => cbor_from_expr(
+                    &a.ty,
+                    &format!("_untag({}, {expr}, '{}')", tag.0, to_pascal_case(n)),
+                    module,
+                    opts,
+                ),
+                None => cbor_from_expr(&a.ty, expr, module, opts),
+            },
+            Some(TypeDef::Array(a)) if flat_width(a, module).is_some() => {
+                let n = flat_width(a, module).unwrap_or(1);
+                let list = format!("({expr} as CborList)");
+                let item = cbor_from_expr(
+                    &a.element,
+                    &format!("CborList({list}.sublist(i, i + {n}))"),
+                    module,
+                    opts,
+                );
+                format!("[for (var i = 0; i < {list}.length; i += {n}) {item}]")
             }
-        }
-        TypeRef::Tagged(tag, inner) =>
-            cbor_from_expr(inner, &format!("_untag({}, {expr}, 'tagged value')", tag.0), module, opts),
-        TypeRef::Choice(_)        => format!("({expr}).toObject()"),
+            Some(TypeDef::Array(a)) => {
+                let item = cbor_from_expr(&a.element, "e", module, opts);
+                format!("({expr} as CborList).map((e) => {item}).toList()")
+            }
+            Some(TypeDef::Map(m)) => {
+                let raw = match m.tagged {
+                    Some(tag) => format!("_untag({}, {expr}, '{}')", tag.0, to_pascal_case(n)),
+                    None => expr.to_owned(),
+                };
+                format!(
+                    "({raw} as CborMap).map<{}, {}>((k, v) => MapEntry({}, {}))",
+                    typeref_to_dart(&m.key_ty, opts),
+                    typeref_to_dart(&m.val_ty, opts),
+                    cbor_from_expr(&m.key_ty, "k", module, opts),
+                    cbor_from_expr(&m.val_ty, "v", module, opts)
+                )
+            }
+            Some(TypeDef::Enum(_)) => {
+                let cls = to_pascal_case(n);
+                format!("{cls}._fromCborValue({expr})")
+            }
+            Some(TypeDef::Struct(st)) if st.encoding == cddlc_ir::StructEncoding::Array => {
+                format!("{}._fromCborList({expr} as CborList)", to_pascal_case(n))
+            }
+            Some(TypeDef::Struct(_)) | None => {
+                let cls = to_pascal_case(n);
+                format!("{cls}._fromCborMap({expr} as CborMap)")
+            }
+        },
+        TypeRef::Tagged(tag, inner) => cbor_from_expr(
+            inner,
+            &format!("_untag({}, {expr}, 'tagged value')", tag.0),
+            module,
+            opts,
+        ),
+        TypeRef::Choice(_) => format!("({expr}).toObject()"),
     }
 }
 
@@ -1480,69 +1807,109 @@ fn cbor_to_expr(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOpti
 /// `tags` followed by tag `n`, as a Dart list expression; `tags` is a list
 /// expression too, or empty for none.
 fn add_tag(tags: &str, n: u64) -> String {
-    if tags.is_empty() { format!("[{n}]") } else { format!("[...{tags}, {n}]") }
+    if tags.is_empty() {
+        format!("[{n}]")
+    } else {
+        format!("[...{tags}, {n}]")
+    }
 }
 
 /// [`cbor_to_expr`], the value carrying `tags` (a Dart list expression, or empty
 /// for none): package:cbor keeps tags on the value, so each constructor gets them.
-fn cbor_to_expr_tagged(ty: &TypeRef, field: &str, module: &IrModule, opts: &CodegenOptions, tags: &str) -> String {
-    let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
-    let t_only = if tags.is_empty() { String::new() } else { format!("tags: {tags}") };
+fn cbor_to_expr_tagged(
+    ty: &TypeRef,
+    field: &str,
+    module: &IrModule,
+    opts: &CodegenOptions,
+    tags: &str,
+) -> String {
+    let t = if tags.is_empty() {
+        String::new()
+    } else {
+        format!(", tags: {tags}")
+    };
+    let t_only = if tags.is_empty() {
+        String::new()
+    } else {
+        format!("tags: {tags}")
+    };
     match ty {
         TypeRef::Primitive(p) => match p {
-            Primitive::Bool                   => format!("CborBool({field}{t})"),
-            Primitive::Null                   => format!("CborNull({t_only})"),
-            Primitive::Uint | Primitive::Int  => format!("CborSmallInt({field}{t})"),
+            Primitive::Bool => format!("CborBool({field}{t})"),
+            Primitive::Null => format!("CborNull({t_only})"),
+            Primitive::Uint | Primitive::Int => format!("CborSmallInt({field}{t})"),
             // package:cbor writes the shortest lossless width unless told; the
             // other backends write float16/float32 at 4 bytes and float64 at 8.
-            Primitive::Float16 | Primitive::Float32
-                => format!("(CborFloat((Float32List(1)..[0] = {field})[0]{t})..floatPrecision())"),
-            Primitive::Float64 | Primitive::Float
-                => format!("(CborFloat({field}{t})..doublePrecision())"),
-            Primitive::Bstr                   => format!("CborBytes({field}{t})"),
-            Primitive::Tstr                   => format!("CborString({field}{t})"),
-            Primitive::Undefined              => format!("CborUndefined({t_only})"),
-            Primitive::Any if tags.is_empty() => format!("CborValue({field})"),
-            Primitive::Any                    => format!("_withTags({tags}, CborValue({field}))"),
-        },
-        TypeRef::Named(n) => {
-            match module.get(n.as_str()) {
-                Some(TypeDef::Alias(a)) => {
-                    let tags = match a.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
-                    cbor_to_expr_tagged(&a.ty, field, module, opts, &tags)
-                }
-                Some(TypeDef::Array(a)) => {
-                    let tags = match a.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
-                    let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
-                    let item = cbor_to_expr(&a.element, "e", module, opts);
-                    if flat_width(a, module).is_some() {
-                        return format!("CborList([for (final e in {field}) ...({item} as CborList)]{t})");
-                    }
-                    format!("CborList({field}.map((e) => {item}).toList(){t})")
-                }
-                Some(TypeDef::Map(m)) => {
-                    let tags = match m.tagged { Some(tag) => add_tag(tags, tag.0), None => tags.to_owned() };
-                    let t = if tags.is_empty() { String::new() } else { format!(", tags: {tags}") };
-                    format!(
-                        "CborMap({field}.map<CborValue, CborValue>((k, v) => MapEntry({}, {})){t})",
-                        cbor_to_expr(&m.key_ty, "k", module, opts),
-                        cbor_to_expr(&m.val_ty, "v", module, opts)
-                    )
-                }
-                Some(TypeDef::Enum(_)) | Some(TypeDef::Struct(_)) | None =>
-                    format!("{field}._toCborValue({tags})"),
+            Primitive::Float16 | Primitive::Float32 => {
+                format!("(CborFloat((Float32List(1)..[0] = {field})[0]{t})..floatPrecision())")
             }
+            Primitive::Float64 | Primitive::Float => {
+                format!("(CborFloat({field}{t})..doublePrecision())")
+            }
+            Primitive::Bstr => format!("CborBytes({field}{t})"),
+            Primitive::Tstr => format!("CborString({field}{t})"),
+            Primitive::Undefined => format!("CborUndefined({t_only})"),
+            Primitive::Any if tags.is_empty() => format!("CborValue({field})"),
+            Primitive::Any => format!("_withTags({tags}, CborValue({field}))"),
+        },
+        TypeRef::Named(n) => match module.get(n.as_str()) {
+            Some(TypeDef::Alias(a)) => {
+                let tags = match a.tagged {
+                    Some(tag) => add_tag(tags, tag.0),
+                    None => tags.to_owned(),
+                };
+                cbor_to_expr_tagged(&a.ty, field, module, opts, &tags)
+            }
+            Some(TypeDef::Array(a)) => {
+                let tags = match a.tagged {
+                    Some(tag) => add_tag(tags, tag.0),
+                    None => tags.to_owned(),
+                };
+                let t = if tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(", tags: {tags}")
+                };
+                let item = cbor_to_expr(&a.element, "e", module, opts);
+                if flat_width(a, module).is_some() {
+                    return format!(
+                        "CborList([for (final e in {field}) ...({item} as CborList)]{t})"
+                    );
+                }
+                format!("CborList({field}.map((e) => {item}).toList(){t})")
+            }
+            Some(TypeDef::Map(m)) => {
+                let tags = match m.tagged {
+                    Some(tag) => add_tag(tags, tag.0),
+                    None => tags.to_owned(),
+                };
+                let t = if tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(", tags: {tags}")
+                };
+                format!(
+                    "CborMap({field}.map<CborValue, CborValue>((k, v) => MapEntry({}, {})){t})",
+                    cbor_to_expr(&m.key_ty, "k", module, opts),
+                    cbor_to_expr(&m.val_ty, "v", module, opts)
+                )
+            }
+            Some(TypeDef::Enum(_)) | Some(TypeDef::Struct(_)) | None => {
+                format!("{field}._toCborValue({tags})")
+            }
+        },
+        TypeRef::Tagged(tag, inner) => {
+            cbor_to_expr_tagged(inner, field, module, opts, &add_tag(tags, tag.0))
         }
-        TypeRef::Tagged(tag, inner) => cbor_to_expr_tagged(inner, field, module, opts, &add_tag(tags, tag.0)),
         TypeRef::Choice(_) if tags.is_empty() => format!("CborValue({field})"),
-        TypeRef::Choice(_)        => format!("_withTags({tags}, CborValue({field}))"),
+        TypeRef::Choice(_) => format!("_withTags({tags}, CborValue({field}))"),
     }
 }
 
 fn cbor_map_key(key: &FieldKey) -> String {
     match key {
         FieldKey::Text(s) => format!("CborString('{s}')"),
-        FieldKey::Int(n)  => format!("CborSmallInt({n})"),
+        FieldKey::Int(n) => format!("CborSmallInt({n})"),
         FieldKey::Uint(n) => format!("CborSmallInt({n})"),
     }
 }
@@ -1552,7 +1919,10 @@ fn cbor_map_key(key: &FieldKey) -> String {
 /// A table literal for a test: one entry when its key and value are
 /// primitives, else empty.
 fn test_table_for(m: &MapDef, opts: &CodegenOptions) -> String {
-    let (k, v) = (typeref_to_dart(&m.key_ty, opts), typeref_to_dart(&m.val_ty, opts));
+    let (k, v) = (
+        typeref_to_dart(&m.key_ty, opts),
+        typeref_to_dart(&m.val_ty, opts),
+    );
     match (&m.key_ty, &m.val_ty) {
         (TypeRef::Primitive(_), TypeRef::Primitive(_)) => format!(
             "<{k}, {v}>{{{}: {}}}",
@@ -1570,29 +1940,32 @@ fn test_default_for(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> St
     // As many items as the member needs (`+`: one; dgtlrift/cddlc#134).
     if occ.is_repeated() {
         let item = test_default_for(ty, &Occurrence::Required, opts);
-        let items: Vec<String> = (0..cddlc_codegen::repeat_bounds(occ).0).map(|_| item.clone()).collect();
+        let items: Vec<String> = (0..cddlc_codegen::repeat_bounds(occ).0)
+            .map(|_| item.clone())
+            .collect();
         return format!("[{}]", items.join(", "));
     }
     match ty {
         TypeRef::Primitive(p) => match p {
-            Primitive::Bool                    => "false".to_owned(),
-            Primitive::Null                    => "null".to_owned(),
-            Primitive::Uint | Primitive::Int   => "0".to_owned(),
-            Primitive::Float16 | Primitive::Float32
-                | Primitive::Float64 | Primitive::Float => "0.0".to_owned(),
-            Primitive::Bstr                    => {
+            Primitive::Bool => "false".to_owned(),
+            Primitive::Null => "null".to_owned(),
+            Primitive::Uint | Primitive::Int => "0".to_owned(),
+            Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => {
+                "0.0".to_owned()
+            }
+            Primitive::Bstr => {
                 if opts.is_json() {
                     "Uint8List(0)".to_owned()
                 } else {
                     "Uint8List(0)".to_owned()
                 }
             }
-            Primitive::Tstr                    => "'test'".to_owned(),
-            _                                  => "null".to_owned(),
+            Primitive::Tstr => "'test'".to_owned(),
+            _ => "null".to_owned(),
         },
-        TypeRef::Named(_)          => "null".to_owned(), // can't default-construct
-        TypeRef::Tagged(_, inner)  => test_default_for(inner, occ, opts),
-        TypeRef::Choice(_)         => "null".to_owned(),
+        TypeRef::Named(_) => "null".to_owned(), // can't default-construct
+        TypeRef::Tagged(_, inner) => test_default_for(inner, occ, opts),
+        TypeRef::Choice(_) => "null".to_owned(),
     }
 }
 
@@ -1608,7 +1981,7 @@ fn dart_field(s: &str) -> String {
     let pascal = to_pascal_case(s);
     let mut chars = pascal.chars();
     match chars.next() {
-        None    => String::new(),
+        None => String::new(),
         Some(f) => f.to_lowercase().collect::<String>() + chars.as_str(),
     }
 }
@@ -1617,7 +1990,7 @@ fn dart_field(s: &str) -> String {
 fn field_key_str(key: &FieldKey) -> String {
     match key {
         FieldKey::Text(s) => s.as_str().to_owned(),
-        FieldKey::Int(n)  => n.to_string(),
+        FieldKey::Int(n) => n.to_string(),
         FieldKey::Uint(n) => n.to_string(),
     }
 }
@@ -1626,7 +1999,12 @@ fn field_key_str(key: &FieldKey) -> String {
 /// A member's text or integer literal, as Dart writes it, if it's pinned to one.
 fn dart_literal(f: &cddlc_ir::FieldDef) -> Option<String> {
     f.constraints.iter().find_map(|c| match c {
-        cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => Some(format!("'{}'", t.replace('\\', "\\\\").replace('\'', "\\'").replace('$', "\\$"))),
+        cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => Some(format!(
+            "'{}'",
+            t.replace('\\', "\\\\")
+                .replace('\'', "\\'")
+                .replace('$', "\\$")
+        )),
         cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => Some(n.to_string()),
         cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => Some(n.to_string()),
         _ => None,
@@ -1636,7 +2014,11 @@ fn dart_literal(f: &cddlc_ir::FieldDef) -> Option<String> {
 /// Throws unless each required member pinned to a text or integer literal
 /// holds it (`v` is the decoded value).
 fn emit_dart_literal_checks(w: &mut IndentWriter, s: &StructDef, class_name: &str) {
-    for f in s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Required)) {
+    for f in s
+        .fields
+        .iter()
+        .filter(|f| matches!(f.occurrence, Occurrence::Required))
+    {
         if let Some(lit) = dart_literal(f) {
             let fname = dart_field(&f.name);
             w.line(&format!(
@@ -1649,7 +2031,9 @@ fn emit_dart_literal_checks(w: &mut IndentWriter, s: &StructDef, class_name: &st
 
 /// Whether a `tstr` variant is a text literal (`"on"`), not any text.
 fn is_text_literal(v: &cddlc_ir::EnumVariant) -> bool {
-    v.constraints.iter().any(|c| matches!(c, cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
+    v.constraints
+        .iter()
+        .any(|c| matches!(c, cddlc_ir::Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
 }
 
 fn variant_kind_str(v: &cddlc_ir::EnumVariant) -> String {

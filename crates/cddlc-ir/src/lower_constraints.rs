@@ -2,7 +2,6 @@
 ///
 /// Converts `TypeOp` entries from the parser AST into typed [`Constraint`]
 /// values on IR nodes.  Also handles the range operator (`..` / `...`).
-
 use cddlc_parser::{CtlOp, MemberKind, Type2, TypeOp, Value};
 
 use crate::error::{IrError, IrWarning, IrWarningKind};
@@ -13,16 +12,14 @@ use crate::types::{Constraint, LiteralValue, TypeRef};
 /// `rule_name` is used only for error messages.
 /// `regex_hook` is taken from the `@regex-hook` pragma on the rule, if any.
 pub fn lower_type_op(
-    op:         &TypeOp,
-    base:       &Type2,
-    rule_name:  &str,
+    op: &TypeOp,
+    base: &Type2,
+    rule_name: &str,
     regex_hook: Option<&str>,
-    warnings:   &mut Vec<IrWarning>,
+    warnings: &mut Vec<IrWarning>,
 ) -> Result<Vec<Constraint>, IrError> {
     match op {
-        TypeOp::Range { upper, inclusive } => {
-            lower_range(base, upper, *inclusive, rule_name)
-        }
+        TypeOp::Range { upper, inclusive } => lower_range(base, upper, *inclusive, rule_name),
 
         TypeOp::Control { op, operand } => {
             if let (CtlOp::Size, Some(signed)) = (&op.node, integer_base(base)) {
@@ -30,7 +27,9 @@ pub fn lower_type_op(
                 // counts, the largest one does.
                 match size_operand(&operand.node) {
                     Some(SizeOperand::Exact(bytes)) => return Ok(integer_size(bytes, signed)),
-                    Some(SizeOperand::Range { max: Some(bytes), .. }) => return Ok(integer_size(bytes, signed)),
+                    Some(SizeOperand::Range {
+                        max: Some(bytes), ..
+                    }) => return Ok(integer_size(bytes, signed)),
                     Some(SizeOperand::Range { max: None, .. }) => return Ok(vec![]),
                     None => {}
                 }
@@ -59,7 +58,10 @@ fn integer_base(base: &Type2) -> Option<bool> {
 enum SizeOperand {
     Exact(u64),
     /// `max: None` when the range has no upper bound that fits.
-    Range { min: u64, max: Option<u64> },
+    Range {
+        min: u64,
+        max: Option<u64>,
+    },
 }
 
 /// A non-negative integer literal.
@@ -78,17 +80,32 @@ fn size_operand(operand: &Type2) -> Option<SizeOperand> {
     if let Some(n) = count_literal(operand) {
         return Some(SizeOperand::Exact(n));
     }
-    let Type2::Group(g) = operand else { return None };
-    let [choice] = g.node.choices.as_slice() else { return None };
-    let [entry] = choice.entries.as_slice() else { return None };
-    if entry.node.occurrence.is_some() { return None; }
-    let MemberKind::Type(t) = &entry.node.kind else { return None };
-    let [t1] = t.node.choices.as_slice() else { return None };
+    let Type2::Group(g) = operand else {
+        return None;
+    };
+    let [choice] = g.node.choices.as_slice() else {
+        return None;
+    };
+    let [entry] = choice.entries.as_slice() else {
+        return None;
+    };
+    if entry.node.occurrence.is_some() {
+        return None;
+    }
+    let MemberKind::Type(t) = &entry.node.kind else {
+        return None;
+    };
+    let [t1] = t.node.choices.as_slice() else {
+        return None;
+    };
     // `uint` bounded by controls: `.size (uint .le 16)` (RFC 9164).
-    if matches!(&t1.node.base.node, Type2::Typename { name, args } if args.is_empty() && name.node.as_str() == "uint") {
+    if matches!(&t1.node.base.node, Type2::Typename { name, args } if args.is_empty() && name.node.as_str() == "uint")
+    {
         let (mut min, mut max) = (0u64, None::<u64>);
         for op in &t1.node.ops {
-            let TypeOp::Control { op, operand } = op else { return None };
+            let TypeOp::Control { op, operand } = op else {
+                return None;
+            };
             let n = count_literal(&operand.node)?;
             match op.node {
                 CtlOp::Le => max = Some(max.map_or(n, |m| m.min(n))),
@@ -98,7 +115,10 @@ fn size_operand(operand: &Type2) -> Option<SizeOperand> {
                 }
                 CtlOp::Ge => min = min.max(n),
                 CtlOp::Gt => min = min.max(n + 1),
-                CtlOp::Eq => { min = min.max(n); max = Some(max.map_or(n, |m| m.min(n))); }
+                CtlOp::Eq => {
+                    min = min.max(n);
+                    max = Some(max.map_or(n, |m| m.min(n)));
+                }
                 _ => return None,
             }
         }
@@ -109,7 +129,11 @@ fn size_operand(operand: &Type2) -> Option<SizeOperand> {
         [] => Some(SizeOperand::Exact(lo)),
         [TypeOp::Range { upper, inclusive }] => {
             let hi = count_literal(&upper.node)?;
-            let max = if *inclusive { Some(hi) } else { hi.checked_sub(1) };
+            let max = if *inclusive {
+                Some(hi)
+            } else {
+                hi.checked_sub(1)
+            };
             Some(SizeOperand::Range { min: lo, max })
         }
         _ => None,
@@ -128,11 +152,19 @@ fn integer_size(bytes: u64, signed: bool) -> Vec<Constraint> {
     let bits = bytes as u32 * 8;
     let c = match (signed, bits) {
         (false, _) => Constraint::ValueRangeUint {
-            min: None, max: Some((1u64 << bits) - 1), inclusive: true,
+            min: None,
+            max: Some((1u64 << bits) - 1),
+            inclusive: true,
         },
-        (true, 0) => Constraint::ValueRangeInt { min: Some(0), max: Some(0), inclusive: true },
+        (true, 0) => Constraint::ValueRangeInt {
+            min: Some(0),
+            max: Some(0),
+            inclusive: true,
+        },
         (true, _) => Constraint::ValueRangeInt {
-            min: Some(-(1i64 << (bits - 1))), max: Some((1i64 << (bits - 1)) - 1), inclusive: true,
+            min: Some(-(1i64 << (bits - 1))),
+            max: Some((1i64 << (bits - 1)) - 1),
+            inclusive: true,
         },
     };
     vec![c]
@@ -145,8 +177,8 @@ fn integer_size(bytes: u64, signed: bool) -> Vec<Constraint> {
 /// typename base we can't statically resolve) `min` stays `None`, matching the
 /// existing behaviour for unresolved bounds elsewhere in this module.
 fn lower_range(
-    base:      &Type2,
-    upper:     &cddlc_parser::Spanned<Type2>,
+    base: &Type2,
+    upper: &cddlc_parser::Spanned<Type2>,
     inclusive: bool,
     rule_name: &str,
 ) -> Result<Vec<Constraint>, IrError> {
@@ -160,47 +192,80 @@ fn lower_range(
         Type2::Value(v) => {
             let hi = lower_value(v);
             let c = match (min_lit, hi) {
-                (Some(LiteralValue::Uint(lo)), LiteralValue::Uint(hi)) =>
-                    Constraint::ValueRangeUint { min: Some(lo), max: Some(hi), inclusive },
+                (Some(LiteralValue::Uint(lo)), LiteralValue::Uint(hi)) => {
+                    Constraint::ValueRangeUint {
+                        min: Some(lo),
+                        max: Some(hi),
+                        inclusive,
+                    }
+                }
                 // A uint lower bound with a negative upper one: nothing is in it.
                 (Some(LiteralValue::Uint(lo)), LiteralValue::Int(hi)) => match i64::try_from(lo) {
-                    Ok(lo) => Constraint::ValueRangeInt { min: Some(lo), max: Some(hi), inclusive },
+                    Ok(lo) => Constraint::ValueRangeInt {
+                        min: Some(lo),
+                        max: Some(hi),
+                        inclusive,
+                    },
                     Err(_) => empty_uint_range(),
                 },
                 // An upper bound past i64::MAX bounds no 64-bit int: leave it open
                 // rather than wrap it negative (dgtlrift/cddlc#72).
-                (Some(LiteralValue::Int(lo)),  LiteralValue::Uint(hi)) =>
-                    Constraint::ValueRangeInt  { min: Some(lo), max: i64::try_from(hi).ok(), inclusive },
-                (Some(LiteralValue::Int(lo)),  LiteralValue::Int(hi)) =>
-                    Constraint::ValueRangeInt  { min: Some(lo), max: Some(hi), inclusive },
-                (Some(LiteralValue::Float(lo)), LiteralValue::Float(hi)) =>
-                    Constraint::ValueRangeF64  { min: Some(lo), max: Some(hi), inclusive },
-                (None, LiteralValue::Uint(hi)) =>
-                    Constraint::ValueRangeUint { min: None, max: Some(hi), inclusive },
-                (None, LiteralValue::Int(hi)) =>
-                    Constraint::ValueRangeInt  { min: None, max: Some(hi), inclusive },
-                (None, LiteralValue::Float(hi)) =>
-                    Constraint::ValueRangeF64  { min: None, max: Some(hi), inclusive },
-                _ => return Err(IrError::BadRangeConstraint {
-                    rule:   rule_name.to_owned(),
-                    reason: "range bounds must be numeric literals of compatible type".into(),
-                }),
+                (Some(LiteralValue::Int(lo)), LiteralValue::Uint(hi)) => {
+                    Constraint::ValueRangeInt {
+                        min: Some(lo),
+                        max: i64::try_from(hi).ok(),
+                        inclusive,
+                    }
+                }
+                (Some(LiteralValue::Int(lo)), LiteralValue::Int(hi)) => Constraint::ValueRangeInt {
+                    min: Some(lo),
+                    max: Some(hi),
+                    inclusive,
+                },
+                (Some(LiteralValue::Float(lo)), LiteralValue::Float(hi)) => {
+                    Constraint::ValueRangeF64 {
+                        min: Some(lo),
+                        max: Some(hi),
+                        inclusive,
+                    }
+                }
+                (None, LiteralValue::Uint(hi)) => Constraint::ValueRangeUint {
+                    min: None,
+                    max: Some(hi),
+                    inclusive,
+                },
+                (None, LiteralValue::Int(hi)) => Constraint::ValueRangeInt {
+                    min: None,
+                    max: Some(hi),
+                    inclusive,
+                },
+                (None, LiteralValue::Float(hi)) => Constraint::ValueRangeF64 {
+                    min: None,
+                    max: Some(hi),
+                    inclusive,
+                },
+                _ => {
+                    return Err(IrError::BadRangeConstraint {
+                        rule: rule_name.to_owned(),
+                        reason: "range bounds must be numeric literals of compatible type".into(),
+                    })
+                }
             };
             Ok(vec![c])
         }
         _ => Err(IrError::BadRangeConstraint {
-            rule:   rule_name.to_owned(),
+            rule: rule_name.to_owned(),
             reason: "range upper bound must be a literal value".into(),
         }),
     }
 }
 
 fn lower_control_op(
-    op:         &CtlOp,
-    operand:    &Type2,
-    rule_name:  &str,
+    op: &CtlOp,
+    operand: &Type2,
+    rule_name: &str,
     regex_hook: Option<&str>,
-    warnings:   &mut Vec<IrWarning>,
+    warnings: &mut Vec<IrWarning>,
 ) -> Result<Vec<Constraint>, IrError> {
     match op {
         CtlOp::Size => lower_size(operand, rule_name),
@@ -210,26 +275,28 @@ fn lower_control_op(
         CtlOp::Gt => numeric_bound(operand, rule_name, BoundSide::Gt),
         CtlOp::Ge => numeric_bound(operand, rule_name, BoundSide::Ge),
 
-        CtlOp::Eq => {
-            Ok(vec![Constraint::Eq(require_literal_value(operand, rule_name, ".eq")?)])
-        }
-        CtlOp::Ne => {
-            Ok(vec![Constraint::Ne(require_literal_value(operand, rule_name, ".ne")?)])
-        }
+        CtlOp::Eq => Ok(vec![Constraint::Eq(require_literal_value(
+            operand, rule_name, ".eq",
+        )?)]),
+        CtlOp::Ne => Ok(vec![Constraint::Ne(require_literal_value(
+            operand, rule_name, ".ne",
+        )?)]),
 
         CtlOp::Regexp => {
             let pattern = match operand {
                 Type2::Value(Value::Text(s)) => s.clone(),
-                _ => return Err(IrError::InvalidControlOp {
-                    op:   ".regexp".into(),
-                    ty:   "non-text operand".into(),
-                    rule: rule_name.to_owned(),
-                }),
+                _ => {
+                    return Err(IrError::InvalidControlOp {
+                        op: ".regexp".into(),
+                        ty: "non-text operand".into(),
+                        rule: rule_name.to_owned(),
+                    })
+                }
             };
             // Warn if no hook provided — validation silently skipped on target
             if regex_hook.is_none() {
                 warnings.push(IrWarning {
-                    rule:    Some(rule_name.to_owned()),
+                    rule: Some(rule_name.to_owned()),
                     message: format!(
                         "'.regexp' on '{}' has no @regex-hook pragma — \
                          regex validation will be skipped in generated code",
@@ -255,9 +322,9 @@ fn lower_control_op(
             Ok(vec![Constraint::CborSeq(Box::new(inner))])
         }
 
-        CtlOp::Default => {
-            Ok(vec![Constraint::Default(require_literal_value(operand, rule_name, ".default")?)])
-        }
+        CtlOp::Default => Ok(vec![Constraint::Default(require_literal_value(
+            operand, rule_name, ".default",
+        )?)]),
 
         CtlOp::Within | CtlOp::And | CtlOp::Bits => {
             // Not emitted as constraints in the IR — they affect type
@@ -267,9 +334,9 @@ fn lower_control_op(
 
         CtlOp::Other(name) => {
             warnings.push(IrWarning {
-                rule:    Some(rule_name.to_owned()),
+                rule: Some(rule_name.to_owned()),
                 message: format!("unknown control operator '.{name}' — ignored"),
-                kind:    IrWarningKind::UnknownPragma,
+                kind: IrWarningKind::UnknownPragma,
             });
             Ok(vec![])
         }
@@ -291,15 +358,11 @@ fn lower_size(operand: &Type2, rule_name: &str) -> Result<Vec<Constraint>, IrErr
     }
     match operand {
         // .size N  — exact
-        Type2::Value(Value::Uint(n)) => {
-            Ok(vec![Constraint::SizeExact(*n as usize)])
-        }
+        Type2::Value(Value::Uint(n)) => Ok(vec![Constraint::SizeExact(*n as usize)]),
         // .size lo..hi  or  .size lo...hi — range (encoded as a nested Type1
         // in the parser, but by the time we see Type2 it's a range on the
         // operand).  For now handle the common Uint literal case.
-        Type2::Value(Value::Int(n)) if *n >= 0 => {
-            Ok(vec![Constraint::SizeExact(*n as usize)])
-        }
+        Type2::Value(Value::Int(n)) if *n >= 0 => Ok(vec![Constraint::SizeExact(*n as usize)]),
         // Typename reference — e.g. `.size max-len` where max-len is a uint
         // constant.  We can't resolve this statically without constant folding;
         // emit a warning and skip.
@@ -311,8 +374,10 @@ fn lower_size(operand: &Type2, rule_name: &str) -> Result<Vec<Constraint>, IrErr
             }])
         }
         _ => Err(IrError::BadSizeConstraint {
-            rule:   rule_name.to_owned(),
-            reason: "the operand must be a byte count (`.size 8`) or a range of them (`.size (1..8)`)".into(),
+            rule: rule_name.to_owned(),
+            reason:
+                "the operand must be a byte count (`.size 8`) or a range of them (`.size (1..8)`)"
+                    .into(),
         }),
     }
 }
@@ -322,30 +387,55 @@ fn lower_size(operand: &Type2, rule_name: &str) -> Result<Vec<Constraint>, IrErr
 /// `<= n`: an int range when `n` fits an i64, else a uint range.
 fn uint_upper(n: u64) -> Constraint {
     match i64::try_from(n) {
-        Ok(n) => Constraint::ValueRangeInt { min: None, max: Some(n), inclusive: true },
-        Err(_) => Constraint::ValueRangeUint { min: None, max: Some(n), inclusive: true },
+        Ok(n) => Constraint::ValueRangeInt {
+            min: None,
+            max: Some(n),
+            inclusive: true,
+        },
+        Err(_) => Constraint::ValueRangeUint {
+            min: None,
+            max: Some(n),
+            inclusive: true,
+        },
     }
 }
 
 /// `>= n`: an int range when `n` fits an i64, else a uint range.
 fn uint_lower(n: u64) -> Constraint {
     match i64::try_from(n) {
-        Ok(n) => Constraint::ValueRangeInt { min: Some(n), max: None, inclusive: true },
-        Err(_) => Constraint::ValueRangeUint { min: Some(n), max: None, inclusive: true },
+        Ok(n) => Constraint::ValueRangeInt {
+            min: Some(n),
+            max: None,
+            inclusive: true,
+        },
+        Err(_) => Constraint::ValueRangeUint {
+            min: Some(n),
+            max: None,
+            inclusive: true,
+        },
     }
 }
 
 /// A range no value is in (`uint .gt 18446744073709551615`).
 fn empty_uint_range() -> Constraint {
-    Constraint::ValueRangeUint { min: Some(u64::MAX), max: Some(u64::MAX), inclusive: false }
+    Constraint::ValueRangeUint {
+        min: Some(u64::MAX),
+        max: Some(u64::MAX),
+        inclusive: false,
+    }
 }
 
-enum BoundSide { Lt, Le, Gt, Ge }
+enum BoundSide {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
 
 fn numeric_bound(
-    operand:   &Type2,
+    operand: &Type2,
     rule_name: &str,
-    side:      BoundSide,
+    side: BoundSide,
 ) -> Result<Vec<Constraint>, IrError> {
     let v = require_literal(operand, rule_name, "numeric bound")?;
 
@@ -354,8 +444,11 @@ fn numeric_bound(
     // ValueRangeUint instead of wrapping negative (dgtlrift/cddlc#72).
     let c = match (v, &side) {
         // Nothing is below 0 (for a uint) or above u64::MAX: an empty range.
-        (Value::Uint(0), BoundSide::Lt) =>
-            Constraint::ValueRangeInt  { min: None, max: Some(-1), inclusive: true },
+        (Value::Uint(0), BoundSide::Lt) => Constraint::ValueRangeInt {
+            min: None,
+            max: Some(-1),
+            inclusive: true,
+        },
         (Value::Uint(n), BoundSide::Gt) if *n == u64::MAX => empty_uint_range(),
         (Value::Uint(n), BoundSide::Lt) => uint_upper(*n - 1),
         (Value::Uint(n), BoundSide::Le) => uint_upper(*n),
@@ -363,20 +456,54 @@ fn numeric_bound(
         (Value::Uint(n), BoundSide::Ge) => uint_lower(*n),
         // Int bounds
         // Nothing is below i64::MIN: an empty range rather than an overflow.
-        (Value::Int(n),  BoundSide::Lt) if *n == i64::MIN => empty_uint_range(),
-        (Value::Int(n),  BoundSide::Lt) => Constraint::ValueRangeInt  { min: None,            max: Some(*n - 1), inclusive: true },
-        (Value::Int(n),  BoundSide::Le) => Constraint::ValueRangeInt  { min: None,            max: Some(*n),     inclusive: true },
-        (Value::Int(n),  BoundSide::Gt) => Constraint::ValueRangeInt  { min: Some(*n + 1),    max: None,         inclusive: true },
-        (Value::Int(n),  BoundSide::Ge) => Constraint::ValueRangeInt  { min: Some(*n),        max: None,         inclusive: true },
+        (Value::Int(n), BoundSide::Lt) if *n == i64::MIN => empty_uint_range(),
+        (Value::Int(n), BoundSide::Lt) => Constraint::ValueRangeInt {
+            min: None,
+            max: Some(*n - 1),
+            inclusive: true,
+        },
+        (Value::Int(n), BoundSide::Le) => Constraint::ValueRangeInt {
+            min: None,
+            max: Some(*n),
+            inclusive: true,
+        },
+        (Value::Int(n), BoundSide::Gt) => Constraint::ValueRangeInt {
+            min: Some(*n + 1),
+            max: None,
+            inclusive: true,
+        },
+        (Value::Int(n), BoundSide::Ge) => Constraint::ValueRangeInt {
+            min: Some(*n),
+            max: None,
+            inclusive: true,
+        },
         // Float bounds
-        (Value::Float(f), BoundSide::Lt) => Constraint::ValueRangeF64 { min: None,            max: Some(*f),     inclusive: false },
-        (Value::Float(f), BoundSide::Le) => Constraint::ValueRangeF64 { min: None,            max: Some(*f),     inclusive: true  },
-        (Value::Float(f), BoundSide::Gt) => Constraint::ValueRangeF64 { min: Some(*f),        max: None,         inclusive: false },
-        (Value::Float(f), BoundSide::Ge) => Constraint::ValueRangeF64 { min: Some(*f),        max: None,         inclusive: true  },
-        _ => return Err(IrError::BadRangeConstraint {
-            rule:   rule_name.to_owned(),
-            reason: "numeric bound operand must be a number literal".into(),
-        }),
+        (Value::Float(f), BoundSide::Lt) => Constraint::ValueRangeF64 {
+            min: None,
+            max: Some(*f),
+            inclusive: false,
+        },
+        (Value::Float(f), BoundSide::Le) => Constraint::ValueRangeF64 {
+            min: None,
+            max: Some(*f),
+            inclusive: true,
+        },
+        (Value::Float(f), BoundSide::Gt) => Constraint::ValueRangeF64 {
+            min: Some(*f),
+            max: None,
+            inclusive: false,
+        },
+        (Value::Float(f), BoundSide::Ge) => Constraint::ValueRangeF64 {
+            min: Some(*f),
+            max: None,
+            inclusive: true,
+        },
+        _ => {
+            return Err(IrError::BadRangeConstraint {
+                rule: rule_name.to_owned(),
+                reason: "numeric bound operand must be a number literal".into(),
+            })
+        }
     };
     Ok(vec![c])
 }
@@ -385,21 +512,25 @@ fn numeric_bound(
 
 pub fn lower_value(v: &Value) -> LiteralValue {
     match v {
-        Value::Uint(n)   => LiteralValue::Uint(*n),
-        Value::Int(n)    => LiteralValue::Int(*n),
-        Value::Float(f)  => LiteralValue::Float(*f),
-        Value::Text(s)   => LiteralValue::Text(s.clone()),
-        Value::Bytes(b)  => LiteralValue::Bytes(b.clone()),
+        Value::Uint(n) => LiteralValue::Uint(*n),
+        Value::Int(n) => LiteralValue::Int(*n),
+        Value::Float(f) => LiteralValue::Float(*f),
+        Value::Text(s) => LiteralValue::Text(s.clone()),
+        Value::Bytes(b) => LiteralValue::Bytes(b.clone()),
     }
 }
 
 /// A literal operand: a number, text or bytes, or one of the prelude's value
 /// names (`bool .default false`, `.eq null`).
-fn require_literal_value(t2: &Type2, rule_name: &str, op_name: &str) -> Result<LiteralValue, IrError> {
+fn require_literal_value(
+    t2: &Type2,
+    rule_name: &str,
+    op_name: &str,
+) -> Result<LiteralValue, IrError> {
     if let Type2::Typename { name, args } = t2 {
         if args.is_empty() {
             match name.node.as_str() {
-                "true"  => return Ok(LiteralValue::Bool(true)),
+                "true" => return Ok(LiteralValue::Bool(true)),
                 "false" => return Ok(LiteralValue::Bool(false)),
                 "null" | "nil" => return Ok(LiteralValue::Null),
                 _ => {}
@@ -410,15 +541,15 @@ fn require_literal_value(t2: &Type2, rule_name: &str, op_name: &str) -> Result<L
 }
 
 fn require_literal<'a>(
-    t2:        &'a Type2,
+    t2: &'a Type2,
     rule_name: &str,
-    op_name:   &str,
+    op_name: &str,
 ) -> Result<&'a Value, IrError> {
     match t2 {
         Type2::Value(v) => Ok(v),
         _ => Err(IrError::InvalidControlOp {
-            op:   op_name.to_owned(),
-            ty:   "non-literal operand".into(),
+            op: op_name.to_owned(),
+            ty: "non-literal operand".into(),
             rule: rule_name.to_owned(),
         }),
     }
@@ -438,8 +569,8 @@ pub(crate) fn lower_type2_to_typeref(t2: &Type2, rule_name: &str) -> Result<Type
             }
         }
         _ => Err(IrError::InvalidControlOp {
-            op:   ".cbor/.cborseq".into(),
-            ty:   "complex type operand (only type names supported)".into(),
+            op: ".cbor/.cborseq".into(),
+            ty: "complex type operand (only type names supported)".into(),
             rule: rule_name.to_owned(),
         }),
     }

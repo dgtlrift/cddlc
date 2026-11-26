@@ -11,8 +11,14 @@ use cddlc_parser::parse_cddl;
 fn header(src: &str) -> String {
     let parsed = parse_cddl(src, PathBuf::from("fs.cddl")).expect("parse");
     let m = lower(&parsed.value, 16, 64).expect("lower").module;
-    let out = CBackend.generate(&m, &CodegenOptions::default()).expect("generate");
-    out.files.iter().filter(|f| f.path.ends_with(".h")).map(|f| f.content.clone()).collect()
+    let out = CBackend
+        .generate(&m, &CodegenOptions::default())
+        .expect("generate");
+    out.files
+        .iter()
+        .filter(|f| f.path.ends_with(".h"))
+        .map(|f| f.content.clone())
+        .collect()
 }
 
 #[test]

@@ -15,7 +15,12 @@ use backend_buildtest::toolchain::{self, Lang};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         [] => {
             for lang in Lang::ALL {
                 match toolchain::probe(lang) {
@@ -27,7 +32,10 @@ fn main() -> ExitCode {
         }
         ["--check", name] => match Lang::from_name(name) {
             None => {
-                eprintln!("unknown language '{name}': one of {}", Lang::ALL.map(|l| l.name()).join(", "));
+                eprintln!(
+                    "unknown language '{name}': one of {}",
+                    Lang::ALL.map(|l| l.name()).join(", ")
+                );
                 ExitCode::from(2)
             }
             Some(lang) => match toolchain::probe(lang) {

@@ -12,35 +12,35 @@ pub enum Format {
 #[derive(Debug, Clone)]
 pub struct CodegenOptions {
     /// Target language (informational — each backend ignores others).
-    pub lang:         Language,
+    pub lang: Language,
     /// Serialization format.
-    pub format:       Format,
+    pub format: Format,
     /// CBOR runtime library name (e.g. "minicbor", "ciborium").
-    pub runtime:      String,
+    pub runtime: String,
     /// Memory allocation strategy.
-    pub alloc:        AllocStrategy,
+    pub alloc: AllocStrategy,
     /// Emit deterministic (dCBOR) encoding.
-    pub dcbor:        bool,
+    pub dcbor: bool,
     /// Rust: emit `#![no_std]` + no heap allocation.
-    pub no_std:       bool,
+    pub no_std: bool,
     /// Maximum nesting depth for decoder stack.
-    pub depth_limit:  usize,
+    pub depth_limit: usize,
     /// Namespace / module prefix for emitted symbols.
-    pub namespace:    Option<String>,
+    pub namespace: Option<String>,
     /// Default capacity for unbounded sequences.
-    pub max_array:    usize,
+    pub max_array: usize,
     /// Default capacity for unbounded strings.
-    pub max_str:      usize,
+    pub max_str: usize,
     /// What made the code, for every generated file's header after the `@generated`
     /// line: the cddlc release, commit, branch and remote, and the inputs
     /// (dgtlrift/cddlc#10). See [`header_lines`].
-    pub provenance:   Vec<String>,
+    pub provenance: Vec<String>,
     /// The comment block at the top of the CDDL source (a copyright or license
     /// notice, say), one line each without the `;`, repeated in every generated
     /// file's header. See [`cddl_boilerplate`].
-    pub boilerplate:  Vec<String>,
+    pub boilerplate: Vec<String>,
     /// Java: SE or Jakarta EE output.
-    pub java_flavor:  JavaFlavor,
+    pub java_flavor: JavaFlavor,
 }
 
 /// The first line of every generated file.
@@ -82,15 +82,18 @@ pub fn header_comment(opts: &CodegenOptions, style: CommentStyle) -> Vec<String>
 
 /// [`header_comment`] joined with newlines, ending in one.
 pub fn header_text(opts: &CodegenOptions, style: CommentStyle) -> String {
-    header_comment(opts, style).iter().map(|l| format!("{l}\n")).collect()
+    header_comment(opts, style)
+        .iter()
+        .map(|l| format!("{l}\n"))
+        .collect()
 }
 
 /// `lines` as comment lines in `style`, without trailing whitespace.
 pub fn comment_lines(lines: &[String], style: CommentStyle) -> Vec<String> {
     let line = |prefix: &str, l: &str| format!("{prefix} {l}").trim_end().to_owned();
     match style {
-        CommentStyle::Slash    => lines.iter().map(|l| line("//", l)).collect(),
-        CommentStyle::Hash     => lines.iter().map(|l| line("#", l)).collect(),
+        CommentStyle::Slash => lines.iter().map(|l| line("//", l)).collect(),
+        CommentStyle::Hash => lines.iter().map(|l| line("#", l)).collect(),
         CommentStyle::DashDash => lines.iter().map(|l| line("--", l)).collect(),
         CommentStyle::CBlock => std::iter::once("/*".to_owned())
             .chain(lines.iter().map(|l| line(" *", &l.replace("*/", "* /"))))
@@ -99,8 +102,12 @@ pub fn comment_lines(lines: &[String], style: CommentStyle) -> Vec<String> {
         CommentStyle::Xml => std::iter::once("<!--".to_owned())
             .chain(lines.iter().map(|l| {
                 let mut t = l.clone();
-                while t.contains("--") { t = t.replace("--", "- -"); }
-                if t.ends_with('-') { t.push(' '); }
+                while t.contains("--") {
+                    t = t.replace("--", "- -");
+                }
+                if t.ends_with('-') {
+                    t.push(' ');
+                }
                 format!("  {t}").trim_end().to_owned()
             }))
             .chain(std::iter::once("-->".to_owned()))
@@ -141,7 +148,9 @@ pub fn cddl_boilerplate(src: &str) -> Vec<String> {
     for l in lines.by_ref() {
         let t = l.trim_start();
         let Some(rest) = t.strip_prefix(';') else {
-            if t.is_empty() { break; }
+            if t.is_empty() {
+                break;
+            }
             return Vec::new(); // a rule follows: the block is its comment
         };
         let rest = rest.trim_start_matches(';');
@@ -150,25 +159,29 @@ pub fn cddl_boilerplate(src: &str) -> Vec<String> {
             block.push(rest.to_owned());
         }
     }
-    while block.last().is_some_and(|l| l.is_empty()) { block.pop(); }
-    while block.first().is_some_and(|l| l.is_empty()) { block.remove(0); }
+    while block.last().is_some_and(|l| l.is_empty()) {
+        block.pop();
+    }
+    while block.first().is_some_and(|l| l.is_empty()) {
+        block.remove(0);
+    }
     block
 }
 
 impl Default for CodegenOptions {
     fn default() -> Self {
         Self {
-            lang:        Language::Rust,
-            format:      Format::Cbor,
-            runtime:     "minicbor".into(),
-            alloc:       AllocStrategy::Arena,
-            dcbor:       false,
-            no_std:      false,
+            lang: Language::Rust,
+            format: Format::Cbor,
+            runtime: "minicbor".into(),
+            alloc: AllocStrategy::Arena,
+            dcbor: false,
+            no_std: false,
             depth_limit: 16,
-            namespace:   None,
-            max_array:   16,
-            max_str:     64,
-            provenance:  Vec::new(),
+            namespace: None,
+            max_array: 16,
+            max_str: 64,
+            provenance: Vec::new(),
             boilerplate: Vec::new(),
             java_flavor: JavaFlavor::Se,
         }
@@ -176,14 +189,30 @@ impl Default for CodegenOptions {
 }
 
 impl CodegenOptions {
-    pub fn is_json(&self) -> bool { self.format == Format::Json }
+    pub fn is_json(&self) -> bool {
+        self.format == Format::Json
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language { Rust, C, Cpp, CSharp, Python, Dart, Go, Java, Lua }
+pub enum Language {
+    Rust,
+    C,
+    Cpp,
+    CSharp,
+    Python,
+    Dart,
+    Go,
+    Java,
+    Lua,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AllocStrategy { Stack, Arena, Heap }
+pub enum AllocStrategy {
+    Stack,
+    Arena,
+    Heap,
+}
 
 /// Java: plain Java SE, or Jakarta EE (Bean Validation annotations, and JSON-B
 /// serializers for JSON).
@@ -198,7 +227,7 @@ pub enum JavaFlavor {
 #[derive(Debug, Clone)]
 pub struct GeneratedFile {
     /// Relative path within the output directory (e.g. `"types.rs"`).
-    pub path:    String,
+    pub path: String,
     /// File contents.
     pub content: String,
 }
@@ -211,7 +240,12 @@ pub struct CodegenOutput {
 
 impl CodegenOutput {
     pub fn single(path: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { files: vec![GeneratedFile { path: path.into(), content: content.into() }] }
+        Self {
+            files: vec![GeneratedFile {
+                path: path.into(),
+                content: content.into(),
+            }],
+        }
     }
 }
 
@@ -227,7 +261,7 @@ pub trait Backend {
     fn generate(
         &self,
         module: &cddlc_ir::IrModule,
-        opts:   &CodegenOptions,
+        opts: &CodegenOptions,
     ) -> Result<CodegenOutput, crate::CodegenError>;
 }
 
@@ -239,7 +273,9 @@ pub struct CodegenError {
 
 impl CodegenError {
     pub fn new(msg: impl Into<String>) -> Self {
-        Self { message: msg.into() }
+        Self {
+            message: msg.into(),
+        }
     }
 }
 

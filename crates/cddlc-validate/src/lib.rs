@@ -9,12 +9,12 @@
 //! 64-bit integer reaches the validator as that integer (the CBOR decoder drops
 //! its tag), so `biguint` and `bignint` also accept a plain integer.
 
-pub mod value;
-pub mod error;
-pub mod engine;
 pub mod cbor;
+pub mod engine;
+pub mod error;
 pub mod sample;
 pub mod text_encoding;
+pub mod value;
 
 pub use error::ValidationError;
 pub use value::Value;
@@ -37,9 +37,9 @@ pub enum Source {
 /// Pass `type_name = None` to validate against the schema's declared root
 /// type ([`IrModule::root`]).
 pub fn validate(
-    module:    &IrModule,
+    module: &IrModule,
     type_name: Option<&str>,
-    value:     &Value,
+    value: &Value,
 ) -> Result<(), Vec<ValidationError>> {
     validate_from(module, type_name, value, Source::Json)
 }
@@ -47,10 +47,10 @@ pub fn validate(
 /// Validate a decoded [`Value`] against the named type in `module`. With
 /// [`Source::Cbor`], a value of a tagged type must carry its tag.
 pub fn validate_from(
-    module:    &IrModule,
+    module: &IrModule,
     type_name: Option<&str>,
-    value:     &Value,
-    source:    Source,
+    value: &Value,
+    source: Source,
 ) -> Result<(), Vec<ValidationError>> {
     let root = type_name.unwrap_or(module.root.as_str());
     engine::validate_named(module, root, value, source == Source::Cbor)

@@ -18,11 +18,23 @@ fn record(src: &str, rule: &str) -> StructDef {
 
 #[test]
 fn the_repeated_member() {
-    assert_eq!(record_repeated(&record("r = [a: uint, * b: uint, c: tstr]", "r")), Some(1));
-    assert_eq!(record_repeated(&record("r = [a: uint, + b: tstr]", "r")), Some(1));
-    assert_eq!(record_repeated(&record("r = [a: uint, b: tstr]", "r")), None);
+    assert_eq!(
+        record_repeated(&record("r = [a: uint, * b: uint, c: tstr]", "r")),
+        Some(1)
+    );
+    assert_eq!(
+        record_repeated(&record("r = [a: uint, + b: tstr]", "r")),
+        Some(1)
+    );
+    assert_eq!(
+        record_repeated(&record("r = [a: uint, b: tstr]", "r")),
+        None
+    );
     // A map's repeated member isn't a record's.
-    assert_eq!(record_repeated(&record("r = { a: uint, b: tstr }", "r")), None);
+    assert_eq!(
+        record_repeated(&record("r = { a: uint, b: tstr }", "r")),
+        None
+    );
 }
 
 #[test]
@@ -40,7 +52,13 @@ fn bounds() {
 
 #[test]
 fn a_default_with_no_items_encodes_only_without_a_minimum() {
-    assert!(default_is_encodable(&record("r = [x: tstr, * a: uint]", "r")));
-    assert!(!default_is_encodable(&record("r = [x: tstr, + a: uint]", "r")));
+    assert!(default_is_encodable(&record(
+        "r = [x: tstr, * a: uint]",
+        "r"
+    )));
+    assert!(!default_is_encodable(&record(
+        "r = [x: tstr, + a: uint]",
+        "r"
+    )));
     assert!(default_is_encodable(&record("r = [x: tstr, a: uint]", "r")));
 }

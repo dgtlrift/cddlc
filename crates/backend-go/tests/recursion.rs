@@ -11,7 +11,9 @@ use cddlc_parser::parse_cddl;
 fn generate(src: &str) -> String {
     let parsed = parse_cddl(src, PathBuf::from("t.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let out = GoBackend.generate(&lowered.module, &CodegenOptions::default()).expect("generate");
+    let out = GoBackend
+        .generate(&lowered.module, &CodegenOptions::default())
+        .expect("generate");
     out.files[1].content.clone()
 }
 
@@ -25,7 +27,12 @@ fn a_member_and_variant_that_hold_their_type_by_value_are_pointers() {
     let g = generate("expr = int / binop\nbinop = [op: tstr, lhs: expr, rhs: expr]");
     assert!(has_field(&g, "Lhs", "*Expr"), "{g}");
     assert!(has_field(&g, "Binop", "*Binop"), "{g}");
-    assert!(g.contains("func NewExprBinop(x Binop) Expr { return Expr{Kind: ExprKindBinop, Binop: &x} }"), "{g}");
+    assert!(
+        g.contains(
+            "func NewExprBinop(x Binop) Expr { return Expr{Kind: ExprKindBinop, Binop: &x} }"
+        ),
+        "{g}"
+    );
     assert!(g.contains("if v.Lhs == nil {"), "{g}");
 }
 
