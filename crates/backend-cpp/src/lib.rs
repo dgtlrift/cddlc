@@ -585,6 +585,12 @@ fn emit_cpp_array_item_decode(w: &mut IndentWriter, a: &ArrayDef, module: &IrMod
     }
 }
 
+/// A `std::string_view` of the bytes `b` (a byte-string literal).
+fn cpp_bytes_view(b: &[u8]) -> String {
+    let esc: String = b.iter().map(|x| format!("\\x{x:02x}")).collect();
+    format!("std::string_view(\"{esc}\", {})", b.len())
+}
+
 /// A repeated member's item count, in `obj` (`val`, `out`).
 fn repeat_len(f: &cddlc_ir::FieldDef, obj: &str, opts: &CodegenOptions) -> String {
     let n = to_snake_case(&f.name);
@@ -1351,6 +1357,13 @@ fn emit_cpp_decode_field(
 /// Type-aware constraint check: for integer primitives `.size N` means
 /// "fits in N bytes" (value-range), not a `.size()` call.
 fn cpp_constraint_check(c: &Constraint, val_expr: &str, p: &Primitive) -> Option<String> {
+    // A byte-string literal (RFC 9277's `'BOR'`), as a `string_view` of its
+    // bytes (dgtlrift/cddlc#142).
+    match (c, p) {
+        (Constraint::Eq(LiteralValue::Bytes(b)), Primitive::Bstr) => return Some(format!("{val_expr} == {}", cpp_bytes_view(b))),
+        (Constraint::Ne(LiteralValue::Bytes(b)), Primitive::Bstr) => return Some(format!("{val_expr} != {}", cpp_bytes_view(b))),
+        _ => {}
+    }
     match c {
         Constraint::SizeExact(n) => match p {
             Primitive::Uint => {
@@ -1530,6 +1543,7 @@ fn emit_cpp_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, _o
                 // `uint .within (1..5)`; dgtlrift/cddlc#86).
                 let value = a.constraints.iter().find_map(|c| match c {
                     cddlc_ir::Constraint::Eq(LiteralValue::Text(t)) => Some(format!("std::string_view({t:?})")),
+                    cddlc_ir::Constraint::Eq(LiteralValue::Bytes(b)) => Some(cpp_bytes_view(b)),
                     cddlc_ir::Constraint::Eq(LiteralValue::Uint(n)) => Some(format!("{n}u")),
                     cddlc_ir::Constraint::Eq(LiteralValue::Int(n)) => Some(format!("{n}")),
                     cddlc_ir::Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 =>

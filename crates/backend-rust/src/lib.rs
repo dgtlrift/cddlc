@@ -1733,6 +1733,25 @@ fn newtype_ord(ty: &TypeRef) -> &'static str {
     }
 }
 
+/// A constrained alias's default that meets its constraints: its literal, a
+/// value of its minimum size, or its lower bound; `None` when an empty or
+/// zero value does.
+fn alias_default(a: &AliasDef, opts: &CodegenOptions) -> Option<String> {
+    a.constraints.iter().find_map(|c| match c {
+        Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. } => {
+            sized_value(&a.ty, *n, opts)
+        }
+        Constraint::Eq(lit) => Some(literal_value_expr(lit, opts.no_std)),
+        Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 => {
+            Some(format!("{}u64", *lo))
+        }
+        Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 => {
+            Some(format!("{}i64", *lo))
+        }
+        _ => None,
+    })
+}
+
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     emit_doc(w, a.doc.as_deref());
     if a.deprecated { w.line("#[deprecated]"); }
@@ -1742,8 +1761,22 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     // If there's a tag, wrap in a newtype struct
     if let Some(tag) = a.tagged {
         let inner_ty = typeref_to_rust(&a.ty, opts);
-        w.line(&format!("#[derive(Debug, Clone, PartialEq, Default{})]", newtype_ord(&a.ty)));
-        w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
+        // Its default is the value it's pinned to, if any (RFC 9277's
+        // `#6.55801(#6.1668547250('BOR'))`, dgtlrift/cddlc#142).
+        match alias_default(a, opts) {
+            Some(default_val) => {
+                w.line(&format!("#[derive(Debug, Clone, PartialEq{})]", newtype_ord(&a.ty)));
+                w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
+                w.blank();
+                w.line(&format!("impl Default for {type_name} {{"));
+                w.line(&format!("    fn default() -> Self {{ {type_name}({default_val}) }}"));
+                w.line("}");
+            }
+            None => {
+                w.line(&format!("#[derive(Debug, Clone, PartialEq, Default{})]", newtype_ord(&a.ty)));
+                w.line(&format!("pub struct {}(pub {});", type_name, inner_ty));
+            }
+        }
         w.blank();
         emit_tagged_newtype_encode(w, &type_name, tag, &a.ty, opts);
         w.blank();
@@ -1766,19 +1799,7 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         // that satisfies the constraint instead.
         // So would a value pinned to a literal, or one with a lower bound
         // (`40 .plus 2`, `uint .within (1..5)`; dgtlrift/cddlc#86).
-        let size_default: Option<String> = a.constraints.iter().find_map(|c| match c {
-            Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. } => {
-                sized_value(&a.ty, *n, opts)
-            }
-            Constraint::Eq(lit) => Some(literal_value_expr(lit, opts.no_std)),
-            Constraint::ValueRangeUint { min: Some(lo), .. } if *lo > 0 => {
-                Some(format!("{}u64", *lo))
-            }
-            Constraint::ValueRangeInt { min: Some(lo), .. } if *lo > 0 => {
-                Some(format!("{}i64", *lo))
-            }
-            _ => None,
-        });
+        let size_default = alias_default(a, opts);
 
         if let Some(default_val) = size_default {
             w.line(&format!("#[derive(Debug, Clone, PartialEq{})]", newtype_ord(&a.ty)));
