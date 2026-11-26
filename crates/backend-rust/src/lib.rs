@@ -14,6 +14,7 @@ use cddlc_codegen::{
 };
 use std::collections::HashSet;
 
+use smol_str::SmolStr;
 use cddlc_ir::{
     AliasDef, ArrayDef, Capacity, CborTag, Constraint, EnumDef, EnumVariant,
     FieldDef, FieldKey, IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
@@ -137,6 +138,73 @@ fn no_std_text(expr: &str) -> String {
     format!("cddlc_text({expr}).expect(\"fits its capacity\")")
 }
 
+/// The module with each member whose type is an inline choice of primitives
+/// or named types (`value: int / float`, `hashAlg: (int / tstr)`) given an
+/// enum of its own, `<rule>-<member>`, declared before the rule. A Rust type
+/// holds one alternative only (dgtlrift/cddlc#146).
+fn lift_inline_choices(module: &IrModule) -> IrModule {
+    fn liftable(cs: &[TypeRef]) -> bool {
+        cs.len() > 1 && cs.iter().all(|c| matches!(c, TypeRef::Primitive(_) | TypeRef::Named(_)))
+    }
+    // The choice inside `ty` (under a tag), replaced by `name`.
+    fn take(ty: &mut TypeRef, name: &SmolStr) -> Option<Vec<TypeRef>> {
+        match ty {
+            TypeRef::Choice(cs) if liftable(cs) => {
+                let cs = std::mem::take(cs);
+                *ty = TypeRef::Named(name.clone());
+                Some(cs)
+            }
+            TypeRef::Tagged(_, inner) => take(inner, name),
+            _ => None,
+        }
+    }
+    let mut out = module.clone();
+    out.types.clear();
+    let mut taken: std::collections::HashSet<SmolStr> = module.types.keys().cloned().collect();
+    for (name, def) in &module.types {
+        let mut def = def.clone();
+        if let TypeDef::Struct(st) = &mut def {
+            let mut slots: Vec<(&mut TypeRef, String)> = st.fields.iter_mut()
+                .map(|f| { let n = format!("{name}-{}", f.name); (&mut f.ty, n) })
+                .collect();
+            if let Some(r) = st.rest.as_mut() {
+                slots.push((&mut r.val_ty, format!("{name}-{}-value", r.name)));
+            }
+            for (ty, ename) in slots {
+                let mut ename: SmolStr = ename.into();
+                while taken.contains(&ename) {
+                    ename = format!("{ename}-choice").into();
+                }
+                let Some(cs) = take(ty, &ename) else { continue };
+                taken.insert(ename.clone());
+                let mut seen = std::collections::HashSet::new();
+                let variants = cs.into_iter().map(|c| {
+                    let base = match &c {
+                        TypeRef::Primitive(p) => format!("{p:?}").to_lowercase(),
+                        TypeRef::Named(n) => n.to_string(),
+                        _ => "alt".into(),
+                    };
+                    let mut vname = base.clone();
+                    let mut i = 1;
+                    while !seen.insert(vname.clone()) {
+                        i += 1;
+                        vname = format!("{base}{i}");
+                    }
+                    EnumVariant { name: vname.into(), ty: c, constraints: vec![] }
+                }).collect();
+                if let Some(src) = module.sources.types.get(name).cloned() {
+                    out.sources.types.insert(ename.clone(), src);
+                }
+                out.types.insert(ename.clone(), TypeDef::Enum(EnumDef {
+                    name: ename, variants, tagged: None, doc: None, deprecated: false,
+                }));
+            }
+        }
+        out.types.insert(name.clone(), def);
+    }
+    out
+}
+
 /// `--no-std`: a fixed-capacity `heapless::Vec<u8, N>` from the `&[u8]` expression `expr`.
 fn no_std_bytes(expr: &str) -> String {
     format!("cddlc_bytes({expr}).expect(\"fits its capacity\")")
@@ -217,6 +285,10 @@ impl Backend for RustBackend {
         opts:   &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "Rust", true)?;
+        // A member whose type is an inline choice holds any alternative, in
+        // an enum of its own (dgtlrift/cddlc#146).
+        let lifted = lift_inline_choices(module);
+        let module = &lifted;
         let fmt_tag    = if opts.is_json() { "json" } else { "cbor" };
         let crate_name = format!("{}-{fmt_tag}", module.name);
         let lib_src    = if opts.is_json() { emit_module_json(module, opts) } else { emit_module(module, opts) };
