@@ -5,46 +5,48 @@
 ///     pyproject.toml            ← PEP 517, cbor2, pytest
 ///     src/<module>.py           ← dataclasses + encode/decode
 ///     tests/test_roundtrip.py   ← pytest roundtrip tests
-
 use cddlc_codegen::{
-    to_pascal_case, to_snake_case,
-    Backend, CodegenError, CodegenOptions, CodegenOutput, GeneratedFile,
-    IndentWriter,
+    to_pascal_case, to_snake_case, Backend, CodegenError, CodegenOptions, CodegenOutput,
+    GeneratedFile, IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant,
-    IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, IrModule, LiteralValue, MapDef,
+    Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct PythonBackend;
 
 impl Backend for PythonBackend {
-    fn language_name(&self) -> &str { "Python" }
-    fn file_extension(&self) -> &str { "py" }
+    fn language_name(&self) -> &str {
+        "Python"
+    }
+    fn file_extension(&self) -> &str {
+        "py"
+    }
 
     fn generate(
         &self,
         module: &IrModule,
-        opts:   &CodegenOptions,
+        opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "Python", true)?;
-        let name      = module.name.as_str();
-        let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
+        let name = module.name.as_str();
+        let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
-        let mod_name  = py_module_name(name);
+        let mod_name = py_module_name(name);
 
         Ok(CodegenOutput {
             files: vec![
                 GeneratedFile {
-                    path:    format!("{crate_dir}/pyproject.toml"),
+                    path: format!("{crate_dir}/pyproject.toml"),
                     content: emit_pyproject(name, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/src/{mod_name}.py"),
+                    path: format!("{crate_dir}/src/{mod_name}.py"),
                     content: emit_source(module, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/tests/test_roundtrip.py"),
+                    path: format!("{crate_dir}/tests/test_roundtrip.py"),
                     content: emit_tests(module, opts),
                 },
             ],
@@ -56,14 +58,15 @@ impl Backend for PythonBackend {
 
 fn emit_pyproject(name: &str, opts: &CodegenOptions) -> String {
     let pkg_name = name.replace('_', "-");
-    let fmt_tag  = if opts.is_json() { "json" } else { "cbor" };
+    let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
     let deps: String = if opts.is_json() {
         "    # json and base64 are stdlib — no extra runtime needed".into()
     } else {
         "    \"cbor2>=6.0\",  # semantic_decoders keeps tags raw".into()
     };
     let header = cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Hash);
-    format!(r#"{header}[build-system]
+    format!(
+        r#"{header}[build-system]
 requires      = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
@@ -87,7 +90,8 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-"#)
+"#
+    )
 }
 
 // ── Source file ───────────────────────────────────────────────────────────────
@@ -219,9 +223,15 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Hash) {
         w.line(&l);
     }
-    let fmt_label = if opts.is_json() { "JSON (RFC 8259)" } else { "CBOR (RFC 8949)" };
+    let fmt_label = if opts.is_json() {
+        "JSON (RFC 8259)"
+    } else {
+        "CBOR (RFC 8949)"
+    };
     w.line(&format!("# Format: {fmt_label}"));
-    if opts.dcbor { w.line("# Encoding: deterministic (dCBOR)"); }
+    if opts.dcbor {
+        w.line("# Encoding: deterministic (dCBOR)");
+    }
     w.line("from __future__ import annotations");
     w.blank();
     if opts.is_json() {
@@ -236,9 +246,21 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
     w.blank();
 
-    let helpers = if opts.is_json() { JSON_HELPERS } else { CBOR_HELPERS };
-    for line in helpers.lines().chain(["", "", ""]).chain(CHECK_HELPERS.lines()) {
-        if line.is_empty() { w.blank() } else { w.line(line) }
+    let helpers = if opts.is_json() {
+        JSON_HELPERS
+    } else {
+        CBOR_HELPERS
+    };
+    for line in helpers
+        .lines()
+        .chain(["", "", ""])
+        .chain(CHECK_HELPERS.lines())
+    {
+        if line.is_empty() {
+            w.blank()
+        } else {
+            w.line(line)
+        }
     }
     if !opts.is_json() {
         w.blank();
@@ -306,10 +328,10 @@ fn module_tags(module: &IrModule) -> Vec<u64> {
 fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum(w, e, opts),
-        TypeDef::Array(a)  => emit_array(w, a, flat_width(a, module), opts),
-        TypeDef::Alias(a)  => emit_alias(w, a, opts),
-        TypeDef::Map(m)    => emit_map(w, m, opts),
+        TypeDef::Enum(e) => emit_enum(w, e, opts),
+        TypeDef::Array(a) => emit_array(w, a, flat_width(a, module), opts),
+        TypeDef::Alias(a) => emit_alias(w, a, opts),
+        TypeDef::Map(m) => emit_map(w, m, opts),
     }
 }
 
@@ -321,14 +343,21 @@ fn emit_encode_decode(w: &mut IndentWriter, class_name: &str) {
     w.dedent();
     w.blank();
     w.line("@classmethod");
-    w.line(&format!("def decode(cls, data: bytes) -> \"{class_name}\":"));
+    w.line(&format!(
+        "def decode(cls, data: bytes) -> \"{class_name}\":"
+    ));
     w.indent();
     w.line("return cls._from_raw(_loads(data))");
     w.dedent();
 }
 
 /// The `return` of a `_to_raw`, wrapped in the type's own tag (CBOR only).
-fn return_tagged(w: &mut IndentWriter, tag: Option<cddlc_ir::CborTag>, expr: &str, opts: &CodegenOptions) {
+fn return_tagged(
+    w: &mut IndentWriter,
+    tag: Option<cddlc_ir::CborTag>,
+    expr: &str,
+    opts: &CodegenOptions,
+) {
     match tag {
         Some(t) if !opts.is_json() => w.line(&format!("return _tag({}, {expr})", t.0)),
         _ => w.line(&format!("return {expr}")),
@@ -336,7 +365,12 @@ fn return_tagged(w: &mut IndentWriter, tag: Option<cddlc_ir::CborTag>, expr: &st
 }
 
 /// In a `_from_raw`, unwrap the type's own tag (CBOR only).
-fn untag_raw(w: &mut IndentWriter, tag: Option<cddlc_ir::CborTag>, class_name: &str, opts: &CodegenOptions) {
+fn untag_raw(
+    w: &mut IndentWriter,
+    tag: Option<cddlc_ir::CborTag>,
+    class_name: &str,
+    opts: &CodegenOptions,
+) {
     if let Some(t) = tag {
         if !opts.is_json() {
             w.line(&format!("raw = _untag(raw, {}, {class_name:?})", t.0));
@@ -372,7 +406,9 @@ fn py_key(key: &cddlc_ir::FieldKey, opts: &CodegenOptions) -> String {
 
 fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, s.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
-    if s.deprecated { w.line("# @deprecated"); }
+    if s.deprecated {
+        w.line("# @deprecated");
+    }
 
     let class_name = to_pascal_case(&s.name);
     // kw_only: an optional member may come before a required one in the schema.
@@ -384,10 +420,11 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     for f in &s.fields {
         cddlc_codegen::emit_doc_lines(w, f.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
         let py_type = py_field_type(&f.ty, &f.occurrence, opts);
-        let fname   = to_snake_case(&f.name);
+        let fname = to_snake_case(&f.name);
         match &f.occurrence {
             Occurrence::Optional => w.line(&format!("{fname}: {py_type} = None")),
-            Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+            Occurrence::ZeroOrMore { .. }
+            | Occurrence::OneOrMore { .. }
             | Occurrence::Bounded { .. } => {
                 w.line(&format!("{fname}: {py_type} = field(default_factory=list)"))
             }
@@ -404,7 +441,9 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
             py_typeref(&r.val_ty, opts)
         ));
     }
-    if s.fields.is_empty() && s.rest.is_none() { w.line("pass"); }
+    if s.fields.is_empty() && s.rest.is_none() {
+        w.line("pass");
+    }
     w.blank();
 
     if s.encoding == cddlc_ir::StructEncoding::Array {
@@ -427,20 +466,30 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     w.line("m: dict[Any, Any] = {}");
     for f in &fields {
         let fname = to_snake_case(&f.name);
-        let key   = py_key(&f.key, opts);
+        let key = py_key(&f.key, opts);
         match &f.occurrence {
             Occurrence::Optional => {
                 w.line(&format!("if self.{fname} is not None:"));
                 w.indent();
-                w.line(&format!("m[{key}] = {}", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
+                w.line(&format!(
+                    "m[{key}] = {}",
+                    py_to_raw(&f.ty, &format!("self.{fname}"), opts)
+                ));
                 w.dedent();
             }
-            Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+            Occurrence::ZeroOrMore { .. }
+            | Occurrence::OneOrMore { .. }
             | Occurrence::Bounded { .. } => {
-                w.line(&format!("m[{key}] = [{} for item in self.{fname}]", py_to_raw(&f.ty, "item", opts)));
+                w.line(&format!(
+                    "m[{key}] = [{} for item in self.{fname}]",
+                    py_to_raw(&f.ty, "item", opts)
+                ));
             }
             Occurrence::Required => {
-                w.line(&format!("m[{key}] = {}", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
+                w.line(&format!(
+                    "m[{key}] = {}",
+                    py_to_raw(&f.ty, &format!("self.{fname}"), opts)
+                ));
             }
         }
     }
@@ -450,11 +499,17 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         w.indent();
         w.line("if key in m:");
         w.indent();
-        w.line(&format!("raise ValueError(f\"{class_name}: other entry {{key!r}} is a named member's key\")"));
+        w.line(&format!(
+            "raise ValueError(f\"{class_name}: other entry {{key!r}} is a named member's key\")"
+        ));
         w.dedent();
         // A typed key (an integer, or an enum of integers and text) is written
         // as its raw value (dgtlrift/cddlc#136).
-        w.line(&format!("m[{}] = {}", py_to_raw(&r.key_ty, "key", opts), py_to_raw(&r.val_ty, "value", opts)));
+        w.line(&format!(
+            "m[{}] = {}",
+            py_to_raw(&r.key_ty, "key", opts),
+            py_to_raw(&r.val_ty, "value", opts)
+        ));
         w.dedent();
     }
     return_tagged(w, s.tagged, "m", opts);
@@ -463,12 +518,16 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
 
     // _from_raw
     w.line("@classmethod");
-    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.line(&format!(
+        "def _from_raw(cls, raw: Any) -> \"{class_name}\":"
+    ));
     w.indent();
     untag_raw(w, s.tagged, &class_name, opts);
     w.line("if not isinstance(raw, dict):");
     w.indent();
-    w.line(&format!("raise ValueError(\"{class_name}: expected a map\")"));
+    w.line(&format!(
+        "raise ValueError(\"{class_name}: expected a map\")"
+    ));
     w.dedent();
     // A map has only the members its schema gives it (RFC 8610 §3.5;
     // dgtlrift/cddlc#102), unless it has other entries.
@@ -476,23 +535,31 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let named: Vec<String> = s.fields.iter().map(|f| py_key(&f.key, opts)).collect();
         w.line(&format!(
             "unknown = set(raw) - {{{}}}",
-            if named.is_empty() { "None".into() } else { named.join(", ") }
+            if named.is_empty() {
+                "None".into()
+            } else {
+                named.join(", ")
+            }
         ));
         w.line("if unknown:");
         w.indent();
-        w.line(&format!("raise ValueError(f\"{class_name}: unknown member(s) {{sorted(map(str, unknown))}}\")"));
+        w.line(&format!(
+            "raise ValueError(f\"{class_name}: unknown member(s) {{sorted(map(str, unknown))}}\")"
+        ));
         w.dedent();
     }
     let mut args = Vec::new();
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
-        let key   = py_key(&f.key, opts);
-        let at    = format!("{class_name}.{}", cddlc_codegen::field_key_json(&f.key));
+        let key = py_key(&f.key, opts);
+        let at = format!("{class_name}.{}", cddlc_codegen::field_key_json(&f.key));
         let local = format!("f_{fname}");
         match &f.occurrence {
             Occurrence::Optional => {
                 let conv = py_from_raw(&f.ty, &format!("raw[{key}]"), &at, opts);
-                w.line(&format!("{local} = {conv} if raw.get({key}) is not None else None"));
+                w.line(&format!(
+                    "{local} = {conv} if raw.get({key}) is not None else None"
+                ));
                 if !f.constraints.is_empty() {
                     w.line(&format!("if {local} is not None:"));
                     w.indent();
@@ -500,15 +567,21 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
                     w.dedent();
                 }
             }
-            Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+            Occurrence::ZeroOrMore { .. }
+            | Occurrence::OneOrMore { .. }
             | Occurrence::Bounded { .. } => {
                 let conv = py_from_raw(&f.ty, "item", &at, opts);
-                w.line(&format!("{local} = [{conv} for item in raw.get({key}, [])]"));
+                w.line(&format!(
+                    "{local} = [{conv} for item in raw.get({key}, [])]"
+                ));
             }
             Occurrence::Required => {
                 w.line(&format!("if {key} not in raw:"));
                 w.indent();
-                w.line(&format!("raise ValueError(\"{class_name}: missing field '{}'\")", cddlc_codegen::field_key_json(&f.key)));
+                w.line(&format!(
+                    "raise ValueError(\"{class_name}: missing field '{}'\")",
+                    cddlc_codegen::field_key_json(&f.key)
+                ));
                 w.dedent();
                 let conv = py_from_raw(&f.ty, &format!("raw[{key}]"), &at, opts);
                 w.line(&format!("{local} = {conv}"));
@@ -580,20 +653,35 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: 
     w.dedent();
     w.blank();
 
-    let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+    let required = s
+        .fields
+        .iter()
+        .filter(|f| f.occurrence.is_required())
+        .count();
     w.line("@classmethod");
-    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.line(&format!(
+        "def _from_raw(cls, raw: Any) -> \"{class_name}\":"
+    ));
     w.indent();
     untag_raw(w, s.tagged, class_name, opts);
     w.line("if not isinstance(raw, list):");
     w.indent();
-    w.line(&format!("raise ValueError(\"{class_name}: expected an array\")"));
+    w.line(&format!(
+        "raise ValueError(\"{class_name}: expected an array\")"
+    ));
     w.dedent();
-    w.line(&format!("if not {required} <= len(raw) <= {}:", s.fields.len()));
+    w.line(&format!(
+        "if not {required} <= len(raw) <= {}:",
+        s.fields.len()
+    ));
     w.indent();
     w.line(&format!(
         "raise ValueError(f\"{class_name}: expected {} items, got {{len(raw)}}\")",
-        if required == s.fields.len() { required.to_string() } else { format!("{required} to {}", s.fields.len()) }
+        if required == s.fields.len() {
+            required.to_string()
+        } else {
+            format!("{required} to {}", s.fields.len())
+        }
     ));
     w.dedent();
     let mut args = Vec::new();
@@ -603,14 +691,20 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: 
     let before = cddlc_codegen::record_optionals_before(s);
     for (i, f) in s.fields.iter().enumerate() {
         let fname = to_snake_case(&f.name);
-        let at    = format!("{class_name}.{}", f.name);
+        let at = format!("{class_name}.{}", f.name);
         let local = format!("f_{fname}");
         let index = match &before {
-            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("{i} if len(raw) >= {x} else {i} - ({x} - len(raw))") }
+            Some(b) if b[i] > 0 => {
+                let x = required + b[i];
+                format!("{i} if len(raw) >= {x} else {i} - ({x} - len(raw))")
+            }
             _ => i.to_string(),
         };
-        let conv  = py_from_raw(&f.ty, &format!("raw[{index}]"), &at, opts);
-        let present = match &before { Some(b) => format!("len(raw) > {}", required + b[i]), None => format!("len(raw) > {i}") };
+        let conv = py_from_raw(&f.ty, &format!("raw[{index}]"), &at, opts);
+        let present = match &before {
+            Some(b) => format!("len(raw) > {}", required + b[i]),
+            None => format!("len(raw) > {i}"),
+        };
         if f.occurrence.is_required() {
             w.line(&format!("{local} = {conv}"));
             emit_constraint_checks(w, &f.constraints, &local, &at);
@@ -627,7 +721,11 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: 
     }
     if let Some(r) = &s.rest {
         let rname = to_snake_case(&r.name);
-        let named: Vec<String> = s.fields.iter().map(|f| format!("{:?}", f.name.as_str())).collect();
+        let named: Vec<String> = s
+            .fields
+            .iter()
+            .map(|f| format!("{:?}", f.name.as_str()))
+            .collect();
         let key = py_from_raw(&r.key_ty, "key", &format!("{class_name} key"), opts);
         let val = py_from_raw(&r.val_ty, "value", &format!("{class_name} value"), opts);
         w.line(&format!(
@@ -647,12 +745,22 @@ fn emit_record_raw(w: &mut IndentWriter, s: &StructDef, class_name: &str, opts: 
 fn emit_py_repeat_check(w: &mut IndentWriter, class_name: &str, f: &cddlc_ir::FieldDef, n: &str) {
     let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
     let mut conds = Vec::new();
-    if min > 0 { conds.push((format!("{n} < {min}"), format!("needs at least {min} items"))); }
-    if let Some(max) = max { conds.push((format!("{n} > {max}"), format!("has more than {max} items"))); }
+    if min > 0 {
+        conds.push((
+            format!("{n} < {min}"),
+            format!("needs at least {min} items"),
+        ));
+    }
+    if let Some(max) = max {
+        conds.push((format!("{n} > {max}"), format!("has more than {max} items")));
+    }
     for (cond, msg) in conds {
         w.line(&format!("if {cond}:"));
         w.indent();
-        w.line(&format!("raise ValueError(\"{class_name}.{}: {msg}\")", f.name));
+        w.line(&format!(
+            "raise ValueError(\"{class_name}.{}: {msg}\")",
+            f.name
+        ));
         w.dedent();
     }
 }
@@ -660,7 +768,13 @@ fn emit_py_repeat_check(w: &mut IndentWriter, class_name: &str, f: &cddlc_ir::Fi
 /// A record with a repeated member (`[primary, * extension, payload]`): the
 /// member's items go inline, and the array's length says how many there are
 /// (dgtlrift/cddlc#134).
-fn emit_record_raw_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, class_name: &str, opts: &CodegenOptions) {
+fn emit_record_raw_repeated(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    ri: usize,
+    class_name: &str,
+    opts: &CodegenOptions,
+) {
     let rf = &s.fields[ri];
     let rname = to_snake_case(&rf.name);
     let fixed = s.fields.len() - 1;
@@ -671,9 +785,15 @@ fn emit_record_raw_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, clas
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
         if f.occurrence.is_repeated() {
-            w.line(&format!("a.extend({} for item in self.{fname})", py_to_raw(&f.ty, "item", opts)));
+            w.line(&format!(
+                "a.extend({} for item in self.{fname})",
+                py_to_raw(&f.ty, "item", opts)
+            ));
         } else {
-            w.line(&format!("a.append({})", py_to_raw(&f.ty, &format!("self.{fname}"), opts)));
+            w.line(&format!(
+                "a.append({})",
+                py_to_raw(&f.ty, &format!("self.{fname}"), opts)
+            ));
         }
     }
     return_tagged(w, s.tagged, "a", opts);
@@ -681,27 +801,35 @@ fn emit_record_raw_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, clas
     w.blank();
 
     w.line("@classmethod");
-    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.line(&format!(
+        "def _from_raw(cls, raw: Any) -> \"{class_name}\":"
+    ));
     w.indent();
     untag_raw(w, s.tagged, class_name, opts);
     w.line("if not isinstance(raw, list):");
     w.indent();
-    w.line(&format!("raise ValueError(\"{class_name}: expected an array\")"));
+    w.line(&format!(
+        "raise ValueError(\"{class_name}: expected an array\")"
+    ));
     w.dedent();
     w.line(&format!("if len(raw) < {fixed}:"));
     w.indent();
-    w.line(&format!("raise ValueError(f\"{class_name}: expected at least {fixed} items, got {{len(raw)}}\")"));
+    w.line(&format!(
+        "raise ValueError(f\"{class_name}: expected at least {fixed} items, got {{len(raw)}}\")"
+    ));
     w.dedent();
     w.line(&format!("reps = len(raw) - {fixed}"));
     emit_py_repeat_check(w, class_name, rf, "reps");
     let mut args = Vec::new();
     for (i, f) in s.fields.iter().enumerate() {
         let fname = to_snake_case(&f.name);
-        let at    = format!("{class_name}.{}", f.name);
+        let at = format!("{class_name}.{}", f.name);
         let local = format!("f_{fname}");
         if f.occurrence.is_repeated() {
             let conv = py_from_raw(&f.ty, "item", &at, opts);
-            w.line(&format!("{local} = [{conv} for item in raw[{i}:{i} + reps]]"));
+            w.line(&format!(
+                "{local} = [{conv} for item in raw[{i}:{i} + reps]]"
+            ));
             if !f.constraints.is_empty() {
                 w.line(&format!("for item in {local}:"));
                 w.indent();
@@ -709,8 +837,15 @@ fn emit_record_raw_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, clas
                 w.dedent();
             }
         } else {
-            let index = if i < ri { i.to_string() } else { format!("{} + reps", i - 1) };
-            w.line(&format!("{local} = {}", py_from_raw(&f.ty, &format!("raw[{index}]"), &at, opts)));
+            let index = if i < ri {
+                i.to_string()
+            } else {
+                format!("{} + reps", i - 1)
+            };
+            w.line(&format!(
+                "{local} = {}",
+                py_from_raw(&f.ty, &format!("raw[{index}]"), &at, opts)
+            ));
             emit_constraint_checks(w, &f.constraints, &local, &at);
         }
         args.push(format!("{fname}={local}"));
@@ -725,11 +860,13 @@ fn emit_record_raw_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, clas
 /// The integer literal of an integer variant (the `2` in `1 / 2 / 3`).
 fn int_literal(v: &EnumVariant) -> Option<i128> {
     match &v.ty {
-        TypeRef::Primitive(Primitive::Uint | Primitive::Int) => v.constraints.iter().find_map(|c| match c {
-            Constraint::Eq(LiteralValue::Uint(n)) => Some(*n as i128),
-            Constraint::Eq(LiteralValue::Int(n)) => Some(*n as i128),
-            _ => None,
-        }),
+        TypeRef::Primitive(Primitive::Uint | Primitive::Int) => {
+            v.constraints.iter().find_map(|c| match c {
+                Constraint::Eq(LiteralValue::Uint(n)) => Some(*n as i128),
+                Constraint::Eq(LiteralValue::Int(n)) => Some(*n as i128),
+                _ => None,
+            })
+        }
         _ => None,
     }
 }
@@ -740,7 +877,10 @@ fn has_payload(v: &EnumVariant) -> bool {
         return false;
     }
     match &v.ty {
-        TypeRef::Primitive(Primitive::Tstr) => !v.constraints.iter().any(|c| matches!(c, Constraint::Eq(LiteralValue::Text(_)))),
+        TypeRef::Primitive(Primitive::Tstr) => !v
+            .constraints
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(LiteralValue::Text(_)))),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => false,
         TypeRef::Primitive(_) | TypeRef::Named(_) => true,
         TypeRef::Tagged(..) | TypeRef::Choice(_) => false,
@@ -749,20 +889,31 @@ fn has_payload(v: &EnumVariant) -> bool {
 
 /// Whether a variant is `null` / `nil` (or `undefined`), which is CBOR null.
 fn is_nil(v: &EnumVariant) -> bool {
-    matches!(&v.ty, TypeRef::Primitive(Primitive::Null | Primitive::Undefined))
+    matches!(
+        &v.ty,
+        TypeRef::Primitive(Primitive::Null | Primitive::Undefined)
+    )
 }
 
 fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, e.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
-    if e.deprecated { w.line("# @deprecated"); }
+    if e.deprecated {
+        w.line("# @deprecated");
+    }
 
     let class_name = to_pascal_case(&e.name);
-    let kinds: Vec<String> = e.variants.iter().map(|v| format!("{:?}", to_pascal_case(&v.name))).collect();
+    let kinds: Vec<String> = e
+        .variants
+        .iter()
+        .map(|v| format!("{:?}", to_pascal_case(&v.name)))
+        .collect();
 
     let mut value_types: Vec<String> = Vec::new();
     for v in e.variants.iter().filter(|v| has_payload(v)) {
         let t = py_typeref(&v.ty, opts);
-        if !value_types.contains(&t) { value_types.push(t); }
+        if !value_types.contains(&t) {
+            value_types.push(t);
+        }
     }
     let value_annotation = if value_types.is_empty() {
         "None".to_owned()
@@ -772,8 +923,15 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
     // An enum of scalar alternatives is frozen, so it's hashable and can key
     // a dict (COSE's `label = int / tstr`, dgtlrift/cddlc#136).
-    let scalar = e.variants.iter().all(|v| matches!(&v.ty, TypeRef::Primitive(p) if !matches!(p, Primitive::Any)));
-    w.line(if scalar { "@dataclass(frozen=True)" } else { "@dataclass" });
+    let scalar = e
+        .variants
+        .iter()
+        .all(|v| matches!(&v.ty, TypeRef::Primitive(p) if !matches!(p, Primitive::Any)));
+    w.line(if scalar {
+        "@dataclass(frozen=True)"
+    } else {
+        "@dataclass"
+    });
     w.line(&format!("class {class_name}:"));
     w.indent();
     not_a_test(w, &class_name);
@@ -786,7 +944,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.line("@classmethod");
         if has_payload(v) {
             let t = py_typeref(&v.ty, opts);
-            w.line(&format!("def make_{vname}(cls, value: {t}) -> \"{class_name}\":"));
+            w.line(&format!(
+                "def make_{vname}(cls, value: {t}) -> \"{class_name}\":"
+            ));
             w.indent();
             w.line(&format!("return cls(kind={vname:?}, value=value)"));
         } else {
@@ -823,7 +983,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     }
     w.line("case _:");
     w.indent();
-    w.line(&format!("raise ValueError(f\"{class_name}: unknown kind {{self.kind}}\")"));
+    w.line(&format!(
+        "raise ValueError(f\"{class_name}: unknown kind {{self.kind}}\")"
+    ));
     w.dedent();
     w.dedent();
     return_tagged(w, e.tagged, "raw", opts);
@@ -832,12 +994,16 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
 
     // _from_raw: literals first, then the variant whose Python type matches.
     w.line("@classmethod");
-    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.line(&format!(
+        "def _from_raw(cls, raw: Any) -> \"{class_name}\":"
+    ));
     w.indent();
     untag_raw(w, e.tagged, &class_name, opts);
     let at = class_name.clone();
     let payload = |f: &dyn Fn(&Primitive) -> bool| {
-        e.variants.iter().find(|v| has_payload(v) && matches!(&v.ty, TypeRef::Primitive(p) if f(p)))
+        e.variants
+            .iter()
+            .find(|v| has_payload(v) && matches!(&v.ty, TypeRef::Primitive(p) if f(p)))
     };
 
     // Each type check is emitted only when some variant can match it, so a
@@ -848,8 +1014,11 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.line(&format!("return cls(kind={:?})", to_pascal_case(&v.name)));
         w.dedent();
     }
-    let text_lits: Vec<&EnumVariant> =
-        e.variants.iter().filter(|v| !has_payload(v) && int_literal(v).is_none() && !is_nil(v)).collect();
+    let text_lits: Vec<&EnumVariant> = e
+        .variants
+        .iter()
+        .filter(|v| !has_payload(v) && int_literal(v).is_none() && !is_nil(v))
+        .collect();
     let tstr_payload = payload(&|p| matches!(p, Primitive::Tstr));
     if !text_lits.is_empty() || tstr_payload.is_some() {
         w.line("if isinstance(raw, str):");
@@ -862,12 +1031,19 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
             w.dedent();
         }
         if let Some(v) = tstr_payload {
-            w.line(&format!("return cls(kind={:?}, value=raw)", to_pascal_case(&v.name)));
+            w.line(&format!(
+                "return cls(kind={:?}, value=raw)",
+                to_pascal_case(&v.name)
+            ));
         }
         w.dedent();
     }
 
-    let int_lits: Vec<&EnumVariant> = e.variants.iter().filter(|v| int_literal(v).is_some()).collect();
+    let int_lits: Vec<&EnumVariant> = e
+        .variants
+        .iter()
+        .filter(|v| int_literal(v).is_some())
+        .collect();
     let uint_payload = payload(&|p| matches!(p, Primitive::Uint));
     let int_payload = payload(&|p| matches!(p, Primitive::Int));
     if !int_lits.is_empty() || uint_payload.is_some() || int_payload.is_some() {
@@ -883,11 +1059,17 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         if let Some(v) = uint_payload {
             w.line("if raw >= 0:");
             w.indent();
-            w.line(&format!("return cls(kind={:?}, value=raw)", to_pascal_case(&v.name)));
+            w.line(&format!(
+                "return cls(kind={:?}, value=raw)",
+                to_pascal_case(&v.name)
+            ));
             w.dedent();
         }
         if let Some(v) = int_payload {
-            w.line(&format!("return cls(kind={:?}, value=raw)", to_pascal_case(&v.name)));
+            w.line(&format!(
+                "return cls(kind={:?}, value=raw)",
+                to_pascal_case(&v.name)
+            ));
         }
         w.dedent();
     }
@@ -895,36 +1077,60 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     if let Some(v) = payload(&|p| matches!(p, Primitive::Bool)) {
         w.line("if isinstance(raw, bool):");
         w.indent();
-        w.line(&format!("return cls(kind={:?}, value=raw)", to_pascal_case(&v.name)));
+        w.line(&format!(
+            "return cls(kind={:?}, value=raw)",
+            to_pascal_case(&v.name)
+        ));
         w.dedent();
     }
-    if let Some(v) = payload(&|p| matches!(p, Primitive::Float | Primitive::Float16 | Primitive::Float32 | Primitive::Float64)) {
+    if let Some(v) = payload(&|p| {
+        matches!(
+            p,
+            Primitive::Float | Primitive::Float16 | Primitive::Float32 | Primitive::Float64
+        )
+    }) {
         // An integer reaches here only if no integer variant took it (JSON writes 1.0 as 1.0).
         w.line("if isinstance(raw, (int, float)) and not isinstance(raw, bool):");
         w.indent();
-        w.line(&format!("return cls(kind={:?}, value=float(raw))", to_pascal_case(&v.name)));
+        w.line(&format!(
+            "return cls(kind={:?}, value=float(raw))",
+            to_pascal_case(&v.name)
+        ));
         w.dedent();
     }
     if !opts.is_json() {
         if let Some(v) = payload(&|p| matches!(p, Primitive::Bstr | Primitive::Any)) {
             w.line("if isinstance(raw, bytes):");
             w.indent();
-            w.line(&format!("return cls(kind={:?}, value=raw)", to_pascal_case(&v.name)));
+            w.line(&format!(
+                "return cls(kind={:?}, value=raw)",
+                to_pascal_case(&v.name)
+            ));
             w.dedent();
         }
     }
-    for v in e.variants.iter().filter(|v| has_payload(v) && matches!(&v.ty, TypeRef::Named(_))) {
+    for v in e
+        .variants
+        .iter()
+        .filter(|v| has_payload(v) && matches!(&v.ty, TypeRef::Named(_)))
+    {
         let TypeRef::Named(n) = &v.ty else { continue };
         w.line("try:");
         w.indent();
-        w.line(&format!("return cls(kind={:?}, value={}._from_raw(raw))", to_pascal_case(&v.name), to_pascal_case(n)));
+        w.line(&format!(
+            "return cls(kind={:?}, value={}._from_raw(raw))",
+            to_pascal_case(&v.name),
+            to_pascal_case(n)
+        ));
         w.dedent();
         w.line("except (ValueError, TypeError, KeyError):");
         w.indent();
         w.line("pass");
         w.dedent();
     }
-    w.line(&format!("raise ValueError(f\"{at}: no variant matches {{raw!r}}\")"));
+    w.line(&format!(
+        "raise ValueError(f\"{at}: no variant matches {{raw!r}}\")"
+    ));
     w.dedent();
     w.blank();
     emit_encode_decode(w, &class_name);
@@ -948,44 +1154,67 @@ fn flat_width(a: &ArrayDef, module: &IrModule) -> Option<usize> {
 
 fn emit_array(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
-    if a.deprecated { w.line("# @deprecated"); }
+    if a.deprecated {
+        w.line("# @deprecated");
+    }
 
     let class_name = to_pascal_case(&a.name);
-    let elem_ty    = py_typeref(&a.element, opts);
+    let elem_ty = py_typeref(&a.element, opts);
 
     w.line("@dataclass");
     w.line(&format!("class {class_name}:"));
     w.indent();
     not_a_test(w, &class_name);
-    w.line(&format!("items: list[{elem_ty}] = field(default_factory=list)"));
+    w.line(&format!(
+        "items: list[{elem_ty}] = field(default_factory=list)"
+    ));
     w.blank();
 
     w.line("def _to_raw(self) -> Any:");
     w.indent();
     let raw = match flat {
         // A repeated group: each record's members, inline.
-        Some(_) => format!("[m for item in self.items for m in {}]", py_to_raw(&a.element, "item", opts)),
-        None => format!("[{} for item in self.items]", py_to_raw(&a.element, "item", opts)),
+        Some(_) => format!(
+            "[m for item in self.items for m in {}]",
+            py_to_raw(&a.element, "item", opts)
+        ),
+        None => format!(
+            "[{} for item in self.items]",
+            py_to_raw(&a.element, "item", opts)
+        ),
     };
     return_tagged(w, a.tagged, &raw, opts);
     w.dedent();
     w.blank();
 
     w.line("@classmethod");
-    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.line(&format!(
+        "def _from_raw(cls, raw: Any) -> \"{class_name}\":"
+    ));
     w.indent();
     untag_raw(w, a.tagged, &class_name, opts);
     w.line("if not isinstance(raw, list):");
     w.indent();
-    w.line(&format!("raise ValueError(\"{class_name}: expected an array\")"));
+    w.line(&format!(
+        "raise ValueError(\"{class_name}: expected an array\")"
+    ));
     w.dedent();
     if let Some(n) = flat {
         w.line(&format!("if len(raw) % {n} != 0:"));
         w.indent();
-        w.line(&format!("raise ValueError(\"{class_name}: a partial group\")"));
+        w.line(&format!(
+            "raise ValueError(\"{class_name}: a partial group\")"
+        ));
         w.dedent();
-        let conv = py_from_raw(&a.element, &format!("raw[i:i + {n}]"), &format!("{class_name} item"), opts);
-        w.line(&format!("return cls(items=[{conv} for i in range(0, len(raw), {n})])"));
+        let conv = py_from_raw(
+            &a.element,
+            &format!("raw[i:i + {n}]"),
+            &format!("{class_name} item"),
+            opts,
+        );
+        w.line(&format!(
+            "return cls(items=[{conv} for i in range(0, len(raw), {n})])"
+        ));
     } else {
         let conv = py_from_raw(&a.element, "item", &format!("{class_name} item"), opts);
         w.line(&format!("return cls(items=[{conv} for item in raw])"));
@@ -1002,17 +1231,21 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, opts: &Co
 /// A table (`{ * tstr => uint }`): a dataclass holding a `dict` (dgtlrift/cddlc#82).
 fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, m.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
-    if m.deprecated { w.line("# @deprecated"); }
+    if m.deprecated {
+        w.line("# @deprecated");
+    }
 
     let class_name = to_pascal_case(&m.name);
-    let key_ty     = py_typeref(&m.key_ty, opts);
-    let val_ty     = py_typeref(&m.val_ty, opts);
+    let key_ty = py_typeref(&m.key_ty, opts);
+    let val_ty = py_typeref(&m.val_ty, opts);
 
     w.line("@dataclass");
     w.line(&format!("class {class_name}:"));
     w.indent();
     not_a_test(w, &class_name);
-    w.line(&format!("entries: dict[{key_ty}, {val_ty}] = field(default_factory=dict)"));
+    w.line(&format!(
+        "entries: dict[{key_ty}, {val_ty}] = field(default_factory=dict)"
+    ));
     w.blank();
 
     w.line("def _to_raw(self) -> Any:");
@@ -1027,16 +1260,22 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     w.blank();
 
     w.line("@classmethod");
-    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.line(&format!(
+        "def _from_raw(cls, raw: Any) -> \"{class_name}\":"
+    ));
     w.indent();
     untag_raw(w, m.tagged, &class_name, opts);
     w.line("if not isinstance(raw, dict):");
     w.indent();
-    w.line(&format!("raise ValueError(\"{class_name}: expected a map\")"));
+    w.line(&format!(
+        "raise ValueError(\"{class_name}: expected a map\")"
+    ));
     w.dedent();
     let key = py_from_raw(&m.key_ty, "key", &format!("{class_name} key"), opts);
     let val = py_from_raw(&m.val_ty, "value", &format!("{class_name} value"), opts);
-    w.line(&format!("return cls(entries={{{key}: {val} for key, value in raw.items()}})"));
+    w.line(&format!(
+        "return cls(entries={{{key}: {val} for key, value in raw.items()}})"
+    ));
     w.dedent();
     w.blank();
     emit_encode_decode(w, &class_name);
@@ -1048,10 +1287,12 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     cddlc_codegen::emit_doc_lines(w, a.doc.as_deref(), cddlc_codegen::DocStyle::Line("#"));
-    if a.deprecated { w.line("# @deprecated"); }
+    if a.deprecated {
+        w.line("# @deprecated");
+    }
 
     let class_name = to_pascal_case(&a.name);
-    let inner_ty   = py_typeref(&a.ty, opts);
+    let inner_ty = py_typeref(&a.ty, opts);
 
     w.line("@dataclass");
     w.line(&format!("class {class_name}:"));
@@ -1060,7 +1301,10 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     w.line(&format!("value: {inner_ty}"));
     w.blank();
 
-    if a.constraints.iter().any(|c| py_constraint_check(c, "v").is_some()) {
+    if a.constraints
+        .iter()
+        .any(|c| py_constraint_check(c, "v").is_some())
+    {
         w.line("def __post_init__(self) -> None:");
         w.indent();
         emit_constraint_checks(w, &a.constraints, "self.value", &class_name);
@@ -1075,10 +1319,15 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     w.blank();
 
     w.line("@classmethod");
-    w.line(&format!("def _from_raw(cls, raw: Any) -> \"{class_name}\":"));
+    w.line(&format!(
+        "def _from_raw(cls, raw: Any) -> \"{class_name}\":"
+    ));
     w.indent();
     untag_raw(w, a.tagged, &class_name, opts);
-    w.line(&format!("return cls(value={})", py_from_raw(&a.ty, "raw", &class_name, opts)));
+    w.line(&format!(
+        "return cls(value={})",
+        py_from_raw(&a.ty, "raw", &class_name, opts)
+    ));
     w.dedent();
     w.blank();
     emit_encode_decode(w, &class_name);
@@ -1093,69 +1342,120 @@ fn py_constraint_check(c: &Constraint, expr: &str) -> Option<String> {
         Constraint::SizeExact(n) => Some(format!("len({expr}) == {n}")),
         Constraint::SizeRange { min, max } => match (min, max) {
             (Some(lo), Some(hi)) => Some(format!("{lo} <= len({expr}) <= {hi}")),
-            (Some(lo), None)     => Some(format!("len({expr}) >= {lo}")),
-            (None, Some(hi))     => Some(format!("len({expr}) <= {hi}")),
-            (None, None)         => None,
+            (Some(lo), None) => Some(format!("len({expr}) >= {lo}")),
+            (None, Some(hi)) => Some(format!("len({expr}) <= {hi}")),
+            (None, None) => None,
         },
-        Constraint::ValueRangeInt { min, max, inclusive } => range_check(expr, min.map(|v| v as i128), max.map(|v| v as i128), *inclusive),
-        Constraint::ValueRangeUint { min, max, inclusive } => range_check(expr, min.map(|v| v as i128), max.map(|v| v as i128), *inclusive),
+        Constraint::ValueRangeInt {
+            min,
+            max,
+            inclusive,
+        } => range_check(
+            expr,
+            min.map(|v| v as i128),
+            max.map(|v| v as i128),
+            *inclusive,
+        ),
+        Constraint::ValueRangeUint {
+            min,
+            max,
+            inclusive,
+        } => range_check(
+            expr,
+            min.map(|v| v as i128),
+            max.map(|v| v as i128),
+            *inclusive,
+        ),
         Constraint::Eq(v) => Some(format!("{expr} == {}", py_literal(v))),
         Constraint::Ne(v) => Some(format!("{expr} != {}", py_literal(v))),
         Constraint::Regexp { hook: Some(h), .. } => Some(format!("{h}({expr})")),
         // `.bits` (dgtlrift/cddlc#107).
         Constraint::Bits(bits) => Some(format!(
             "_bits_ok({expr}, b\"{}\")",
-            cddlc_codegen::bits_mask_bytes(bits).iter().map(|b| format!("\\x{b:02x}")).collect::<String>()
+            cddlc_codegen::bits_mask_bytes(bits)
+                .iter()
+                .map(|b| format!("\\x{b:02x}"))
+                .collect::<String>()
         )),
         _ => None,
     }
 }
 
-fn range_check(expr: &str, min: Option<i128>, max: Option<i128>, inclusive: bool) -> Option<String> {
+fn range_check(
+    expr: &str,
+    min: Option<i128>,
+    max: Option<i128>,
+    inclusive: bool,
+) -> Option<String> {
     // `inclusive` applies to the upper bound (`a..b` vs `a...b`); the lower bound
     // is always inclusive.
     let le = if inclusive { "<=" } else { "<" };
     match (min, max) {
         (Some(lo), Some(hi)) => Some(format!("{lo} <= {expr} {le} {hi}")),
-        (Some(lo), None)     => Some(format!("{expr} >= {lo}")),
-        (None, Some(hi))     => Some(format!("{expr} {le} {hi}")),
-        (None, None)         => None,
+        (Some(lo), None) => Some(format!("{expr} >= {lo}")),
+        (None, Some(hi)) => Some(format!("{expr} {le} {hi}")),
+        (None, None) => None,
     }
 }
 
 /// "value must be >= 0 and <= 100": the bounds a range check enforces, for
 /// its error message. The lower bound is always inclusive.
-fn bounds_description<T: std::fmt::Display>(what: &str, min: Option<T>, max: Option<T>, inclusive: bool) -> String {
+fn bounds_description<T: std::fmt::Display>(
+    what: &str,
+    min: Option<T>,
+    max: Option<T>,
+    inclusive: bool,
+) -> String {
     let le = if inclusive { "<=" } else { "<" };
     match (min, max) {
         (Some(lo), Some(hi)) => format!("{what} must be >= {lo} and {le} {hi}"),
-        (Some(lo), None)     => format!("{what} must be >= {lo}"),
-        (None, Some(hi))     => format!("{what} must be {le} {hi}"),
-        (None, None)         => format!("{what} out of range"),
+        (Some(lo), None) => format!("{what} must be >= {lo}"),
+        (None, Some(hi)) => format!("{what} must be {le} {hi}"),
+        (None, None) => format!("{what} out of range"),
     }
 }
 
 fn py_constraint_description(c: &Constraint) -> String {
     match c {
-        Constraint::SizeExact(n)   => format!("length must be {n}"),
+        Constraint::SizeExact(n) => format!("length must be {n}"),
         Constraint::SizeRange { min, max } => bounds_description("length", *min, *max, true),
-        Constraint::ValueRangeInt { min, max, inclusive } => bounds_description("value", *min, *max, *inclusive),
-        Constraint::ValueRangeUint { min, max, inclusive } => bounds_description("value", *min, *max, *inclusive),
+        Constraint::ValueRangeInt {
+            min,
+            max,
+            inclusive,
+        } => bounds_description("value", *min, *max, *inclusive),
+        Constraint::ValueRangeUint {
+            min,
+            max,
+            inclusive,
+        } => bounds_description("value", *min, *max, *inclusive),
         Constraint::Eq(v) => format!("must equal {}", py_literal(v)),
         Constraint::Ne(v) => format!("must not equal {}", py_literal(v)),
-        _                 => "constraint violated".into(),
+        _ => "constraint violated".into(),
     }
 }
 
 fn py_literal(v: &LiteralValue) -> String {
     match v {
-        LiteralValue::Bool(b)  => if *b { "True".into() } else { "False".into() },
-        LiteralValue::Null     => "None".into(),
-        LiteralValue::Uint(n)  => n.to_string(),
-        LiteralValue::Int(n)   => n.to_string(),
+        LiteralValue::Bool(b) => {
+            if *b {
+                "True".into()
+            } else {
+                "False".into()
+            }
+        }
+        LiteralValue::Null => "None".into(),
+        LiteralValue::Uint(n) => n.to_string(),
+        LiteralValue::Int(n) => n.to_string(),
         LiteralValue::Float(f) => format!("{f:?}"),
-        LiteralValue::Text(s)  => format!("{s:?}"),
-        LiteralValue::Bytes(b) => format!("bytes([{}])", b.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")),
+        LiteralValue::Text(s) => format!("{s:?}"),
+        LiteralValue::Bytes(b) => format!(
+            "bytes([{}])",
+            b.iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1164,13 +1464,17 @@ fn py_literal(v: &LiteralValue) -> String {
 /// A Python expression converting the value `expr` to its raw form.
 fn py_to_raw(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if opts.is_json() => format!("_b64e({expr})"),
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if opts.is_json() => {
+            format!("_b64e({expr})")
+        }
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "None".into(),
         TypeRef::Primitive(Primitive::Float16) if !opts.is_json() => format!("_f16({expr})"),
         TypeRef::Primitive(Primitive::Float32) if !opts.is_json() => format!("_f32({expr})"),
         TypeRef::Primitive(_) => expr.to_owned(),
         TypeRef::Named(_) => format!("{expr}._to_raw()"),
-        TypeRef::Tagged(tag, inner) if !opts.is_json() => format!("_tag({}, {})", tag.0, py_to_raw(inner, expr, opts)),
+        TypeRef::Tagged(tag, inner) if !opts.is_json() => {
+            format!("_tag({}, {})", tag.0, py_to_raw(inner, expr, opts))
+        }
         TypeRef::Tagged(_, inner) => py_to_raw(inner, expr, opts),
         TypeRef::Choice(_) => expr.to_owned(),
     }
@@ -1190,9 +1494,12 @@ fn py_from_raw(ty: &TypeRef, expr: &str, at: &str, opts: &CodegenOptions) -> Str
             Primitive::Null | Primitive::Undefined => format!("_null({expr}, {at:?})"),
         },
         TypeRef::Named(n) => format!("{}._from_raw({expr})", to_pascal_case(n)),
-        TypeRef::Tagged(tag, inner) if !opts.is_json() => {
-            py_from_raw(inner, &format!("_untag({expr}, {}, {at:?})", tag.0), at, opts)
-        }
+        TypeRef::Tagged(tag, inner) if !opts.is_json() => py_from_raw(
+            inner,
+            &format!("_untag({expr}, {}, {at:?})", tag.0),
+            at,
+            opts,
+        ),
         TypeRef::Tagged(_, inner) => py_from_raw(inner, expr, at, opts),
         TypeRef::Choice(_) => expr.to_owned(),
     }
@@ -1204,7 +1511,8 @@ fn py_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Strin
     let base = py_typeref(ty, opts);
     match occ {
         Occurrence::Optional => format!("Optional[{base}]"),
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => format!("list[{base}]"),
         Occurrence::Required => base,
     }
@@ -1212,25 +1520,28 @@ fn py_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Strin
 
 fn py_typeref(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(p)     => py_primitive(p).to_owned(),
-        TypeRef::Named(n)         => to_pascal_case(n),
+        TypeRef::Primitive(p) => py_primitive(p).to_owned(),
+        TypeRef::Named(n) => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => py_typeref(inner, opts),
-        TypeRef::Choice(cs)       => {
-            if cs.is_empty() { return "object".into(); }
-            cs.iter().map(|c| py_typeref(c, opts))
-              .collect::<Vec<_>>().join(" | ")
+        TypeRef::Choice(cs) => {
+            if cs.is_empty() {
+                return "object".into();
+            }
+            cs.iter()
+                .map(|c| py_typeref(c, opts))
+                .collect::<Vec<_>>()
+                .join(" | ")
         }
     }
 }
 
 fn py_primitive(p: &Primitive) -> &'static str {
     match p {
-        Primitive::Bool   => "bool",
+        Primitive::Bool => "bool",
         Primitive::Null | Primitive::Undefined => "None",
         Primitive::Uint | Primitive::Int => "int",
-        Primitive::Float16 | Primitive::Float32
-        | Primitive::Float64 | Primitive::Float => "float",
-        Primitive::Tstr   => "str",
+        Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => "float",
+        Primitive::Tstr => "str",
         Primitive::Bstr | Primitive::Any => "bytes",
     }
 }
@@ -1242,9 +1553,9 @@ fn py_module_name(name: &str) -> String {
 // ── Test file ─────────────────────────────────────────────────────────────────
 
 fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name     = module.name.as_str();
+    let name = module.name.as_str();
     let mod_name = py_module_name(name);
-    let mut w    = IndentWriter::new(4);
+    let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Hash) {
         w.line(&l);
@@ -1272,23 +1583,34 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
 fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct_tests(w, s, module, opts),
-        TypeDef::Enum(e)   => emit_enum_tests(w, e, module, opts),
-        TypeDef::Alias(a)  => emit_alias_tests(w, a, module, opts),
-        TypeDef::Array(a)  => emit_array_tests(w, a, module, opts),
-        TypeDef::Map(m)    => emit_map_tests(w, m, module, opts),
+        TypeDef::Enum(e) => emit_enum_tests(w, e, module, opts),
+        TypeDef::Alias(a) => emit_alias_tests(w, a, module, opts),
+        TypeDef::Array(a) => emit_array_tests(w, a, module, opts),
+        TypeDef::Map(m) => emit_map_tests(w, m, module, opts),
     }
 }
 
-fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts: &CodegenOptions) {
+fn emit_struct_tests(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    module: &IrModule,
+    opts: &CodegenOptions,
+) {
     let class_name = to_pascal_case(&s.name);
 
     w.line(&format!("class Test{class_name}:"));
     w.indent();
 
-    for (test, explicit) in [("test_roundtrip_default", false), ("test_roundtrip_explicit", true)] {
+    for (test, explicit) in [
+        ("test_roundtrip_default", false),
+        ("test_roundtrip_explicit", true),
+    ] {
         w.line(&format!("def {test}(self):"));
         w.indent();
-        w.line(&format!("original = {}", py_struct_value(s, module, opts, explicit, 0)));
+        w.line(&format!(
+            "original = {}",
+            py_struct_value(s, module, opts, explicit, 0)
+        ));
         w.line(&format!("decoded = {class_name}.decode(original.encode())"));
         w.line("assert decoded == original");
         w.dedent();
@@ -1298,7 +1620,10 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
     if s.tagged.is_some() && !opts.is_json() {
         w.line("def test_encode_has_tag(self):");
         w.indent();
-        w.line(&format!("obj = {}", py_struct_value(s, module, opts, false, 0)));
+        w.line(&format!(
+            "obj = {}",
+            py_struct_value(s, module, opts, false, 0)
+        ));
         w.line("assert obj.encode()[0] >> 5 == 6  # CBOR major type 6: tag");
         w.dedent();
     } else {
@@ -1309,9 +1634,15 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opt
 }
 
 /// A test value for one enum variant.
-fn py_variant_value(e: &EnumDef, v: &EnumVariant, module: &IrModule, opts: &CodegenOptions, depth: usize) -> String {
+fn py_variant_value(
+    e: &EnumDef,
+    v: &EnumVariant,
+    module: &IrModule,
+    opts: &CodegenOptions,
+    depth: usize,
+) -> String {
     let class_name = to_pascal_case(&e.name);
-    let vname      = to_pascal_case(&v.name);
+    let vname = to_pascal_case(&v.name);
     if !has_payload(v) {
         return format!("{class_name}.make_{vname}()");
     }
@@ -1319,10 +1650,20 @@ fn py_variant_value(e: &EnumDef, v: &EnumVariant, module: &IrModule, opts: &Code
         TypeRef::Primitive(Primitive::Uint) => "42".to_owned(),
         TypeRef::Primitive(Primitive::Int) => "-1".to_owned(),
         TypeRef::Primitive(Primitive::Bool) => "True".to_owned(),
-        TypeRef::Primitive(Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float) => "1.5".to_owned(),
+        TypeRef::Primitive(
+            Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float,
+        ) => "1.5".to_owned(),
         TypeRef::Primitive(Primitive::Tstr) => "\"hello\"".to_owned(),
         TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "b\"\\x01\\x02\"".to_owned(),
-        other => py_value(other, &Occurrence::Required, &[], module, opts, false, depth + 1),
+        other => py_value(
+            other,
+            &Occurrence::Required,
+            &[],
+            module,
+            opts,
+            false,
+            depth + 1,
+        ),
     };
     format!("{class_name}.make_{vname}({arg})")
 }
@@ -1337,11 +1678,18 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
         let fn_name = to_snake_case(&v.name).to_lowercase();
         w.line(&format!("def test_roundtrip_{fn_name}(self):"));
         w.indent();
-        w.line(&format!("original = {}", py_variant_value(e, v, module, opts, 0)));
+        w.line(&format!(
+            "original = {}",
+            py_variant_value(e, v, module, opts, 0)
+        ));
         w.line(&format!("decoded = {class_name}.decode(original.encode())"));
         // A map variant with the same members as an earlier one decodes as
         // that one, to the same encoding (dgtlrift/cddlc#192).
-        if e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+        if e.variants
+            .iter()
+            .take_while(|x| x.name != v.name)
+            .any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module))
+        {
             w.line("assert decoded.encode() == original.encode()");
         } else {
             w.line("assert decoded == original");
@@ -1352,8 +1700,20 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
 
     // An integer no literal names is rejected, unless some variant takes any integer.
     let lits: Vec<i128> = e.variants.iter().filter_map(int_literal).collect();
-    let takes_int = e.variants.iter().any(|v| has_payload(v) && matches!(&v.ty,
-        TypeRef::Primitive(Primitive::Uint | Primitive::Int | Primitive::Float | Primitive::Float16 | Primitive::Float32 | Primitive::Float64)));
+    let takes_int = e.variants.iter().any(|v| {
+        has_payload(v)
+            && matches!(
+                &v.ty,
+                TypeRef::Primitive(
+                    Primitive::Uint
+                        | Primitive::Int
+                        | Primitive::Float
+                        | Primitive::Float16
+                        | Primitive::Float32
+                        | Primitive::Float64
+                )
+            )
+    });
     if !lits.is_empty() && !takes_int && e.tagged.is_none() {
         if let Some(other) = (0i128..24).find(|k| !lits.contains(k)) {
             let bytes = if opts.is_json() {
@@ -1379,7 +1739,15 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
 
 fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, module: &IrModule, opts: &CodegenOptions) {
     let class_name = to_pascal_case(&a.name);
-    let valid_val  = py_value(&a.ty, &Occurrence::Required, &a.constraints, module, opts, false, 1);
+    let valid_val = py_value(
+        &a.ty,
+        &Occurrence::Required,
+        &a.constraints,
+        module,
+        opts,
+        false,
+        1,
+    );
 
     w.line(&format!("class Test{class_name}:"));
     w.indent();
@@ -1419,7 +1787,15 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, module: &IrModule, opts:
     w.dedent();
     w.blank();
 
-    let item = py_value(&a.element, &Occurrence::Required, &[], module, opts, true, 1);
+    let item = py_value(
+        &a.element,
+        &Occurrence::Required,
+        &[],
+        module,
+        opts,
+        true,
+        1,
+    );
     w.line("def test_roundtrip_items(self):");
     w.indent();
     w.line(&format!("original = {class_name}(items=[{item}, {item}])"));
@@ -1446,7 +1822,10 @@ fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, module: &IrModule, opts: &Co
 
     w.line("def test_roundtrip_entries(self):");
     w.indent();
-    w.line(&format!("original = {}", py_map_value(m, module, opts, true, 1)));
+    w.line(&format!(
+        "original = {}",
+        py_map_value(m, module, opts, true, 1)
+    ));
     w.line(&format!("decoded = {class_name}.decode(original.encode())"));
     w.line("assert decoded == original");
     w.dedent();
@@ -1460,28 +1839,85 @@ fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, module: &IrModule, opts: &Co
 const MAX_FIXTURE_DEPTH: usize = 4;
 
 /// A struct value: every member gets a test value (its literal when pinned).
-fn py_struct_value(s: &StructDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> String {
-    let mut args: Vec<String> = s.fields.iter().map(|f| {
-        let v = py_value(&f.ty, &f.occurrence, &f.constraints, module, opts, explicit, depth + 1);
-        format!("{}={v}", to_snake_case(&f.name))
-    }).collect();
+fn py_struct_value(
+    s: &StructDef,
+    module: &IrModule,
+    opts: &CodegenOptions,
+    explicit: bool,
+    depth: usize,
+) -> String {
+    let mut args: Vec<String> = s
+        .fields
+        .iter()
+        .map(|f| {
+            let v = py_value(
+                &f.ty,
+                &f.occurrence,
+                &f.constraints,
+                module,
+                opts,
+                explicit,
+                depth + 1,
+            );
+            format!("{}={v}", to_snake_case(&f.name))
+        })
+        .collect();
     // One other entry in the explicit value, or when the map needs one.
     if let Some(r) = &s.rest {
         if explicit || matches!(r.occurrence, Occurrence::OneOrMore { .. }) {
-            let v = py_value(&r.val_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1);
+            let v = py_value(
+                &r.val_ty,
+                &Occurrence::Required,
+                &[],
+                module,
+                opts,
+                explicit,
+                depth + 1,
+            );
             // A key no member has: text, or 1000 for an integer key, through an
             // enum's integer alternative (dgtlrift/cddlc#136).
             let key = match &r.key_ty {
                 TypeRef::Primitive(Primitive::Tstr) => "\"other-key\"".to_owned(),
                 TypeRef::Primitive(Primitive::Int | Primitive::Uint) => "1000".to_owned(),
                 TypeRef::Named(n) => match module.get(n) {
-                    Some(TypeDef::Enum(e)) => match e.variants.iter().find(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Int | Primitive::Uint)) && int_literal(v).is_none()) {
-                        Some(v) => format!("{}.make_{}(1000)", to_pascal_case(n), to_pascal_case(&v.name)),
-                        None => py_value(&r.key_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1),
+                    Some(TypeDef::Enum(e)) => match e.variants.iter().find(|v| {
+                        matches!(v.ty, TypeRef::Primitive(Primitive::Int | Primitive::Uint))
+                            && int_literal(v).is_none()
+                    }) {
+                        Some(v) => format!(
+                            "{}.make_{}(1000)",
+                            to_pascal_case(n),
+                            to_pascal_case(&v.name)
+                        ),
+                        None => py_value(
+                            &r.key_ty,
+                            &Occurrence::Required,
+                            &[],
+                            module,
+                            opts,
+                            explicit,
+                            depth + 1,
+                        ),
                     },
-                    _ => py_value(&r.key_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1),
+                    _ => py_value(
+                        &r.key_ty,
+                        &Occurrence::Required,
+                        &[],
+                        module,
+                        opts,
+                        explicit,
+                        depth + 1,
+                    ),
                 },
-                _ => py_value(&r.key_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1),
+                _ => py_value(
+                    &r.key_ty,
+                    &Occurrence::Required,
+                    &[],
+                    module,
+                    opts,
+                    explicit,
+                    depth + 1,
+                ),
             };
             args.push(format!("{}={{{key}: {v}}}", to_snake_case(&r.name)));
         }
@@ -1504,12 +1940,25 @@ fn py_value(
     match occ {
         Occurrence::Optional if !explicit => return "None".into(),
         // As many items as the member needs (`+`: one, `2*3`: two).
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. } | Occurrence::Bounded { .. } => {
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
+        | Occurrence::Bounded { .. } => {
             let min = cddlc_codegen::repeat_bounds(occ).0;
             if min == 0 {
                 return "[]".into();
             }
-            return format!("[{}] * {min}", py_value(ty, &Occurrence::Required, constraints, module, opts, explicit, depth));
+            return format!(
+                "[{}] * {min}",
+                py_value(
+                    ty,
+                    &Occurrence::Required,
+                    constraints,
+                    module,
+                    opts,
+                    explicit,
+                    depth
+                )
+            );
         }
         _ => {}
     }
@@ -1521,16 +1970,28 @@ fn py_value(
     }
     for c in constraints {
         match (c, ty) {
-            (Constraint::SizeExact(n), TypeRef::Primitive(Primitive::Tstr)) => return format!("\"a\" * {n}"),
-            (Constraint::SizeExact(n), TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) => return format!("b\"\\x00\" * {n}"),
-            (Constraint::SizeRange { min: Some(n), .. }, TypeRef::Primitive(Primitive::Tstr)) => return format!("\"a\" * {n}"),
-            (Constraint::SizeRange { min: Some(n), .. }, TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) => return format!("b\"\\x00\" * {n}"),
+            (Constraint::SizeExact(n), TypeRef::Primitive(Primitive::Tstr)) => {
+                return format!("\"a\" * {n}")
+            }
+            (Constraint::SizeExact(n), TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) => {
+                return format!("b\"\\x00\" * {n}")
+            }
+            (Constraint::SizeRange { min: Some(n), .. }, TypeRef::Primitive(Primitive::Tstr)) => {
+                return format!("\"a\" * {n}")
+            }
+            (
+                Constraint::SizeRange { min: Some(n), .. },
+                TypeRef::Primitive(Primitive::Bstr | Primitive::Any),
+            ) => return format!("b\"\\x00\" * {n}"),
             (Constraint::ValueRangeInt { min: Some(lo), .. }, _) => return lo.to_string(),
             (Constraint::ValueRangeUint { min: Some(lo), .. }, _) => return lo.to_string(),
             // `.bits`: every allowed bit set (dgtlrift/cddlc#107).
-            (Constraint::Bits(b), TypeRef::Primitive(Primitive::Uint)) =>
-                return format!("{:#x}", cddlc_codegen::bits_mask_u64(b)),
-            (Constraint::Bits(b), TypeRef::Primitive(Primitive::Bstr)) => return py_bytes(&cddlc_codegen::bits_mask_bytes(b)),
+            (Constraint::Bits(b), TypeRef::Primitive(Primitive::Uint)) => {
+                return format!("{:#x}", cddlc_codegen::bits_mask_u64(b))
+            }
+            (Constraint::Bits(b), TypeRef::Primitive(Primitive::Bstr)) => {
+                return py_bytes(&cddlc_codegen::bits_mask_bytes(b))
+            }
             _ => {}
         }
     }
@@ -1539,14 +2000,25 @@ fn py_value(
         TypeRef::Primitive(Primitive::Int) => if explicit { "-1" } else { "0" }.into(),
         TypeRef::Primitive(Primitive::Bool) => if explicit { "True" } else { "False" }.into(),
         // 1.5 is exact as a float32, so it reads back unchanged from any decoder.
-        TypeRef::Primitive(Primitive::Float32 | Primitive::Float16 | Primitive::Float64 | Primitive::Float) => {
-            if explicit { "1.5" } else { "0.0" }.into()
-        }
+        TypeRef::Primitive(
+            Primitive::Float32 | Primitive::Float16 | Primitive::Float64 | Primitive::Float,
+        ) => if explicit { "1.5" } else { "0.0" }.into(),
         TypeRef::Primitive(Primitive::Tstr) => if explicit { "\"hello\"" } else { "\"\"" }.into(),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => if explicit { "b\"\\x01\\x02\"" } else { "b\"\"" }.into(),
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+            if explicit { "b\"\\x01\\x02\"" } else { "b\"\"" }.into()
+        }
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "None".into(),
-        TypeRef::Tagged(_, inner) => py_value(inner, &Occurrence::Required, constraints, module, opts, explicit, depth),
-        TypeRef::Choice(cs) => cs.first()
+        TypeRef::Tagged(_, inner) => py_value(
+            inner,
+            &Occurrence::Required,
+            constraints,
+            module,
+            opts,
+            explicit,
+            depth,
+        ),
+        TypeRef::Choice(cs) => cs
+            .first()
             .map(|c| py_value(c, &Occurrence::Required, &[], module, opts, explicit, depth))
             .unwrap_or_else(|| "None".into()),
         TypeRef::Named(n) => {
@@ -1558,9 +2030,19 @@ fn py_value(
                 Some(TypeDef::Alias(a)) => format!(
                     "{}(value={})",
                     to_pascal_case(n),
-                    py_value(&a.ty, &Occurrence::Required, &a.constraints, module, opts, explicit, depth + 1)
+                    py_value(
+                        &a.ty,
+                        &Occurrence::Required,
+                        &a.constraints,
+                        module,
+                        opts,
+                        explicit,
+                        depth + 1
+                    )
                 ),
-                Some(TypeDef::Enum(e)) => e.variants.first()
+                Some(TypeDef::Enum(e)) => e
+                    .variants
+                    .first()
                     .map(|v| py_variant_value(e, v, module, opts, depth))
                     .unwrap_or_else(|| "None".into()),
                 Some(TypeDef::Array(_)) => format!("{}()", to_pascal_case(n)),
@@ -1572,9 +2054,31 @@ fn py_value(
 }
 
 /// A table with one entry.
-fn py_map_value(m: &MapDef, module: &IrModule, opts: &CodegenOptions, explicit: bool, depth: usize) -> String {
-    let key = py_value(&m.key_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1);
-    let val = py_value(&m.val_ty, &Occurrence::Required, &[], module, opts, explicit, depth + 1);
+fn py_map_value(
+    m: &MapDef,
+    module: &IrModule,
+    opts: &CodegenOptions,
+    explicit: bool,
+    depth: usize,
+) -> String {
+    let key = py_value(
+        &m.key_ty,
+        &Occurrence::Required,
+        &[],
+        module,
+        opts,
+        explicit,
+        depth + 1,
+    );
+    let val = py_value(
+        &m.val_ty,
+        &Occurrence::Required,
+        &[],
+        module,
+        opts,
+        explicit,
+        depth + 1,
+    );
     format!("{}(entries={{{key}: {val}}})", to_pascal_case(&m.name))
 }
 
@@ -1582,14 +2086,26 @@ fn py_map_value(m: &MapDef, module: &IrModule, opts: &CodegenOptions, explicit: 
 fn py_invalid_constrained_value(constraints: &[Constraint], ty: &TypeRef) -> Option<String> {
     for c in constraints {
         match (c, ty) {
-            (Constraint::SizeExact(n), TypeRef::Primitive(Primitive::Tstr)) => return Some(format!("\"a\" * ({n} + 1)")),
-            (Constraint::SizeExact(n), TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) => return Some(format!("b\"\\x00\" * ({n} + 1)")),
-            (Constraint::ValueRangeInt { min: Some(lo), .. }, _) => return Some(format!("{}", *lo as i128 - 1)),
-            (Constraint::ValueRangeUint { min: Some(lo), .. }, _) if *lo > 0 => return Some(format!("{}", lo - 1)),
-            (Constraint::ValueRangeUint { max: Some(hi), .. }, _) => return Some(format!("{}", *hi as u128 + 1)),
+            (Constraint::SizeExact(n), TypeRef::Primitive(Primitive::Tstr)) => {
+                return Some(format!("\"a\" * ({n} + 1)"))
+            }
+            (Constraint::SizeExact(n), TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) => {
+                return Some(format!("b\"\\x00\" * ({n} + 1)"))
+            }
+            (Constraint::ValueRangeInt { min: Some(lo), .. }, _) => {
+                return Some(format!("{}", *lo as i128 - 1))
+            }
+            (Constraint::ValueRangeUint { min: Some(lo), .. }, _) if *lo > 0 => {
+                return Some(format!("{}", lo - 1))
+            }
+            (Constraint::ValueRangeUint { max: Some(hi), .. }, _) => {
+                return Some(format!("{}", *hi as u128 + 1))
+            }
             // `.bits`: the lowest bit it doesn't allow.
             (Constraint::Bits(b), TypeRef::Primitive(Primitive::Uint | Primitive::Bstr)) => {
-                let Some(bad) = (0u64..64).find(|n| !b.contains(n)) else { continue };
+                let Some(bad) = (0u64..64).find(|n| !b.contains(n)) else {
+                    continue;
+                };
                 if matches!(ty, TypeRef::Primitive(Primitive::Uint)) {
                     return Some(format!("{:#x}", 1u64 << bad));
                 }
@@ -1605,7 +2121,10 @@ fn py_invalid_constrained_value(constraints: &[Constraint], ty: &TypeRef) -> Opt
 
 /// A Python bytes literal: `b"\x01\x02"`.
 fn py_bytes(b: &[u8]) -> String {
-    format!("b\"{}\"", b.iter().map(|x| format!("\\x{x:02x}")).collect::<String>())
+    format!(
+        "b\"{}\"",
+        b.iter().map(|x| format!("\\x{x:02x}")).collect::<String>()
+    )
 }
 
 /// A generated class whose name starts with `Test` (from a CDDL type such as

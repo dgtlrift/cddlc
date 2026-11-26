@@ -12,15 +12,25 @@ fn lower_src(src: &str) -> Result<LowerResult, cddlc_ir::IrError> {
 }
 
 fn occurrence(r: &LowerResult, rule: &str, member: &str) -> Occurrence {
-    let Some(TypeDef::Struct(s)) = r.module.get(rule) else { panic!("{rule}: expected a struct") };
-    s.fields.iter().find(|f| f.name == member).expect("member").occurrence.clone()
+    let Some(TypeDef::Struct(s)) = r.module.get(rule) else {
+        panic!("{rule}: expected a struct")
+    };
+    s.fields
+        .iter()
+        .find(|f| f.name == member)
+        .expect("member")
+        .occurrence
+        .clone()
 }
 
 #[test]
 fn zero_or_more_is_optional() {
     let r = lower_src("m = { a: uint, * b: tstr }").unwrap();
     assert!(matches!(occurrence(&r, "m", "b"), Occurrence::Optional));
-    assert!(r.warnings.iter().any(|w| w.kind == IrWarningKind::RepeatedMapMember && w.message.contains("optional")));
+    assert!(r
+        .warnings
+        .iter()
+        .any(|w| w.kind == IrWarningKind::RepeatedMapMember && w.message.contains("optional")));
 }
 
 #[test]
@@ -33,13 +43,22 @@ fn one_or_more_is_required() {
 
 #[test]
 fn two_or_more_is_refused() {
-    let Err(e) = lower_src("m = { a: uint, 2*3 b: tstr }") else { panic!("expected an error") };
-    assert!(e.to_string().contains("must appear 2 times, but a map holds a key once"), "{e}");
+    let Err(e) = lower_src("m = { a: uint, 2*3 b: tstr }") else {
+        panic!("expected an error")
+    };
+    assert!(
+        e.to_string()
+            .contains("must appear 2 times, but a map holds a key once"),
+        "{e}"
+    );
 }
 
 #[test]
 fn records_keep_their_repeated_member() {
     let r = lower_src("r = [a: uint, * b: tstr]").unwrap();
     assert!(occurrence(&r, "r", "b").is_repeated());
-    assert!(r.warnings.iter().all(|w| w.kind != IrWarningKind::RepeatedMapMember));
+    assert!(r
+        .warnings
+        .iter()
+        .all(|w| w.kind != IrWarningKind::RepeatedMapMember));
 }

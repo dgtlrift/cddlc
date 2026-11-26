@@ -33,14 +33,14 @@ pub struct Rule {
 pub enum RuleKind {
     /// `name = type`  or  `name /= type`  (type rule, with optional extend)
     Type {
-        ty:     Spanned<Type>,
-        extend: bool,   // true if `/=`
+        ty: Spanned<Type>,
+        extend: bool, // true if `/=`
     },
 
     /// `name = ( group )`  or  `name //= ( group )`  (group rule)
     Group {
-        group:  Spanned<GroupEntry>,
-        extend: bool,   // true if `//=`
+        group: Spanned<GroupEntry>,
+        extend: bool, // true if `//=`
     },
 }
 
@@ -67,7 +67,7 @@ pub struct GroupChoice {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemberEntry {
     pub occurrence: Option<Spanned<Occurrence>>,
-    pub kind:       MemberKind,
+    pub kind: MemberKind,
 
     /// Pragmas attached to this specific member.
     pub pragmas: Vec<Pragma>,
@@ -86,10 +86,10 @@ pub enum MemberKind {
     ///
     /// `key` may be a bare identifier (becomes tstr key), a type, or a value.
     KeyValue {
-        key:   Spanned<MemberKey>,
+        key: Spanned<MemberKey>,
         value: Spanned<Type>,
         /// `true` for `=>` (cut), `false` for `:`
-        cut:   bool,
+        cut: bool,
     },
 
     /// A bare type reference embedded in the group (unwrapped group member).
@@ -135,18 +135,18 @@ pub enum Occurrence {
 impl Occurrence {
     pub fn min(&self) -> u64 {
         match self {
-            Occurrence::Optional        => 0,
-            Occurrence::ZeroOrMore      => 0,
-            Occurrence::OneOrMore       => 1,
+            Occurrence::Optional => 0,
+            Occurrence::ZeroOrMore => 0,
+            Occurrence::OneOrMore => 1,
             Occurrence::Bounded { min, .. } => min.unwrap_or(0),
         }
     }
 
     pub fn max(&self) -> Option<u64> {
         match self {
-            Occurrence::Optional        => Some(1),
-            Occurrence::ZeroOrMore      => None,
-            Occurrence::OneOrMore       => None,
+            Occurrence::Optional => Some(1),
+            Occurrence::ZeroOrMore => None,
+            Occurrence::OneOrMore => None,
             Occurrence::Bounded { max, .. } => *max,
         }
     }

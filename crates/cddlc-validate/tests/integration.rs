@@ -5,7 +5,9 @@ use cddlc_validate::{validate, Value};
 
 fn lower(src: &str) -> IrModule {
     let parsed = cddlc_parser::parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
-    cddlc_ir::lower(&parsed.value, 16, 64).expect("lower").module
+    cddlc_ir::lower(&parsed.value, 16, 64)
+        .expect("lower")
+        .module
 }
 
 fn json(s: &str) -> Value {
@@ -19,7 +21,11 @@ fn assert_ok(module: &IrModule, ty: &str, value: &Value) {
     }
 }
 
-fn assert_fails(module: &IrModule, ty: &str, value: &Value) -> Vec<cddlc_validate::ValidationError> {
+fn assert_fails(
+    module: &IrModule,
+    ty: &str,
+    value: &Value,
+) -> Vec<cddlc_validate::ValidationError> {
     match validate(module, Some(ty), value) {
         Ok(()) => panic!("expected '{ty}' to fail validation, but it passed"),
         Err(errors) => errors,
@@ -40,37 +46,71 @@ fn struct_valid() {
 fn struct_missing_required_field() {
     let m = lower(STRUCTS);
     let errors = assert_fails(&m, "sensor", &json(r#"{"id":1,"label":"a"}"#));
-    assert!(errors.iter().any(|e| e.message.contains("missing required field 'value'")), "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("missing required field 'value'")),
+        "{errors:?}"
+    );
 }
 
 #[test]
 fn struct_unknown_field_rejected() {
     let m = lower(STRUCTS);
-    let errors = assert_fails(&m, "sensor", &json(r#"{"id":1,"label":"a","value":1.5,"extra":true}"#));
-    assert!(errors.iter().any(|e| e.message.contains("unknown field")), "{errors:?}");
+    let errors = assert_fails(
+        &m,
+        "sensor",
+        &json(r#"{"id":1,"label":"a","value":1.5,"extra":true}"#),
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("unknown field")),
+        "{errors:?}"
+    );
 }
 
 #[test]
 fn struct_wrong_field_type() {
     let m = lower(STRUCTS);
-    let errors = assert_fails(&m, "sensor", &json(r#"{"id":"nope","label":"a","value":1.5}"#));
-    assert!(errors.iter().any(|e| e.path_string() == "$.id"), "{errors:?}");
+    let errors = assert_fails(
+        &m,
+        "sensor",
+        &json(r#"{"id":"nope","label":"a","value":1.5}"#),
+    );
+    assert!(
+        errors.iter().any(|e| e.path_string() == "$.id"),
+        "{errors:?}"
+    );
 }
 
 #[test]
 fn struct_optional_field_absent_and_present() {
     let m = lower(STRUCTS);
     assert_ok(&m, "reading", &json(r#"{"sensor-id":1,"value":1.0}"#));
-    assert_ok(&m, "reading", &json(r#"{"sensor-id":1,"value":1.0,"unit":"C"}"#));
+    assert_ok(
+        &m,
+        "reading",
+        &json(r#"{"sensor-id":1,"value":1.0,"unit":"C"}"#),
+    );
 }
 
 #[test]
 fn struct_nested_reference_and_path() {
     let m = lower(STRUCTS);
-    assert_ok(&m, "device", &json(r#"{"id":1,"sensor":{"id":2,"label":"x","value":1.0}}"#));
+    assert_ok(
+        &m,
+        "device",
+        &json(r#"{"id":1,"sensor":{"id":2,"label":"x","value":1.0}}"#),
+    );
 
-    let errors = assert_fails(&m, "device", &json(r#"{"id":1,"sensor":{"id":2,"label":"x","value":"bad"}}"#));
-    assert!(errors.iter().any(|e| e.path_string() == "$.sensor.value"), "{errors:?}");
+    let errors = assert_fails(
+        &m,
+        "device",
+        &json(r#"{"id":1,"sensor":{"id":2,"label":"x","value":"bad"}}"#),
+    );
+    assert!(
+        errors.iter().any(|e| e.path_string() == "$.sensor.value"),
+        "{errors:?}"
+    );
 }
 
 // ── aliases.cddl ─────────────────────────────────────────────────────────────
@@ -92,7 +132,10 @@ fn alias_size_violation() {
 
     assert_ok(&m, "device-name", &json(&format!("\"{exactly_32}\"")));
     let errors = assert_fails(&m, "device-name", &json(&format!("\"{too_short}\"")));
-    assert!(errors.iter().any(|e| e.message.contains(".size")), "{errors:?}");
+    assert!(
+        errors.iter().any(|e| e.message.contains(".size")),
+        "{errors:?}"
+    );
 }
 
 #[test]
@@ -123,7 +166,12 @@ fn enum_string_choice() {
     assert_ok(&m, "status", &json(r#""ok""#));
     assert_ok(&m, "status", &json(r#""warn""#));
     let errors = assert_fails(&m, "status", &json(r#""bad""#));
-    assert!(errors.iter().any(|e| e.message.contains("matched no variant")), "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("matched no variant")),
+        "{errors:?}"
+    );
 }
 
 #[test]
@@ -147,12 +195,23 @@ fn tagged_alias_json_degrades_untagged() {
 #[test]
 fn tagged_alias_cbor_checks_tag_number() {
     let m = lower(TAGGED);
-    let good = Value::from(ciborium::Value::Tag(1, Box::new(ciborium::Value::Integer(1234.into()))));
+    let good = Value::from(ciborium::Value::Tag(
+        1,
+        Box::new(ciborium::Value::Integer(1234.into())),
+    ));
     assert_ok(&m, "timestamp", &good);
 
-    let wrong_tag = Value::from(ciborium::Value::Tag(2, Box::new(ciborium::Value::Integer(1234.into()))));
+    let wrong_tag = Value::from(ciborium::Value::Tag(
+        2,
+        Box::new(ciborium::Value::Integer(1234.into())),
+    ));
     let errors = assert_fails(&m, "timestamp", &wrong_tag);
-    assert!(errors.iter().any(|e| e.message.contains("expected CBOR tag 1")), "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected CBOR tag 1")),
+        "{errors:?}"
+    );
 }
 
 /// CBOR has tags, so a tagged type requires one (dgtlrift/cddlc#87): at the
@@ -164,32 +223,66 @@ fn cbor_requires_the_tag() {
     let int = |n: u64| ciborium::Value::Integer(n.into());
 
     let m = lower("r = #6.1(uint)\n");
-    assert!(validate_from(&m, None, &cbor(ciborium::Value::Tag(1, Box::new(int(5)))), Source::Cbor).is_ok());
+    assert!(validate_from(
+        &m,
+        None,
+        &cbor(ciborium::Value::Tag(1, Box::new(int(5)))),
+        Source::Cbor
+    )
+    .is_ok());
     let errors = validate_from(&m, None, &cbor(int(5)), Source::Cbor).unwrap_err();
-    assert!(errors.iter().any(|e| e.message.contains("expected CBOR tag 1, found an untagged uint")), "{errors:?}");
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("expected CBOR tag 1, found an untagged uint")),
+        "{errors:?}"
+    );
     // JSON can't carry the tag.
     assert!(validate_from(&m, None, &json("5"), Source::Json).is_ok());
 
     let m = lower(TAGGED);
     let untagged_struct = cbor(ciborium::Value::Map(vec![
         (ciborium::Value::Text("id".into()), int(1)),
-        (ciborium::Value::Text("value".into()), ciborium::Value::Float(1.5)),
+        (
+            ciborium::Value::Text("value".into()),
+            ciborium::Value::Float(1.5),
+        ),
     ]));
     assert!(validate_from(&m, Some("tagged-sensor"), &untagged_struct, Source::Cbor).is_err());
 
     let m = lower("r = { when: #6.1(uint) }\n");
-    let member = |v| cbor(ciborium::Value::Map(vec![(ciborium::Value::Text("when".into()), v)]));
-    assert!(validate_from(&m, None, &member(ciborium::Value::Tag(1, Box::new(int(5)))), Source::Cbor).is_ok());
+    let member = |v| {
+        cbor(ciborium::Value::Map(vec![(
+            ciborium::Value::Text("when".into()),
+            v,
+        )]))
+    };
+    assert!(validate_from(
+        &m,
+        None,
+        &member(ciborium::Value::Tag(1, Box::new(int(5)))),
+        Source::Cbor
+    )
+    .is_ok());
     assert!(validate_from(&m, None, &member(int(5)), Source::Cbor).is_err());
 }
 
 #[test]
 fn tagged_struct_cbor() {
     let m = lower(TAGGED);
-    let cbor_struct = ciborium::Value::Tag(100, Box::new(ciborium::Value::Map(vec![
-        (ciborium::Value::Text("id".into()), ciborium::Value::Integer(1.into())),
-        (ciborium::Value::Text("value".into()), ciborium::Value::Float(1.5)),
-    ])));
+    let cbor_struct = ciborium::Value::Tag(
+        100,
+        Box::new(ciborium::Value::Map(vec![
+            (
+                ciborium::Value::Text("id".into()),
+                ciborium::Value::Integer(1.into()),
+            ),
+            (
+                ciborium::Value::Text("value".into()),
+                ciborium::Value::Float(1.5),
+            ),
+        ])),
+    );
     assert_ok(&m, "tagged-sensor", &Value::from(cbor_struct));
 }
 
@@ -201,9 +294,18 @@ fn json_and_cbor_validate_identically() {
 
     let from_json = json(r#"{"id":1,"label":"a","value":1.5}"#);
     let from_cbor = Value::from(ciborium::Value::Map(vec![
-        (ciborium::Value::Text("id".into()), ciborium::Value::Integer(1.into())),
-        (ciborium::Value::Text("label".into()), ciborium::Value::Text("a".into())),
-        (ciborium::Value::Text("value".into()), ciborium::Value::Float(1.5)),
+        (
+            ciborium::Value::Text("id".into()),
+            ciborium::Value::Integer(1.into()),
+        ),
+        (
+            ciborium::Value::Text("label".into()),
+            ciborium::Value::Text("a".into()),
+        ),
+        (
+            ciborium::Value::Text("value".into()),
+            ciborium::Value::Float(1.5),
+        ),
     ]));
 
     assert_eq!(validate(&m, Some("sensor"), &from_json).is_ok(), true);
@@ -217,7 +319,8 @@ const IOT_SENSOR: &str = include_str!("../../backend-buildtest/schemas/iot_senso
 #[test]
 fn iot_sensor_valid_message() {
     let m = lower(IOT_SENSOR);
-    let doc = json(r#"{
+    let doc = json(
+        r#"{
         "version": 1,
         "device-id": "abcdefghijklmnop",
         "timestamp": 1234567890,
@@ -225,36 +328,49 @@ fn iot_sensor_valid_message() {
             {"sensor-type": "temperature", "value": 21.5},
             {"sensor-type": "humidity", "value": 55.0, "unit": "%"}
         ]
-    }"#);
+    }"#,
+    );
     assert_ok(&m, "sensor-message", &doc);
 }
 
 #[test]
 fn iot_sensor_device_id_wrong_size() {
     let m = lower(IOT_SENSOR);
-    let doc = json(r#"{
+    let doc = json(
+        r#"{
         "version": 1,
         "device-id": "short",
         "timestamp": 1234567890,
         "readings": []
-    }"#);
+    }"#,
+    );
     let errors = assert_fails(&m, "sensor-message", &doc);
-    assert!(errors.iter().any(|e| e.path_string() == "$.device-id"), "{errors:?}");
+    assert!(
+        errors.iter().any(|e| e.path_string() == "$.device-id"),
+        "{errors:?}"
+    );
 }
 
 #[test]
 fn iot_sensor_nested_enum_failure_has_full_path() {
     let m = lower(IOT_SENSOR);
-    let doc = json(r#"{
+    let doc = json(
+        r#"{
         "version": 1,
         "device-id": "abcdefghijklmnop",
         "timestamp": 1234567890,
         "readings": [
             {"sensor-type": "not-a-real-type", "value": 21.5}
         ]
-    }"#);
+    }"#,
+    );
     let errors = assert_fails(&m, "sensor-message", &doc);
-    assert!(errors.iter().any(|e| e.path_string() == "$.readings[0].sensor-type"), "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.path_string() == "$.readings[0].sensor-type"),
+        "{errors:?}"
+    );
 }
 
 // ── .regexp ───────────────────────────────────────────────────────────────────
@@ -279,8 +395,15 @@ fn cbor_embedded_constraint() {
     assert_ok(&m, "wrapper", &json(&format!(r#""{b64}""#)));
 
     let mut bad_encoded = Vec::new();
-    ciborium::into_writer(&ciborium::Value::Text("not a uint".into()), &mut bad_encoded).unwrap();
-    let bad_b64 = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bad_encoded);
+    ciborium::into_writer(
+        &ciborium::Value::Text("not a uint".into()),
+        &mut bad_encoded,
+    )
+    .unwrap();
+    let bad_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        &bad_encoded,
+    );
     assert_fails(&m, "wrapper", &json(&format!(r#""{bad_b64}""#)));
 }
 
@@ -304,7 +427,12 @@ fn range_operator_enforces_both_bounds() {
     assert_ok(&m, "byte", &json("0"));
     assert_ok(&m, "byte", &json("255"));
     let errors = assert_fails(&m, "byte", &json("300"));
-    assert!(errors.iter().any(|e| e.message.contains("above the maximum 255")), "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("above the maximum 255")),
+        "{errors:?}"
+    );
 }
 
 // ── Literal-valued fields and union discrimination ───────────────────────────
@@ -318,11 +446,31 @@ end = { t: uint, cat: "kernel", type: "SimEnd", reason: "until" / "queue-empty" 
 #[test]
 fn literal_fields_are_enforced() {
     let m = lower(LITERALS);
-    assert_ok(&m, "record", &json(r#"{"t":1,"cat":"kernel","type":"SimStart"}"#));
-    assert_ok(&m, "record", &json(r#"{"t":1,"cat":"kernel","type":"SimEnd","reason":"queue-empty"}"#));
-    assert_fails(&m, "record", &json(r#"{"t":1,"cat":"rx","type":"SimStart"}"#));
-    assert_fails(&m, "record", &json(r#"{"t":1,"cat":"kernel","type":"SimEnd","reason":"bogus"}"#));
-    assert_fails(&m, "start", &json(r#"{"t":1,"cat":"kernel","type":"SimEnd"}"#));
+    assert_ok(
+        &m,
+        "record",
+        &json(r#"{"t":1,"cat":"kernel","type":"SimStart"}"#),
+    );
+    assert_ok(
+        &m,
+        "record",
+        &json(r#"{"t":1,"cat":"kernel","type":"SimEnd","reason":"queue-empty"}"#),
+    );
+    assert_fails(
+        &m,
+        "record",
+        &json(r#"{"t":1,"cat":"rx","type":"SimStart"}"#),
+    );
+    assert_fails(
+        &m,
+        "record",
+        &json(r#"{"t":1,"cat":"kernel","type":"SimEnd","reason":"bogus"}"#),
+    );
+    assert_fails(
+        &m,
+        "start",
+        &json(r#"{"t":1,"cat":"kernel","type":"SimEnd"}"#),
+    );
 }
 
 // ── Prelude types (dgtlrift/cddlc#88) ────────────────────────────────────────
@@ -330,15 +478,26 @@ fn literal_fields_are_enforced() {
 #[test]
 fn prelude_types_validate_as_defined() {
     let m = lower("r = { n: number, at: tdate }\n");
-    assert_ok(&m, "r", &json(r#"{"n": 1.5, "at": "2026-01-01T00:00:00Z"}"#));
+    assert_ok(
+        &m,
+        "r",
+        &json(r#"{"n": 1.5, "at": "2026-01-01T00:00:00Z"}"#),
+    );
     assert_ok(&m, "r", &json(r#"{"n": 2, "at": "2026-01-01T00:00:00Z"}"#));
-    assert_fails(&m, "r", &json(r#"{"n": "x", "at": "2026-01-01T00:00:00Z"}"#));
+    assert_fails(
+        &m,
+        "r",
+        &json(r#"{"n": "x", "at": "2026-01-01T00:00:00Z"}"#),
+    );
     assert_fails(&m, "r", &json(r#"{"n": 1, "at": 5}"#));
 
     // A bignum that fits reaches the validator as an integer.
     let m = lower("r = biguint\n");
     assert_ok(&m, "r", &Value::from(ciborium::Value::Integer(5.into())));
-    let tagged = ciborium::Value::Tag(2, Box::new(ciborium::Value::Bytes(vec![1, 0, 0, 0, 0, 0, 0, 0, 0])));
+    let tagged = ciborium::Value::Tag(
+        2,
+        Box::new(ciborium::Value::Bytes(vec![1, 0, 0, 0, 0, 0, 0, 0, 0])),
+    );
     assert_ok(&m, "r", &Value::from(tagged));
 }
 
@@ -350,12 +509,27 @@ fn records_validate_as_arrays() {
     assert_ok(&m, "r", &json(r#"[1, "x"]"#));
     assert_ok(&m, "r", &json(r#"[1, "x", true]"#));
     let errors = assert_fails(&m, "r", &json(r#"{"a": 1, "b": "x"}"#));
-    assert!(errors[0].message.contains("expected an array for record 'r'"), "{errors:?}");
+    assert!(
+        errors[0]
+            .message
+            .contains("expected an array for record 'r'"),
+        "{errors:?}"
+    );
     let errors = assert_fails(&m, "r", &json(r#"[1]"#));
-    assert!(errors[0].message.contains("needs 2 to 3 item(s), found 1"), "{errors:?}");
+    assert!(
+        errors[0].message.contains("needs 2 to 3 item(s), found 1"),
+        "{errors:?}"
+    );
     assert_fails(&m, "r", &json(r#"[1, "x", true, 4]"#));
     let errors = assert_fails(&m, "r", &json(r#"["x", 1]"#));
-    assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "[0]");
+    assert_eq!(
+        errors[0]
+            .path
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<String>(),
+        "[0]"
+    );
 }
 
 // ── Tables (dgtlrift/cddlc#82) ────────────────────────────────────────────────
@@ -366,15 +540,31 @@ fn tables_validate_each_entry() {
     assert_ok(&m, "r", &json(r#"{}"#));
     assert_ok(&m, "r", &json(r#"{"x": 1, "y": 2}"#));
     let errors = assert_fails(&m, "r", &json(r#"{"x": 1, "y": "two"}"#));
-    assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "{y}");
+    assert_eq!(
+        errors[0]
+            .path
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<String>(),
+        "{y}"
+    );
     assert_fails(&m, "r", &json(r#"[1]"#));
 
     // `+` needs an entry; a key must have the key type (here in CBOR).
     let m = lower("r = { + uint => tstr }\n");
     assert_fails(&m, "r", &Value::from(ciborium::Value::Map(vec![])));
-    let entry = |k: ciborium::Value| ciborium::Value::Map(vec![(k, ciborium::Value::Text("a".into()))]);
-    assert_ok(&m, "r", &Value::from(entry(ciborium::Value::Integer(1.into()))));
-    let errors = assert_fails(&m, "r", &Value::from(entry(ciborium::Value::Text("1".into()))));
+    let entry =
+        |k: ciborium::Value| ciborium::Value::Map(vec![(k, ciborium::Value::Text("a".into()))]);
+    assert_ok(
+        &m,
+        "r",
+        &Value::from(entry(ciborium::Value::Integer(1.into()))),
+    );
+    let errors = assert_fails(
+        &m,
+        "r",
+        &Value::from(entry(ciborium::Value::Text("1".into()))),
+    );
     assert!(errors[0].message.contains("invalid key"), "{errors:?}");
 
     // A table member, with a constrained value.
@@ -391,7 +581,14 @@ fn mixed_maps_validate_other_entries() {
     // A named member keeps its own type; other entries have the value type.
     assert_fails(&m, "r", &json(r#"{"id": 1, "name": 5}"#));
     let errors = assert_fails(&m, "r", &json(r#"{"id": 1, "x": "two"}"#));
-    assert_eq!(errors[0].path.iter().map(|p| p.to_string()).collect::<String>(), "{x}");
+    assert_eq!(
+        errors[0]
+            .path
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<String>(),
+        "{x}"
+    );
     assert_fails(&m, "r", &json(r#"{"x": 2}"#));
 
     let m = lower("r = { id: uint, + tstr => uint }\n");
@@ -458,7 +655,9 @@ fn control_operators_are_checked() {
 
 // ── RFC 9741 text encodings, .det and .feature (dgtlrift/cddlc#109) ──────────
 
-fn text(s: &str) -> Value { Value::Text(s.into()) }
+fn text(s: &str) -> Value {
+    Value::Text(s.into())
+}
 
 /// `t` validates against `r = tstr <control> <operand>`, or fails with a message
 /// containing `why`.
@@ -479,33 +678,91 @@ fn check(control: &str, ok: &[&str], bad: &[(&str, &str)]) {
 #[test]
 fn base64_controls() {
     // "foob" = 66 6f 6f 62.
-    check(".b64u bstr", &["Zm9vYg", "-_8"], &[("Zm9vYg==", "base64url"), ("Zm9vYh", "base64url"), ("+/8", "base64url")]);
+    check(
+        ".b64u bstr",
+        &["Zm9vYg", "-_8"],
+        &[
+            ("Zm9vYg==", "base64url"),
+            ("Zm9vYh", "base64url"),
+            ("+/8", "base64url"),
+        ],
+    );
     // Sloppy: unused bits needn't be zero, still no padding.
-    check(".b64u-sloppy bstr", &["Zm9vYg", "Zm9vYh"], &[("Zm9vYg==", "base64url")]);
-    check(".b64c bstr", &["Zm9vYg==", "+/8="], &[("Zm9vYg", "base64 with padding"), ("-_8=", "base64")]);
-    check(".b64c-sloppy bstr", &["Zm9vYh=="], &[("Zm9vYh", "base64 with padding")]);
+    check(
+        ".b64u-sloppy bstr",
+        &["Zm9vYg", "Zm9vYh"],
+        &[("Zm9vYg==", "base64url")],
+    );
+    check(
+        ".b64c bstr",
+        &["Zm9vYg==", "+/8="],
+        &[("Zm9vYg", "base64 with padding"), ("-_8=", "base64")],
+    );
+    check(
+        ".b64c-sloppy bstr",
+        &["Zm9vYh=="],
+        &[("Zm9vYh", "base64 with padding")],
+    );
     // The operand's constraints apply to the bytes.
     check(".b64u (bstr .size 4)", &["Zm9vYg"], &[("Zm9v", "size")]);
 }
 
 #[test]
 fn hex_base32_and_base45_controls() {
-    check(".hex bstr", &["00ff", "00FF", ""], &[("0", "odd"), ("0g", "hex digit")]);
+    check(
+        ".hex bstr",
+        &["00ff", "00FF", ""],
+        &[("0", "odd"), ("0g", "hex digit")],
+    );
     check(".hexlc bstr", &["00ff"], &[("00FF", "hex digit")]);
     check(".hexuc bstr", &["00FF"], &[("00ff", "hex digit")]);
     // RFC 4648 §10: "foobar".
-    check(".b32 bstr", &["MZXW6YTBOI", "MY", ""], &[("MZXW6YTBOI======", "base32"), ("mzxw6ytboi", "base32"), ("MZ", "unused bits")]);
-    check(".h32 bstr", &["CPNMUOJ1E8"], &[("MZXW6YTBOI", "base32"), ("CPNMUOJ1E", "base32 length")]);
+    check(
+        ".b32 bstr",
+        &["MZXW6YTBOI", "MY", ""],
+        &[
+            ("MZXW6YTBOI======", "base32"),
+            ("mzxw6ytboi", "base32"),
+            ("MZ", "unused bits"),
+        ],
+    );
+    check(
+        ".h32 bstr",
+        &["CPNMUOJ1E8"],
+        &[("MZXW6YTBOI", "base32"), ("CPNMUOJ1E", "base32 length")],
+    );
     // RFC 9285 §4.3: "AB", "Hello!!", "base-45".
-    check(".b45 bstr", &["BB8", "%69 VD92EX0", "UJCLQE7W581"], &[("GGW", "more than two bytes"), ("a", "base45"), ("BB8A", "base45 length")]);
+    check(
+        ".b45 bstr",
+        &["BB8", "%69 VD92EX0", "UJCLQE7W581"],
+        &[
+            ("GGW", "more than two bytes"),
+            ("a", "base45"),
+            ("BB8A", "base45 length"),
+        ],
+    );
     check(".b45 (bstr .size 2)", &["BB8"], &[("UJCLQE7W581", "size")]);
 }
 
 #[test]
 fn base10_and_json_controls() {
-    check(".base10 int", &["0", "42", "-7"], &[("042", "decimal"), ("+1", "decimal"), ("-0", "decimal"), ("1.0", "decimal"), ("", "decimal")]);
+    check(
+        ".base10 int",
+        &["0", "42", "-7"],
+        &[
+            ("042", "decimal"),
+            ("+1", "decimal"),
+            ("-0", "decimal"),
+            ("1.0", "decimal"),
+            ("", "decimal"),
+        ],
+    );
     // RFC 9741 §2.2's example.
-    check(".base10 (0..9223372036854775807)", &["9223372036854775807"], &[("-1", "")]);
+    check(
+        ".base10 (0..9223372036854775807)",
+        &["9223372036854775807"],
+        &[("-1", "")],
+    );
     check(".json uint", &["1"], &[("\"1\"", ""), ("{", "not JSON")]);
     let m = lower("r = tstr .json claims\nclaims = { iss: tstr, exp: uint }\n");
     assert_ok(&m, "r", &text(r#"{"iss": "me", "exp": 1}"#));
@@ -542,8 +799,12 @@ fn cbor_check(m: &IrModule, ty: &str, bytes: &[u8]) -> Result<(), String> {
 fn cbor_undefined_is_not_null() {
     let m = lower("u = undefined\nn = null\n");
     assert!(cbor_check(&m, "u", &[0xf7]).is_ok());
-    assert!(cbor_check(&m, "u", &[0xf6]).unwrap_err().contains("expected undefined, found null"));
-    assert!(cbor_check(&m, "n", &[0xf7]).unwrap_err().contains("found undefined"));
+    assert!(cbor_check(&m, "u", &[0xf6])
+        .unwrap_err()
+        .contains("expected undefined, found null"));
+    assert!(cbor_check(&m, "n", &[0xf7])
+        .unwrap_err()
+        .contains("found undefined"));
     // JSON has no undefined: null stands in.
     assert_ok(&m, "u", &json("null"));
 }
@@ -551,7 +812,11 @@ fn cbor_undefined_is_not_null() {
 #[test]
 fn cbor_floats_have_their_width() {
     let m = lower("h = float16\ns = float32\nd = float64\nf = float\n");
-    let (f16, f32, f64) = (&[0xf9, 0x3c, 0x00][..], &[0xfa, 0x3f, 0x80, 0, 0][..], &[0xfb, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0][..]);
+    let (f16, f32, f64) = (
+        &[0xf9, 0x3c, 0x00][..],
+        &[0xfa, 0x3f, 0x80, 0, 0][..],
+        &[0xfb, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0][..],
+    );
     for (ty, ok) in [("h", f16), ("s", f32), ("d", f64)] {
         for b in [f16, f32, f64] {
             let r = cbor_check(&m, ty, b);
@@ -562,25 +827,42 @@ fn cbor_floats_have_their_width() {
         assert!(cbor_check(&m, "f", b).is_ok());
     }
     // 1.0 as float16 is 1.0.
-    assert_eq!(cddlc_validate::cbor::decode(f16).unwrap(), Value::SizedFloat(1.0, 16));
+    assert_eq!(
+        cddlc_validate::cbor::decode(f16).unwrap(),
+        Value::SizedFloat(1.0, 16)
+    );
 }
 
 #[test]
 fn cbor_duplicate_keys_and_trailing_bytes_are_errors() {
     use cddlc_validate::cbor::decode;
-    assert!(decode(&[0xa2, 0x61, 0x61, 0x01, 0x61, 0x61, 0x02]).unwrap_err().contains("duplicate map key \"a\""));
-    assert!(decode(&[0xa2, 0x01, 0x01, 0x01, 0x02]).unwrap_err().contains("duplicate map key 1"));
+    assert!(decode(&[0xa2, 0x61, 0x61, 0x01, 0x61, 0x61, 0x02])
+        .unwrap_err()
+        .contains("duplicate map key \"a\""));
+    assert!(decode(&[0xa2, 0x01, 0x01, 0x01, 0x02])
+        .unwrap_err()
+        .contains("duplicate map key 1"));
     // 1 and "1" are different keys.
     assert!(decode(&[0xa2, 0x01, 0x01, 0x61, 0x31, 0x02]).is_ok());
-    assert!(decode(&[0x01, 0x00]).unwrap_err().contains("after the data item"));
+    assert!(decode(&[0x01, 0x00])
+        .unwrap_err()
+        .contains("after the data item"));
     assert!(decode(&[0x82, 0x01]).unwrap_err().contains("truncated"));
     // Indefinite lengths.
-    assert_eq!(decode(&[0x9f, 0x01, 0xff]).unwrap(), Value::Array(vec![Value::Uint(1)]));
-    assert_eq!(decode(&[0x7f, 0x61, 0x61, 0x61, 0x62, 0xff]).unwrap(), Value::Text("ab".into()));
+    assert_eq!(
+        decode(&[0x9f, 0x01, 0xff]).unwrap(),
+        Value::Array(vec![Value::Uint(1)])
+    );
+    assert_eq!(
+        decode(&[0x7f, 0x61, 0x61, 0x61, 0x62, 0xff]).unwrap(),
+        Value::Text("ab".into())
+    );
     // Embedded CBOR is decoded the same way.
     let m = lower("r = bstr .cbor inner\ninner = { a: uint }\n");
     let dup = [0x47, 0xa2, 0x61, 0x61, 0x01, 0x61, 0x61, 0x02];
-    assert!(cbor_check(&m, "r", &dup).unwrap_err().contains("duplicate map key"));
+    assert!(cbor_check(&m, "r", &dup)
+        .unwrap_err()
+        .contains("duplicate map key"));
 }
 
 // ── Repeated groups in arrays (dgtlrift/cddlc#90) ─────────────────────────────

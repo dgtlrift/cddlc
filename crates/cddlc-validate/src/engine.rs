@@ -4,8 +4,8 @@
 use base64::Engine as _;
 
 use cddlc_ir::{
-    CborTag, Constraint, FieldDef, FieldKey, IrModule, LiteralValue, Occurrence,
-    Primitive, StructEncoding, TextEncoding, TypeDef, TypeRef,
+    CborTag, Constraint, FieldDef, FieldKey, IrModule, LiteralValue, Occurrence, Primitive,
+    StructEncoding, TextEncoding, TypeDef, TypeRef,
 };
 
 use crate::error::{PathSeg, ValidationError};
@@ -16,9 +16,9 @@ use crate::value::Value;
 const MAX_DEPTH: usize = 128;
 
 pub fn validate_named(
-    module:    &IrModule,
+    module: &IrModule,
     type_name: &str,
-    value:     &Value,
+    value: &Value,
     require_tags: bool,
 ) -> Result<(), Vec<ValidationError>> {
     if type_name.is_empty() {
@@ -34,30 +34,45 @@ pub fn validate_named(
         )]);
     };
 
-    let mut ctx = Ctx { module, errors: Vec::new(), depth: 0, require_tags };
+    let mut ctx = Ctx {
+        module,
+        errors: Vec::new(),
+        depth: 0,
+        require_tags,
+    };
     let mut path = Vec::new();
     ctx.check_def(def, value, &mut path);
-    if ctx.errors.is_empty() { Ok(()) } else { Err(ctx.errors) }
+    if ctx.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ctx.errors)
+    }
 }
 
 struct Ctx<'m> {
-    module:  &'m IrModule,
-    errors:  Vec<ValidationError>,
-    depth:   usize,
+    module: &'m IrModule,
+    errors: Vec<ValidationError>,
+    depth: usize,
     /// CBOR input: a tagged type requires its tag.
     require_tags: bool,
 }
 
 impl<'m> Ctx<'m> {
     fn err(&mut self, path: &[PathSeg], message: impl Into<String>) {
-        self.errors.push(ValidationError::new(path.to_vec(), message.into()));
+        self.errors
+            .push(ValidationError::new(path.to_vec(), message.into()));
     }
 
     /// Run `f` in a fresh, isolated error-collecting context (used to try one
     /// alternative of a type choice / enum variant without polluting the
     /// caller's error list on failure).
     fn try_check(&self, tr: &TypeRef, value: &Value, path: &[PathSeg]) -> Vec<ValidationError> {
-        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth, require_tags: self.require_tags };
+        let mut sub = Ctx {
+            module: self.module,
+            errors: Vec::new(),
+            depth: self.depth,
+            require_tags: self.require_tags,
+        };
         let mut p = path.to_vec();
         sub.check_typeref(tr, value, &mut p);
         sub.errors
@@ -66,8 +81,18 @@ impl<'m> Ctx<'m> {
     /// Like [`Self::try_check`], but also applies an enum variant's own
     /// constraints (the literal value that discriminates it from sibling
     /// variants sharing the same underlying primitive — see [`cddlc_ir::EnumVariant`]).
-    fn try_check_variant(&self, variant: &cddlc_ir::EnumVariant, value: &Value, path: &[PathSeg]) -> Vec<ValidationError> {
-        let mut sub = Ctx { module: self.module, errors: Vec::new(), depth: self.depth, require_tags: self.require_tags };
+    fn try_check_variant(
+        &self,
+        variant: &cddlc_ir::EnumVariant,
+        value: &Value,
+        path: &[PathSeg],
+    ) -> Vec<ValidationError> {
+        let mut sub = Ctx {
+            module: self.module,
+            errors: Vec::new(),
+            depth: self.depth,
+            require_tags: self.require_tags,
+        };
         let mut p = path.to_vec();
         sub.check_typeref(&variant.ty, value, &mut p);
         sub.check_constraints(&variant.constraints, &variant.ty, value, &mut p);
@@ -76,7 +101,10 @@ impl<'m> Ctx<'m> {
 
     fn guard_depth(&mut self, path: &[PathSeg]) -> bool {
         if self.depth >= MAX_DEPTH {
-            self.err(path, format!("exceeded maximum nesting depth ({MAX_DEPTH})"));
+            self.err(
+                path,
+                format!("exceeded maximum nesting depth ({MAX_DEPTH})"),
+            );
             return false;
         }
         self.depth += 1;
@@ -86,13 +114,19 @@ impl<'m> Ctx<'m> {
     // ── Type definitions ─────────────────────────────────────────────────
 
     fn check_def(&mut self, def: &TypeDef, value: &Value, path: &mut Vec<PathSeg>) {
-        if !self.guard_depth(path) { return; }
+        if !self.guard_depth(path) {
+            return;
+        }
         match def {
             TypeDef::Struct(s) => {
                 if let Some(payload) = self.unwrap_tag(s.tagged, value, path) {
                     match s.encoding {
-                        StructEncoding::Map   => self.check_struct(&s.fields, s.rest.as_ref(), &s.name, payload, path),
-                        StructEncoding::Array => self.check_record(&s.fields, &s.name, payload, path),
+                        StructEncoding::Map => {
+                            self.check_struct(&s.fields, s.rest.as_ref(), &s.name, payload, path)
+                        }
+                        StructEncoding::Array => {
+                            self.check_record(&s.fields, &s.name, payload, path)
+                        }
                     }
                 }
             }
@@ -125,14 +159,30 @@ impl<'m> Ctx<'m> {
         self.depth -= 1;
     }
 
-    fn check_struct(&mut self, fields: &[FieldDef], rest: Option<&cddlc_ir::MapRest>, name: &str, value: &Value, path: &mut Vec<PathSeg>) {
+    fn check_struct(
+        &mut self,
+        fields: &[FieldDef],
+        rest: Option<&cddlc_ir::MapRest>,
+        name: &str,
+        value: &Value,
+        path: &mut Vec<PathSeg>,
+    ) {
         let Value::Map(entries) = value else {
-            self.err(path, format!("expected a map for struct '{name}', found {}", kind_name(value)));
+            self.err(
+                path,
+                format!(
+                    "expected a map for struct '{name}', found {}",
+                    kind_name(value)
+                ),
+            );
             return;
         };
 
         for field in fields {
-            match entries.iter().find(|(k, _)| field_key_matches(&field.key, k)) {
+            match entries
+                .iter()
+                .find(|(k, _)| field_key_matches(&field.key, k))
+            {
                 Some((_, v)) => {
                     path.push(PathSeg::Field(field.name.to_string()));
                     self.check_typeref(&field.ty, v, path);
@@ -149,7 +199,8 @@ impl<'m> Ctx<'m> {
 
         // Entries no named member takes are the map's other entries, when it
         // has a member with a computed key (dgtlrift/cddlc#82).
-        let others: Vec<&(Value, Value)> = entries.iter()
+        let others: Vec<&(Value, Value)> = entries
+            .iter()
             .filter(|(k, _)| !fields.iter().any(|f| field_key_matches(&f.key, k)))
             .collect();
         let Some(rest) = rest else {
@@ -162,7 +213,10 @@ impl<'m> Ctx<'m> {
         for (k, v) in others {
             path.push(PathSeg::Key(key_label(k)));
             if let Some(e) = self.try_check(&rest.key_ty, k, path).into_iter().next() {
-                self.err(path, format!("unknown field {}: {}", describe_key(k), e.message));
+                self.err(
+                    path,
+                    format!("unknown field {}: {}", describe_key(k), e.message),
+                );
             } else {
                 self.check_typeref(&rest.val_ty, v, path);
             }
@@ -170,11 +224,23 @@ impl<'m> Ctx<'m> {
         }
     }
 
-/// A record: a struct encoded as an array of its members' values, in order
+    /// A record: a struct encoded as an array of its members' values, in order
     /// (RFC 8610 §3.4). Optional members come last and may be left off.
-    fn check_record(&mut self, fields: &[FieldDef], name: &str, value: &Value, path: &mut Vec<PathSeg>) {
+    fn check_record(
+        &mut self,
+        fields: &[FieldDef],
+        name: &str,
+        value: &Value,
+        path: &mut Vec<PathSeg>,
+    ) {
         let Value::Array(items) = value else {
-            self.err(path, format!("expected an array for record '{name}', found {}", kind_name(value)));
+            self.err(
+                path,
+                format!(
+                    "expected an array for record '{name}', found {}",
+                    kind_name(value)
+                ),
+            );
             return;
         };
         // One repeated member, every other one required: it holds the items
@@ -183,14 +249,32 @@ impl<'m> Ctx<'m> {
         if let Some(ri) = fields.iter().position(|f| f.occurrence.is_repeated()) {
             let fixed = fields.len() - 1;
             if items.len() < fixed {
-                self.err(path, format!("record '{name}' needs at least {fixed} item(s), found {}", items.len()));
+                self.err(
+                    path,
+                    format!(
+                        "record '{name}' needs at least {fixed} item(s), found {}",
+                        items.len()
+                    ),
+                );
                 return;
             }
             let reps = items.len() - fixed;
             let rf = &fields[ri];
-            check_cardinality(&rf.occurrence, reps, &format!("{name}.{}", rf.name), self, path);
+            check_cardinality(
+                &rf.occurrence,
+                reps,
+                &format!("{name}.{}", rf.name),
+                self,
+                path,
+            );
             for (i, v) in items.iter().enumerate() {
-                let field = if i < ri { &fields[i] } else if i < ri + reps { rf } else { &fields[i - reps + 1] };
+                let field = if i < ri {
+                    &fields[i]
+                } else if i < ri + reps {
+                    rf
+                } else {
+                    &fields[i - reps + 1]
+                };
                 path.push(PathSeg::Index(i));
                 self.check_typeref(&field.ty, v, path);
                 self.check_constraints(&field.constraints, &field.ty, v, path);
@@ -200,8 +284,18 @@ impl<'m> Ctx<'m> {
         }
         let required = fields.iter().filter(|f| f.occurrence.is_required()).count();
         if items.len() < required || items.len() > fields.len() {
-            let want = if required == fields.len() { format!("{required}") } else { format!("{required} to {}", fields.len()) };
-            self.err(path, format!("record '{name}' needs {want} item(s), found {}", items.len()));
+            let want = if required == fields.len() {
+                format!("{required}")
+            } else {
+                format!("{required} to {}", fields.len())
+            };
+            self.err(
+                path,
+                format!(
+                    "record '{name}' needs {want} item(s), found {}",
+                    items.len()
+                ),
+            );
             return;
         }
         // The array's length says which optional members it holds: the first
@@ -209,7 +303,11 @@ impl<'m> Ctx<'m> {
         // before required ones; dgtlrift/cddlc#134).
         let mut optional_left = items.len() - required;
         let present = fields.iter().filter(|f| {
-            f.occurrence.is_required() || (optional_left > 0 && { optional_left -= 1; true })
+            f.occurrence.is_required()
+                || (optional_left > 0 && {
+                    optional_left -= 1;
+                    true
+                })
         });
         for (i, (field, v)) in present.zip(items).enumerate() {
             path.push(PathSeg::Index(i));
@@ -219,7 +317,13 @@ impl<'m> Ctx<'m> {
         }
     }
 
-    fn check_enum(&mut self, variants: &[cddlc_ir::EnumVariant], name: &str, value: &Value, path: &mut Vec<PathSeg>) {
+    fn check_enum(
+        &mut self,
+        variants: &[cddlc_ir::EnumVariant],
+        name: &str,
+        value: &Value,
+        path: &mut Vec<PathSeg>,
+    ) {
         let mut attempts: Vec<(String, Vec<ValidationError>)> = Vec::new();
         for variant in variants {
             let errs = self.try_check_variant(variant, value, path);
@@ -237,9 +341,19 @@ impl<'m> Ctx<'m> {
         self.err(path, msg);
     }
 
-    fn check_array(&mut self, element: &TypeRef, occurrence: &Occurrence, name: &str, value: &Value, path: &mut Vec<PathSeg>) {
+    fn check_array(
+        &mut self,
+        element: &TypeRef,
+        occurrence: &Occurrence,
+        name: &str,
+        value: &Value,
+        path: &mut Vec<PathSeg>,
+    ) {
         let Value::Array(items) = value else {
-            self.err(path, format!("expected an array for '{name}', found {}", kind_name(value)));
+            self.err(
+                path,
+                format!("expected an array for '{name}', found {}", kind_name(value)),
+            );
             return;
         };
         check_cardinality(occurrence, items.len(), name, self, path);
@@ -254,19 +368,34 @@ impl<'m> Ctx<'m> {
     /// the group's members, in turn, is one record (dgtlrift/cddlc#90).
     fn check_flat_array(&mut self, a: &cddlc_ir::ArrayDef, value: &Value, path: &mut Vec<PathSeg>) {
         let Value::Array(items) = value else {
-            self.err(path, format!("expected an array for '{}', found {}", a.name, kind_name(value)));
+            self.err(
+                path,
+                format!(
+                    "expected an array for '{}', found {}",
+                    a.name,
+                    kind_name(value)
+                ),
+            );
             return;
         };
         let module = self.module;
-        let Some(TypeDef::Struct(rec)) = (match &a.element { TypeRef::Named(n) => module.get(n), _ => None }) else {
+        let Some(TypeDef::Struct(rec)) = (match &a.element {
+            TypeRef::Named(n) => module.get(n),
+            _ => None,
+        }) else {
             self.err(path, format!("'{}' names no record for its group", a.name));
             return;
         };
         let width = rec.fields.len().max(1);
         if items.len() % width != 0 {
-            self.err(path, format!(
-                "'{}' repeats a group of {width} items, but holds {} item(s)", a.name, items.len()
-            ));
+            self.err(
+                path,
+                format!(
+                    "'{}' repeats a group of {width} items, but holds {} item(s)",
+                    a.name,
+                    items.len()
+                ),
+            );
             return;
         }
         check_cardinality(&a.occurrence, items.len() / width, &a.name, self, path);
@@ -284,16 +413,37 @@ impl<'m> Ctx<'m> {
     /// and the number of entries fits the occurrence (dgtlrift/cddlc#82).
     fn check_map(&mut self, m: &cddlc_ir::MapDef, value: &Value, path: &mut Vec<PathSeg>) {
         let Value::Map(entries) = value else {
-            self.err(path, format!("expected a map for '{}', found {}", m.name, kind_name(value)));
+            self.err(
+                path,
+                format!(
+                    "expected a map for '{}', found {}",
+                    m.name,
+                    kind_name(value)
+                ),
+            );
             return;
         };
         match m.occurrence {
             // `{ tstr => uint }` has exactly one entry; `?` at most one.
             Occurrence::Required if entries.len() != 1 => {
-                self.err(path, format!("'{}' requires exactly 1 entry, found {}", m.name, entries.len()));
+                self.err(
+                    path,
+                    format!(
+                        "'{}' requires exactly 1 entry, found {}",
+                        m.name,
+                        entries.len()
+                    ),
+                );
             }
             Occurrence::Optional if entries.len() > 1 => {
-                self.err(path, format!("'{}' allows at most 1 entry, found {}", m.name, entries.len()));
+                self.err(
+                    path,
+                    format!(
+                        "'{}' allows at most 1 entry, found {}",
+                        m.name,
+                        entries.len()
+                    ),
+                );
             }
             ref occ => check_cardinality(occ, entries.len(), &m.name, self, path),
         }
@@ -315,7 +465,10 @@ impl<'m> Ctx<'m> {
             TypeRef::Primitive(p) => self.check_primitive(p, value, path),
             TypeRef::Named(name) => match self.module.get(name) {
                 Some(def) => self.check_def(def, value, path),
-                None => self.err(path, format!("internal error: type '{name}' is referenced but not defined")),
+                None => self.err(
+                    path,
+                    format!("internal error: type '{name}' is referenced but not defined"),
+                ),
             },
             TypeRef::Choice(variants) => {
                 let mut attempts: Vec<Vec<ValidationError>> = Vec::new();
@@ -326,19 +479,25 @@ impl<'m> Ctx<'m> {
                     }
                     attempts.push(errs);
                 }
-                let detail = attempts.iter()
+                let detail = attempts
+                    .iter()
                     .filter_map(|e| e.first())
                     .map(|e| e.message.as_str())
                     .collect::<Vec<_>>()
                     .join(" | ");
-                self.err(path, format!("value did not match any alternative: {detail}"));
+                self.err(
+                    path,
+                    format!("value did not match any alternative: {detail}"),
+                );
             }
             // A bignum (`biguint = #6.2(bstr)`, `bignint = #6.3(bstr)`): the CBOR
             // decoder reads one that fits as a plain integer, dropping the tag.
             TypeRef::Tagged(tag, inner)
-                if matches!((tag.0, inner.as_ref(), value),
+                if matches!(
+                    (tag.0, inner.as_ref(), value),
                     (2, TypeRef::Primitive(Primitive::Bstr), Value::Uint(_))
-                    | (3, TypeRef::Primitive(Primitive::Bstr), Value::Int(_))) => {}
+                        | (3, TypeRef::Primitive(Primitive::Bstr), Value::Int(_))
+                ) => {}
             TypeRef::Tagged(tag, inner) => {
                 if let Some(payload) = self.unwrap_tag(Some(*tag), value, path) {
                     self.check_typeref(inner, payload, path);
@@ -363,20 +522,32 @@ impl<'m> Ctx<'m> {
             (Primitive::Float, Value::SizedFloat(..)) => true,
             (Primitive::Uint, Value::Uint(_)) => true,
             (Primitive::Int, Value::Uint(_) | Value::Int(_)) => true,
-            (Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float,
-             Value::Float(_) | Value::Uint(_) | Value::Int(_)) => true,
+            (
+                Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float,
+                Value::Float(_) | Value::Uint(_) | Value::Int(_),
+            ) => true,
             (Primitive::Tstr, Value::Text(_)) => true,
             (Primitive::Bstr, Value::Bytes(_)) => true,
             (Primitive::Bstr, Value::Text(s)) => decode_base64url(s).is_some(),
             _ => false,
         };
         if !ok {
-            self.err(path, format!("expected {}, found {}", primitive_name(p), kind_name(value)));
+            self.err(
+                path,
+                format!("expected {}, found {}", primitive_name(p), kind_name(value)),
+            );
         }
     }
 
-    fn unwrap_tag<'v>(&mut self, tagged: Option<CborTag>, value: &'v Value, path: &mut Vec<PathSeg>) -> Option<&'v Value> {
-        let Some(tag) = tagged else { return Some(value) };
+    fn unwrap_tag<'v>(
+        &mut self,
+        tagged: Option<CborTag>,
+        value: &'v Value,
+        path: &mut Vec<PathSeg>,
+    ) -> Option<&'v Value> {
+        let Some(tag) = tagged else {
+            return Some(value);
+        };
         match value {
             Value::Tag(n, inner) if *n == tag.0 => Some(inner.as_ref()),
             Value::Tag(n, _) => {
@@ -385,7 +556,14 @@ impl<'m> Ctx<'m> {
             }
             // CBOR: the tag is part of the type (RFC 8610 §3.6).
             _ if self.require_tags => {
-                self.err(path, format!("expected CBOR tag {}, found an untagged {}", tag.0, kind_name(value)));
+                self.err(
+                    path,
+                    format!(
+                        "expected CBOR tag {}, found an untagged {}",
+                        tag.0,
+                        kind_name(value)
+                    ),
+                );
                 None
             }
             // JSON has no tags: validate the payload directly. See lib.rs docs.
@@ -414,7 +592,13 @@ impl<'m> Ctx<'m> {
 
     // ── Constraints ──────────────────────────────────────────────────────
 
-    fn check_constraints(&mut self, constraints: &[Constraint], base_ty: &TypeRef, value: &Value, path: &mut Vec<PathSeg>) {
+    fn check_constraints(
+        &mut self,
+        constraints: &[Constraint],
+        base_ty: &TypeRef,
+        value: &Value,
+        path: &mut Vec<PathSeg>,
+    ) {
         if constraints.is_empty() {
             return;
         }
@@ -422,31 +606,69 @@ impl<'m> Ctx<'m> {
         for c in constraints {
             match c {
                 Constraint::SizeExact(n) => self.check_size(&prim, value, Some(*n), Some(*n), path),
-                Constraint::SizeRange { min, max } => self.check_size(&prim, value, *min, *max, path),
-                Constraint::ValueRangeInt { min, max, inclusive } =>
-                    self.check_range(value, min.map(|n| n as i128), max.map(|n| n as i128), *inclusive, path),
-                Constraint::ValueRangeUint { min, max, inclusive } =>
-                    self.check_range(value, min.map(|n| n as i128), max.map(|n| n as i128), *inclusive, path),
-                Constraint::ValueRangeF64 { min, max, inclusive } =>
-                    self.check_range_f64(value, *min, *max, *inclusive, path),
+                Constraint::SizeRange { min, max } => {
+                    self.check_size(&prim, value, *min, *max, path)
+                }
+                Constraint::ValueRangeInt {
+                    min,
+                    max,
+                    inclusive,
+                } => self.check_range(
+                    value,
+                    min.map(|n| n as i128),
+                    max.map(|n| n as i128),
+                    *inclusive,
+                    path,
+                ),
+                Constraint::ValueRangeUint {
+                    min,
+                    max,
+                    inclusive,
+                } => self.check_range(
+                    value,
+                    min.map(|n| n as i128),
+                    max.map(|n| n as i128),
+                    *inclusive,
+                    path,
+                ),
+                Constraint::ValueRangeF64 {
+                    min,
+                    max,
+                    inclusive,
+                } => self.check_range_f64(value, *min, *max, *inclusive, path),
                 Constraint::Eq(lit) => {
                     if !literal_eq(lit, value) {
-                        self.err(path, format!("expected value equal to {}, found {}", describe_literal(lit), kind_name(value)));
+                        self.err(
+                            path,
+                            format!(
+                                "expected value equal to {}, found {}",
+                                describe_literal(lit),
+                                kind_name(value)
+                            ),
+                        );
                     }
                 }
                 Constraint::Ne(lit) => {
                     if literal_eq(lit, value) {
-                        self.err(path, format!("value must not equal {}", describe_literal(lit)));
+                        self.err(
+                            path,
+                            format!("value must not equal {}", describe_literal(lit)),
+                        );
                     }
                 }
                 Constraint::Regexp { pattern, .. } => self.check_regexp(value, pattern, path),
-                Constraint::CborEmbedded(inner) => self.check_cbor_embedded(value, inner, false, path),
+                Constraint::CborEmbedded(inner) => {
+                    self.check_cbor_embedded(value, inner, false, path)
+                }
                 Constraint::CborSeq(inner) => self.check_cbor_embedded(value, inner, true, path),
                 // Informational only — does not relax presence/type checks.
                 Constraint::Default(_) => {}
                 Constraint::Bits(bits) => self.check_bits(value, bits, path),
-                Constraint::TextEncoded { encoding, ty, constraints } =>
-                    self.check_text_encoded(value, *encoding, ty, constraints, path),
+                Constraint::TextEncoded {
+                    encoding,
+                    ty,
+                    constraints,
+                } => self.check_text_encoded(value, *encoding, ty, constraints, path),
             }
         }
     }
@@ -454,15 +676,18 @@ impl<'m> Ctx<'m> {
     /// RFC 9741: text holding bytes, an integer or JSON, which must match `ty`.
     fn check_text_encoded(
         &mut self,
-        value:       &Value,
-        encoding:    TextEncoding,
-        ty:          &TypeRef,
+        value: &Value,
+        encoding: TextEncoding,
+        ty: &TypeRef,
         constraints: &[Constraint],
-        path:        &mut Vec<PathSeg>,
+        path: &mut Vec<PathSeg>,
     ) {
         let op = encoding.control();
         let Value::Text(t) = value else {
-            self.err(path, format!("{op} applies to text, found {}", kind_name(value)));
+            self.err(
+                path,
+                format!("{op} applies to text, found {}", kind_name(value)),
+            );
             return;
         };
         let inner = match crate::text_encoding::decode(encoding, t) {
@@ -480,39 +705,67 @@ impl<'m> Ctx<'m> {
     fn check_bits(&mut self, value: &Value, bits: &[u64], path: &mut Vec<PathSeg>) {
         let set: Vec<u64> = match value {
             Value::Uint(n) => (0..64).filter(|i| n >> i & 1 == 1).collect(),
-            Value::Bytes(b) => b.iter().enumerate()
-                .flat_map(|(i, byte)| (0..8).filter(move |j| byte >> j & 1 == 1).map(move |j| i as u64 * 8 + j))
+            Value::Bytes(b) => b
+                .iter()
+                .enumerate()
+                .flat_map(|(i, byte)| {
+                    (0..8)
+                        .filter(move |j| byte >> j & 1 == 1)
+                        .map(move |j| i as u64 * 8 + j)
+                })
                 .collect(),
             // JSON has no byte strings: they are base64url text.
             Value::Text(t) => match decode_base64url(t) {
                 Some(b) => return self.check_bits(&Value::Bytes(b), bits, path),
                 None => {
-                    self.err(path, "expected an unsigned integer or byte string for .bits".to_string());
+                    self.err(
+                        path,
+                        "expected an unsigned integer or byte string for .bits".to_string(),
+                    );
                     return;
                 }
             },
             other => {
-                self.err(path, format!("expected an unsigned integer or byte string for .bits, found {}", kind_name(other)));
+                self.err(
+                    path,
+                    format!(
+                        "expected an unsigned integer or byte string for .bits, found {}",
+                        kind_name(other)
+                    ),
+                );
                 return;
             }
         };
         if let Some(b) = set.iter().find(|b| !bits.contains(b)) {
-            self.err(path, format!("bit {b} is set, but .bits allows only {bits:?}"));
+            self.err(
+                path,
+                format!("bit {b} is set, but .bits allows only {bits:?}"),
+            );
         }
     }
 
-    fn check_size(&mut self, prim: &Option<Primitive>, value: &Value, min: Option<usize>, max: Option<usize>, path: &mut Vec<PathSeg>) {
+    fn check_size(
+        &mut self,
+        prim: &Option<Primitive>,
+        value: &Value,
+        min: Option<usize>,
+        max: Option<usize>,
+        path: &mut Vec<PathSeg>,
+    ) {
         // `.size` on an integer bounds its byte-width representation, not a
         // container length (RFC 8610 §3.8.1), matching the semantics
         // `backend-c`'s codegen already assumes for numeric `.size`.
         if matches!(prim, Some(Primitive::Uint) | Some(Primitive::Int)) {
             let n: Option<i128> = match value {
                 Value::Uint(u) => Some(*u as i128),
-                Value::Int(i)  => Some(*i as i128),
+                Value::Int(i) => Some(*i as i128),
                 _ => None,
             };
             let Some(n) = n else {
-                self.err(path, format!("expected an integer, found {}", kind_name(value)));
+                self.err(
+                    path,
+                    format!("expected an integer, found {}", kind_name(value)),
+                );
                 return;
             };
             if let Some(bytes) = max {
@@ -520,7 +773,10 @@ impl<'m> Ctx<'m> {
                 let (lo, hi) = if matches!(prim, Some(Primitive::Uint)) {
                     (0i128, (1i128 << bits) - 1)
                 } else {
-                    (-(1i128 << (bits.saturating_sub(1))), (1i128 << bits.saturating_sub(1)) - 1)
+                    (
+                        -(1i128 << (bits.saturating_sub(1))),
+                        (1i128 << bits.saturating_sub(1)) - 1,
+                    )
                 };
                 if n < lo || n > hi {
                     self.err(path, format!("value {n} does not fit in {bytes} byte(s)"));
@@ -537,7 +793,10 @@ impl<'m> Ctx<'m> {
             },
             Value::Array(a) => a.len(),
             _ => {
-                self.err(path, format!(".size constraint does not apply to {}", kind_name(value)));
+                self.err(
+                    path,
+                    format!(".size constraint does not apply to {}", kind_name(value)),
+                );
                 return;
             }
         };
@@ -554,15 +813,25 @@ impl<'m> Ctx<'m> {
         }
     }
 
-    fn check_range(&mut self, value: &Value, min: Option<i128>, max: Option<i128>, inclusive: bool, path: &mut Vec<PathSeg>) {
+    fn check_range(
+        &mut self,
+        value: &Value,
+        min: Option<i128>,
+        max: Option<i128>,
+        inclusive: bool,
+        path: &mut Vec<PathSeg>,
+    ) {
         let n: Option<i128> = match value {
             Value::Uint(u) => Some(*u as i128),
-            Value::Int(i)  => Some(*i as i128),
+            Value::Int(i) => Some(*i as i128),
             Value::Float(f) | Value::SizedFloat(f, _) => Some(*f as i128),
             _ => None,
         };
         let Some(n) = n else {
-            self.err(path, format!("expected a number, found {}", kind_name(value)));
+            self.err(
+                path,
+                format!("expected a number, found {}", kind_name(value)),
+            );
             return;
         };
         // The lower bound of a CDDL range (`lo..hi` / `lo...hi`) is always
@@ -581,15 +850,25 @@ impl<'m> Ctx<'m> {
         }
     }
 
-    fn check_range_f64(&mut self, value: &Value, min: Option<f64>, max: Option<f64>, inclusive: bool, path: &mut Vec<PathSeg>) {
+    fn check_range_f64(
+        &mut self,
+        value: &Value,
+        min: Option<f64>,
+        max: Option<f64>,
+        inclusive: bool,
+        path: &mut Vec<PathSeg>,
+    ) {
         let n: Option<f64> = match value {
             Value::Uint(u) => Some(*u as f64),
-            Value::Int(i)  => Some(*i as f64),
+            Value::Int(i) => Some(*i as f64),
             Value::Float(f) | Value::SizedFloat(f, _) => Some(*f),
             _ => None,
         };
         let Some(n) = n else {
-            self.err(path, format!("expected a number, found {}", kind_name(value)));
+            self.err(
+                path,
+                format!("expected a number, found {}", kind_name(value)),
+            );
             return;
         };
         if let Some(min) = min {
@@ -608,13 +887,19 @@ impl<'m> Ctx<'m> {
 
     fn check_regexp(&mut self, value: &Value, pattern: &str, path: &mut Vec<PathSeg>) {
         let Value::Text(s) = value else {
-            self.err(path, format!(".regexp constraint does not apply to {}", kind_name(value)));
+            self.err(
+                path,
+                format!(".regexp constraint does not apply to {}", kind_name(value)),
+            );
             return;
         };
         let re = match regex::Regex::new(pattern) {
             Ok(re) => re,
             Err(e) => {
-                self.err(path, format!("schema error: invalid .regexp pattern '{pattern}': {e}"));
+                self.err(
+                    path,
+                    format!("schema error: invalid .regexp pattern '{pattern}': {e}"),
+                );
                 return;
             }
         };
@@ -623,18 +908,33 @@ impl<'m> Ctx<'m> {
         }
     }
 
-    fn check_cbor_embedded(&mut self, value: &Value, inner: &TypeRef, is_seq: bool, path: &mut Vec<PathSeg>) {
+    fn check_cbor_embedded(
+        &mut self,
+        value: &Value,
+        inner: &TypeRef,
+        is_seq: bool,
+        path: &mut Vec<PathSeg>,
+    ) {
         let bytes: Vec<u8> = match value {
             Value::Bytes(b) => b.clone(),
             Value::Text(s) => match decode_base64url(s) {
                 Some(b) => b,
                 None => {
-                    self.err(path, "expected base64url-encoded bytes for embedded CBOR".to_owned());
+                    self.err(
+                        path,
+                        "expected base64url-encoded bytes for embedded CBOR".to_owned(),
+                    );
                     return;
                 }
             },
             _ => {
-                self.err(path, format!(".cbor/.cborseq constraint does not apply to {}", kind_name(value)));
+                self.err(
+                    path,
+                    format!(
+                        ".cbor/.cborseq constraint does not apply to {}",
+                        kind_name(value)
+                    ),
+                );
                 return;
             }
         };
@@ -659,20 +959,35 @@ impl<'m> Ctx<'m> {
     }
 }
 
-fn check_cardinality(occ: &Occurrence, len: usize, name: &str, ctx: &mut Ctx, path: &mut Vec<PathSeg>) {
+fn check_cardinality(
+    occ: &Occurrence,
+    len: usize,
+    name: &str,
+    ctx: &mut Ctx,
+    path: &mut Vec<PathSeg>,
+) {
     match occ {
         Occurrence::Required | Occurrence::Optional | Occurrence::ZeroOrMore { .. } => {}
         Occurrence::OneOrMore { .. } => {
             if len < 1 {
-                ctx.err(path, format!("'{name}' requires at least 1 element, found 0"));
+                ctx.err(
+                    path,
+                    format!("'{name}' requires at least 1 element, found 0"),
+                );
             }
         }
         Occurrence::Bounded { min, max, .. } => {
             if (len as u32) < *min {
-                ctx.err(path, format!("'{name}' requires at least {min} element(s), found {len}"));
+                ctx.err(
+                    path,
+                    format!("'{name}' requires at least {min} element(s), found {len}"),
+                );
             } else if let Some(max) = max {
                 if (len as u32) > *max {
-                    ctx.err(path, format!("'{name}' allows at most {max} element(s), found {len}"));
+                    ctx.err(
+                        path,
+                        format!("'{name}' allows at most {max} element(s), found {len}"),
+                    );
                 }
             }
         }
@@ -711,7 +1026,9 @@ fn literal_eq(lit: &LiteralValue, value: &Value) -> bool {
 }
 
 fn decode_base64url(s: &str) -> Option<Vec<u8>> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .ok()
 }
 
 /// A map key as shown in an error path (`{x}`, `{3}`).
@@ -719,7 +1036,7 @@ fn key_label(v: &Value) -> String {
     match v {
         Value::Text(s) => s.clone(),
         Value::Uint(n) => n.to_string(),
-        Value::Int(n)  => n.to_string(),
+        Value::Int(n) => n.to_string(),
         other => kind_name(other).to_owned(),
     }
 }
@@ -733,49 +1050,49 @@ fn describe_key(v: &Value) -> String {
 
 fn describe_literal(lit: &LiteralValue) -> String {
     match lit {
-        LiteralValue::Bool(b)  => b.to_string(),
-        LiteralValue::Null     => "null".to_owned(),
-        LiteralValue::Uint(n)  => n.to_string(),
-        LiteralValue::Int(n)   => n.to_string(),
+        LiteralValue::Bool(b) => b.to_string(),
+        LiteralValue::Null => "null".to_owned(),
+        LiteralValue::Uint(n) => n.to_string(),
+        LiteralValue::Int(n) => n.to_string(),
         LiteralValue::Float(f) => f.to_string(),
         LiteralValue::Bytes(_) => "<bytes>".to_owned(),
-        LiteralValue::Text(s)  => format!("'{s}'"),
+        LiteralValue::Text(s) => format!("'{s}'"),
     }
 }
 
 fn kind_name(v: &Value) -> &'static str {
     match v {
-        Value::Null       => "null",
-        Value::Bool(_)    => "bool",
-        Value::Uint(_)    => "uint",
-        Value::Int(_)     => "int",
-        Value::Float(_)   => "float",
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Uint(_) => "uint",
+        Value::Int(_) => "int",
+        Value::Float(_) => "float",
         Value::SizedFloat(_, 16) => "float16",
         Value::SizedFloat(_, 32) => "float32",
         Value::SizedFloat(..) => "float64",
-        Value::Undefined  => "undefined",
-        Value::Simple(_)  => "simple value",
-        Value::Text(_)    => "text",
-        Value::Bytes(_)   => "bytes",
-        Value::Array(_)   => "array",
-        Value::Map(_)     => "map",
-        Value::Tag(..)    => "tagged value",
+        Value::Undefined => "undefined",
+        Value::Simple(_) => "simple value",
+        Value::Text(_) => "text",
+        Value::Bytes(_) => "bytes",
+        Value::Array(_) => "array",
+        Value::Map(_) => "map",
+        Value::Tag(..) => "tagged value",
     }
 }
 
 fn primitive_name(p: &Primitive) -> &'static str {
     match p {
-        Primitive::Bool      => "bool",
-        Primitive::Null      => "null",
+        Primitive::Bool => "bool",
+        Primitive::Null => "null",
         Primitive::Undefined => "undefined",
-        Primitive::Uint      => "uint",
-        Primitive::Int       => "int",
-        Primitive::Float16   => "float16",
-        Primitive::Float32   => "float32",
-        Primitive::Float64   => "float64",
-        Primitive::Float     => "float",
-        Primitive::Bstr      => "bstr",
-        Primitive::Tstr      => "tstr",
-        Primitive::Any       => "any",
+        Primitive::Uint => "uint",
+        Primitive::Int => "int",
+        Primitive::Float16 => "float16",
+        Primitive::Float32 => "float32",
+        Primitive::Float64 => "float64",
+        Primitive::Float => "float",
+        Primitive::Bstr => "bstr",
+        Primitive::Tstr => "tstr",
+        Primitive::Any => "any",
     }
 }

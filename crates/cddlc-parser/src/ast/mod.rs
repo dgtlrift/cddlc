@@ -20,7 +20,7 @@ use smol_str::SmolStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: usize,
-    pub end:   usize,
+    pub end: usize,
 }
 
 impl Span {
@@ -31,7 +31,7 @@ impl Span {
     pub fn merge(self, other: Span) -> Self {
         Self {
             start: self.start.min(other.start),
-            end:   self.end.max(other.end),
+            end: self.end.max(other.end),
         }
     }
 }
@@ -58,7 +58,10 @@ impl<T> Spanned<T> {
     }
 
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Spanned<U> {
-        Spanned { node: f(self.node), span: self.span }
+        Spanned {
+            node: f(self.node),
+            span: self.span,
+        }
     }
 }
 

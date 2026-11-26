@@ -646,14 +646,18 @@ fn test_fields_named_like_decoder_locals() {
 /// rejects `false` whether the member is required or optional.
 #[test]
 fn test_member_typed_true_is_literal_true() {
-    let src = "flag-map = { id: uint, always: true, ? present: true, ? off: false, ? enabled: bool }";
+    let src =
+        "flag-map = { id: uint, always: true, ? present: true, ? off: false, ? enabled: bool }";
     for out in [compile(src), compile_json(src)] {
         let ts = &out.source;
         assert!(ts.contains("readonly always: true;"), "{ts}");
         assert!(ts.contains("readonly present?: true;"), "{ts}");
         assert!(ts.contains("readonly off?: false;"), "{ts}");
         assert!(ts.contains("readonly enabled?: boolean;"), "{ts}");
-        assert!(ts.contains("function expectBoolLiteral<T extends boolean>"), "{ts}");
+        assert!(
+            ts.contains("function expectBoolLiteral<T extends boolean>"),
+            "{ts}"
+        );
         assert!(ts.contains(", true, \"present\")"), "{ts}");
         assert!(!ts.contains("Uint8Array;"), "{ts}");
         // The roundtrip tests only ever build the allowed value.
@@ -676,8 +680,16 @@ fn test_bool_literal_helper_only_when_used() {
 fn test_package_json_runs_jest_as_esm_on_tests_only() {
     for out in [compile("x = uint"), compile_json("x = uint")] {
         let pj = &out.package_json;
-        assert!(pj.contains(r#""test":  "node --experimental-vm-modules node_modules/jest/bin/jest.js""#), "{pj}");
-        assert!(pj.contains(r#""roots":         ["<rootDir>/tests"]"#), "{pj}");
+        assert!(
+            pj.contains(
+                r#""test":  "node --experimental-vm-modules node_modules/jest/bin/jest.js""#
+            ),
+            "{pj}"
+        );
+        assert!(
+            pj.contains(r#""roots":         ["<rootDir>/tests"]"#),
+            "{pj}"
+        );
     }
 }
 
@@ -686,9 +698,17 @@ fn test_package_json_runs_jest_as_esm_on_tests_only() {
 #[test]
 fn test_tagged_alias_test_imports_its_validator() {
     let out = compile("timestamp = #6.1(uint)");
-    assert!(out.source.contains("export function validateTimestamp("), "{}", out.source);
+    assert!(
+        out.source.contains("export function validateTimestamp("),
+        "{}",
+        out.source
+    );
     assert!(out.tests.contains("validateTimestamp(0n)"), "{}", out.tests);
-    let import = out.tests.lines().find(|l| l.starts_with("import {")).unwrap();
+    let import = out
+        .tests
+        .lines()
+        .find(|l| l.starts_with("import {"))
+        .unwrap();
     assert!(import.contains("validateTimestamp"), "{import}");
 }
 
@@ -711,13 +731,30 @@ fn test_cbor_tags_decode_through_cbor_tagged() {
     );
     let src = &out.source;
     assert!(src.contains("export class CborTagged {"), "{src}");
-    assert!(src.contains("const CBOR_DECODE_OPTIONS = { tags: cborTagDecoders([\n  1,\n  100,\n  200,\n]) };"), "{src}");
-    assert!(src.contains("return fromCborOuter(decodeCbor(data));"), "{src}");
+    assert!(
+        src.contains(
+            "const CBOR_DECODE_OPTIONS = { tags: cborTagDecoders([\n  1,\n  100,\n  200,\n]) };"
+        ),
+        "{src}"
+    );
+    assert!(
+        src.contains("return fromCborOuter(decodeCbor(data));"),
+        "{src}"
+    );
 
     // A top-level tag, a tagged member, and a tagged array are each unwrapped.
-    assert!(src.contains("const map: unknown = expectTag(raw, 100, \"TaggedSensor\");"), "{src}");
-    assert!(src.contains("expectTag(m[\"stamp\"], 1, 'tagged value')"), "{src}");
-    assert!(src.contains("const arr: unknown = expectTag(raw, 200, \"Stamps\");"), "{src}");
+    assert!(
+        src.contains("const map: unknown = expectTag(raw, 100, \"TaggedSensor\");"),
+        "{src}"
+    );
+    assert!(
+        src.contains("expectTag(m[\"stamp\"], 1, 'tagged value')"),
+        "{src}"
+    );
+    assert!(
+        src.contains("const arr: unknown = expectTag(raw, 200, \"Stamps\");"),
+        "{src}"
+    );
 
     // Nested named values are converted in place, never re-encoded.
     assert!(src.contains("fromCborTaggedSensor(m[\"inner\"])"), "{src}");
@@ -746,15 +783,40 @@ fn test_int_literal_enum_matches_by_value() {
     let src = &cbor.source;
     assert!(src.contains("{ readonly kind: \"Variant2\" } |"), "{src}");
     assert!(src.contains("enc.int(2n); break;"), "{src}");
-    assert!(src.contains("typeof inner === 'number' && Number.isInteger(inner)"), "{src}");
-    assert!(src.contains("case 3n: return { kind: \"Variant3\" };"), "{src}");
-    assert!(cbor.tests.contains("{ kind: \"Variant1\" } as Priority"), "{}", cbor.tests);
+    assert!(
+        src.contains("typeof inner === 'number' && Number.isInteger(inner)"),
+        "{src}"
+    );
+    assert!(
+        src.contains("case 3n: return { kind: \"Variant3\" };"),
+        "{src}"
+    );
+    assert!(
+        cbor.tests.contains("{ kind: \"Variant1\" } as Priority"),
+        "{}",
+        cbor.tests
+    );
     assert!(!cbor.tests.contains("value: 42n"), "{}", cbor.tests);
-    assert!(cbor.tests.contains("decodePriority(new Uint8Array([0]))).toThrow()"), "{}", cbor.tests);
+    assert!(
+        cbor.tests
+            .contains("decodePriority(new Uint8Array([0]))).toThrow()"),
+        "{}",
+        cbor.tests
+    );
 
     let json = compile_json("priority = 1 / 2 / 3");
-    assert!(json.source.contains("return new TextEncoder().encode(\"2\");"), "{}", json.source);
-    assert!(json.source.contains("case 3: return { kind: \"Variant3\" };"), "{}", json.source);
+    assert!(
+        json.source
+            .contains("return new TextEncoder().encode(\"2\");"),
+        "{}",
+        json.source
+    );
+    assert!(
+        json.source
+            .contains("case 3: return { kind: \"Variant3\" };"),
+        "{}",
+        json.source
+    );
 }
 
 /// Issue #28: the explicit float32 test value must be exact as a 32-bit float.
@@ -776,7 +838,10 @@ fn test_named_member_test_values_are_built_from_definitions() {
     );
     let t = &out.tests;
     assert!(t.contains("sensor: { name: '', note: undefined },"), "{t}");
-    assert!(t.contains("sensor: { name: 'hello', note: undefined },"), "{t}");
+    assert!(
+        t.contains("sensor: { name: 'hello', note: undefined },"),
+        "{t}"
+    );
     assert!(t.contains("key: validateKey(new Uint8Array(4)),"), "{t}");
     assert!(t.contains("level: { kind: \"Low\" } as Level,"), "{t}");
     assert!(!t.contains("{} as Sensor"), "{t}");
@@ -796,7 +861,12 @@ fn test_cbor_float_enum_variant_decodes() {
     let out = compile("level = float64 / \"off\"");
     let src = &out.source;
     assert!(src.contains("if (inner instanceof CborFloat || typeof inner === 'number') {\n    return { kind: \"Float64\", value: Number(inner) };"), "{src}");
-    assert!(out.tests.contains("{ kind: \"Float64\", value: 1.5 } as Level"), "{}", out.tests);
+    assert!(
+        out.tests
+            .contains("{ kind: \"Float64\", value: 1.5 } as Level"),
+        "{}",
+        out.tests
+    );
 }
 
 /// Issue #52: a module with a mixed integer/float enum decodes floats through a
@@ -807,13 +877,31 @@ fn test_mixed_int_float_enum_marks_floats() {
     let src = &mixed.source;
     assert!(src.contains("import { encode as cborgEncode, decode as cborgDecode, Tokenizer, Token, Type } from 'cborg';"), "{src}");
     assert!(src.contains("class FloatMarkingTokenizer {"), "{src}");
-    assert!(src.contains("return { ...CBOR_DECODE_OPTIONS, tokenizer: new FloatMarkingTokenizer(data) };"), "{src}");
-    assert!(src.contains("if (inner instanceof CborFloat || typeof inner === 'number') {"), "{src}");
+    assert!(
+        src.contains(
+            "return { ...CBOR_DECODE_OPTIONS, tokenizer: new FloatMarkingTokenizer(data) };"
+        ),
+        "{src}"
+    );
+    assert!(
+        src.contains("if (inner instanceof CborFloat || typeof inner === 'number') {"),
+        "{src}"
+    );
 
     // Without a mixed enum, decoding is unchanged and cborg's extras aren't imported.
     let plain = compile("level = float64 / \"off\"");
-    assert!(!plain.source.contains("FloatMarkingTokenizer"), "{}", plain.source);
-    assert!(plain.source.contains("import { encode as cborgEncode, decode as cborgDecode } from 'cborg';"), "{}", plain.source);
+    assert!(
+        !plain.source.contains("FloatMarkingTokenizer"),
+        "{}",
+        plain.source
+    );
+    assert!(
+        plain
+            .source
+            .contains("import { encode as cborgEncode, decode as cborgDecode } from 'cborg';"),
+        "{}",
+        plain.source
+    );
 }
 
 /// Issue #64: an absent optional member is left out of the CBOR map, and the map
@@ -822,10 +910,19 @@ fn test_mixed_int_float_enum_marks_floats() {
 fn test_cbor_optional_member_omitted_when_absent() {
     let g = compile("reading = { id: uint, ? unit: tstr, ? note: tstr }");
     assert!(g.source.contains("enc.startMap(1 + (val.unit !== undefined ? 1 : 0) + (val.note !== undefined ? 1 : 0));"), "{}", g.source);
-    assert!(g.source.contains("if (val.unit !== undefined) {\n    enc.text(\"unit\");"), "{}", g.source);
+    assert!(
+        g.source
+            .contains("if (val.unit !== undefined) {\n    enc.text(\"unit\");"),
+        "{}",
+        g.source
+    );
     assert!(!g.source.contains("enc.null()"), "{}", g.source);
     let fixed = compile("reading = { id: uint }");
-    assert!(fixed.source.contains("enc.startMap(1);"), "{}", fixed.source);
+    assert!(
+        fixed.source.contains("enc.startMap(1);"),
+        "{}",
+        fixed.source
+    );
 }
 
 /// The generated package targets cborg 7, jest 30 and TypeScript 6. TypeScript 6
@@ -834,23 +931,75 @@ fn test_cbor_optional_member_omitted_when_absent() {
 #[test]
 fn test_package_targets_cborg7_ts6() {
     let g = compile("t = #6.1(uint)");
-    assert!(g.package_json.contains("\"cborg\": \"^7.0.0\""), "{}", g.package_json);
-    assert!(g.package_json.contains("\"jest\":           \"^30.0.0\""), "{}", g.package_json);
-    assert!(g.package_json.contains("\"@types/node\":    \"^24.0.0\""), "{}", g.package_json);
-    assert!(g.package_json.contains("\"typescript\":     \"^6.0.0\""), "{}", g.package_json);
-    assert!(g.tsconfig.contains("\"types\":            [\"node\", \"jest\"]"), "{}", g.tsconfig);
-    assert!(g.tsconfig.contains("\"esModuleInterop\":  true"), "{}", g.tsconfig);
-    assert!(g.source.contains("(decode: () => unknown) => new CborTagged(tag, decode())"), "{}", g.source);
+    assert!(
+        g.package_json.contains("\"cborg\": \"^7.0.0\""),
+        "{}",
+        g.package_json
+    );
+    assert!(
+        g.package_json.contains("\"jest\":           \"^30.0.0\""),
+        "{}",
+        g.package_json
+    );
+    assert!(
+        g.package_json.contains("\"@types/node\":    \"^24.0.0\""),
+        "{}",
+        g.package_json
+    );
+    assert!(
+        g.package_json.contains("\"typescript\":     \"^6.0.0\""),
+        "{}",
+        g.package_json
+    );
+    assert!(
+        g.tsconfig
+            .contains("\"types\":            [\"node\", \"jest\"]"),
+        "{}",
+        g.tsconfig
+    );
+    assert!(
+        g.tsconfig.contains("\"esModuleInterop\":  true"),
+        "{}",
+        g.tsconfig
+    );
+    assert!(
+        g.source
+            .contains("(decode: () => unknown) => new CborTagged(tag, decode())"),
+        "{}",
+        g.source
+    );
 }
 
 #[test]
 fn test_size_range_alias_test_values_respect_the_range() {
     // Valid: the shortest allowed; invalid: one shorter (dgtlrift/cddlc#123's names.cddl).
-    let pkg = compile("owner = tstr .size (1..16)\nkey = bstr .size (4..8)\nany-len = tstr .size (0..3)\n");
-    assert!(pkg.tests.contains("validateOwner('a'.repeat(1))"), "{}", pkg.tests);
-    assert!(pkg.tests.contains("validateOwner('a'.repeat(0) as any)"), "{}", pkg.tests);
-    assert!(pkg.tests.contains("validateKey(new Uint8Array(4))"), "{}", pkg.tests);
-    assert!(pkg.tests.contains("validateKey(new Uint8Array(3) as any)"), "{}", pkg.tests);
+    let pkg = compile(
+        "owner = tstr .size (1..16)\nkey = bstr .size (4..8)\nany-len = tstr .size (0..3)\n",
+    );
+    assert!(
+        pkg.tests.contains("validateOwner('a'.repeat(1))"),
+        "{}",
+        pkg.tests
+    );
+    assert!(
+        pkg.tests.contains("validateOwner('a'.repeat(0) as any)"),
+        "{}",
+        pkg.tests
+    );
+    assert!(
+        pkg.tests.contains("validateKey(new Uint8Array(4))"),
+        "{}",
+        pkg.tests
+    );
+    assert!(
+        pkg.tests.contains("validateKey(new Uint8Array(3) as any)"),
+        "{}",
+        pkg.tests
+    );
     // No shorter size: one longer.
-    assert!(pkg.tests.contains("validateAnyLen('a'.repeat(4) as any)"), "{}", pkg.tests);
+    assert!(
+        pkg.tests.contains("validateAnyLen('a'.repeat(4) as any)"),
+        "{}",
+        pkg.tests
+    );
 }

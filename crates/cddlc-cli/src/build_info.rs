@@ -14,9 +14,12 @@ pub const VERSION: &str = env!("CDDLC_BUILD_RELEASE");
 /// `cddlc --version --verbose` (`-V` long form).
 pub const LONG_VERSION: &str = concat!(
     env!("CDDLC_BUILD_RELEASE"),
-    "\ncommit: ", env!("CDDLC_BUILD_COMMIT"),
-    "\nbranch: ", env!("CDDLC_BUILD_BRANCH"),
-    "\nremote: ", env!("CDDLC_BUILD_REMOTE"),
+    "\ncommit: ",
+    env!("CDDLC_BUILD_COMMIT"),
+    "\nbranch: ",
+    env!("CDDLC_BUILD_BRANCH"),
+    "\nremote: ",
+    env!("CDDLC_BUILD_REMOTE"),
 );
 
 /// The lines after `@generated` in every generated file's header: which cddlc made
@@ -29,7 +32,12 @@ pub fn provenance(inputs: &[std::path::PathBuf]) -> Vec<String> {
     ];
     for p in inputs {
         lines.push(match std::fs::read(p) {
-            Ok(bytes) => format!("source {} (sha256 {}, {} bytes)", p.display(), sha256_hex(&bytes), bytes.len()),
+            Ok(bytes) => format!(
+                "source {} (sha256 {}, {} bytes)",
+                p.display(),
+                sha256_hex(&bytes),
+                bytes.len()
+            ),
             Err(_) => format!("source {}", p.display()),
         });
     }
@@ -41,7 +49,9 @@ pub fn provenance(inputs: &[std::path::PathBuf]) -> Vec<String> {
 pub fn boilerplate(inputs: &[std::path::PathBuf]) -> Vec<String> {
     let mut blocks: Vec<Vec<String>> = Vec::new();
     for p in inputs {
-        let Ok(src) = std::fs::read_to_string(p) else { continue };
+        let Ok(src) = std::fs::read_to_string(p) else {
+            continue;
+        };
         let block = cddlc_codegen::cddl_boilerplate(&src);
         if !block.is_empty() && !blocks.contains(&block) {
             blocks.push(block);
@@ -52,5 +62,8 @@ pub fn boilerplate(inputs: &[std::path::PathBuf]) -> Vec<String> {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }

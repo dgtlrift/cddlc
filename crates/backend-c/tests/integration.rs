@@ -1,3 +1,7 @@
+use backend_c::CBackend;
+use cddlc_codegen::{Backend, CodegenOptions};
+use cddlc_ir::lower;
+use cddlc_parser::parse_cddl;
 /// Integration tests for backend-c.
 ///
 /// The backend emits 5 files:
@@ -6,20 +10,15 @@
 ///   files[2] = compat/endian.h
 ///   files[3] = src/<module>.c
 ///   files[4] = test/test_roundtrip.c
-
 use std::path::PathBuf;
-use backend_c::CBackend;
-use cddlc_codegen::{Backend, CodegenOptions};
-use cddlc_ir::lower;
-use cddlc_parser::parse_cddl;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 struct GeneratedCrate {
-    cmake:      String,
-    header:     String,
-    source:     String,
-    tests:      String,
+    cmake: String,
+    header: String,
+    source: String,
+    tests: String,
 }
 
 fn compile(src: &str) -> GeneratedCrate {
@@ -27,16 +26,16 @@ fn compile(src: &str) -> GeneratedCrate {
 }
 
 fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
-    let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let out     = CBackend.generate(&lowered.module, &opts).expect("generate");
+    let out = CBackend.generate(&lowered.module, &opts).expect("generate");
     assert_eq!(out.files.len(), 5, "expected 5 output files");
     GeneratedCrate {
-        cmake:  out.files[0].content.clone(),
+        cmake: out.files[0].content.clone(),
         header: out.files[1].content.clone(),
         // files[2] = compat/endian.h (platform shim, not tested here)
         source: out.files[3].content.clone(),
-        tests:  out.files[4].content.clone(),
+        tests: out.files[4].content.clone(),
     }
 }
 
@@ -44,10 +43,10 @@ fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
 
 #[test]
 fn test_emits_four_files() {
-    let opts   = CodegenOptions::default();
+    let opts = CodegenOptions::default();
     let parsed = parse_cddl("x = uint", PathBuf::from("t.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
-    let out    = CBackend.generate(&lowered.module, &opts).unwrap();
+    let out = CBackend.generate(&lowered.module, &opts).unwrap();
     assert_eq!(out.files.len(), 5);
     assert!(out.files[0].path.ends_with("CMakeLists.txt"));
     assert!(out.files[1].path.ends_with(".h"));
@@ -58,10 +57,10 @@ fn test_emits_four_files() {
 
 #[test]
 fn test_crate_dir_named_after_module() {
-    let opts   = CodegenOptions::default();
+    let opts = CodegenOptions::default();
     let parsed = parse_cddl("x = uint", PathBuf::from("sensor.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
-    let out    = CBackend.generate(&lowered.module, &opts).unwrap();
+    let out = CBackend.generate(&lowered.module, &opts).unwrap();
     assert!(out.files[0].path.starts_with("sensor-cbor/"));
     assert!(out.files[1].path.starts_with("sensor-cbor/include/"));
     assert!(out.files[2].path.starts_with("sensor-cbor/compat/"));
@@ -300,7 +299,12 @@ fn test_struct_decode_map_entry() {
 fn test_unknown_field_rejected() {
     // An unknown member is reported, then the map is rejected (dgtlrift/cddlc#102).
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("cb->on_unknown_field(ctx, uk);\n            }\n            return -1;"), "{}", g.source);
+    assert!(
+        g.source
+            .contains("cb->on_unknown_field(ctx, uk);\n            }\n            return -1;"),
+        "{}",
+        g.source
+    );
 }
 
 #[test]
@@ -357,14 +361,16 @@ fn test_roundtrip_has_main() {
 
 #[test]
 fn test_iot_schema() {
-    let g = compile(r#"
+    let g = compile(
+        r#"
 sensor-message = {
     version:   uint,
     device-id: device-id,
     timestamp: #6.1(uint),
 }
 device-id = tstr .size 16
-"#);
+"#,
+    );
     assert!(g.header.contains("sensor_message_t"));
     assert!(g.header.contains("device_id_t"));
     assert!(g.source.contains("nanocbor_fmt_tag") || g.source.contains("1"));
@@ -379,7 +385,10 @@ fn test_literal_members_use_their_literal_in_tests() {
     assert!(t.contains("original.always = true;"), "{t}");
     assert!(t.contains("original.never = false;"), "{t}");
     assert!(t.contains("original.version = 1U;"), "{t}");
-    assert!(t.contains("static const char _kind_str[] = \"kernel\";"), "{t}");
+    assert!(
+        t.contains("static const char _kind_str[] = \"kernel\";"),
+        "{t}"
+    );
     assert!(t.contains("original.kind.len = 6;"), "{t}");
 }
 
@@ -391,17 +400,34 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(g.source.contains("\"free-space\""), "{}", g.source);
     assert!(g.source.contains("\"Log_Distance\""), "{}", g.source);
     assert!(!g.source.contains("\"freespace\""), "{}", g.source);
-    assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
+    assert!(
+        !g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""),
+        "{}",
+        g.source
+    );
 }
 
 /// The C JSON CMake project pins cJSON to a commit instead of tracking `master`.
 #[test]
 fn test_json_cmake_pins_cjson() {
-    let parsed = cddlc_parser::parse_cddl("x = { a: uint }", std::path::PathBuf::from("test.cddl")).expect("parse");
+    let parsed = cddlc_parser::parse_cddl("x = { a: uint }", std::path::PathBuf::from("test.cddl"))
+        .expect("parse");
     let lowered = cddlc_ir::lower(&parsed.value, 16, 64).expect("lower");
-    let opts = cddlc_codegen::CodegenOptions { format: cddlc_codegen::Format::Json, ..Default::default() };
-    let out = cddlc_codegen::Backend::generate(&backend_c::CBackend, &lowered.module, &opts).expect("generate");
-    let cmake = &out.files.iter().find(|f| f.path.ends_with("CMakeLists.txt")).expect("cmake").content;
-    assert!(cmake.contains("GIT_TAG        6d9f2443ab071f86e5d9b43025a40929ec41c46c"), "{cmake}");
+    let opts = cddlc_codegen::CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..Default::default()
+    };
+    let out = cddlc_codegen::Backend::generate(&backend_c::CBackend, &lowered.module, &opts)
+        .expect("generate");
+    let cmake = &out
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("CMakeLists.txt"))
+        .expect("cmake")
+        .content;
+    assert!(
+        cmake.contains("GIT_TAG        6d9f2443ab071f86e5d9b43025a40929ec41c46c"),
+        "{cmake}"
+    );
     assert!(!cmake.contains("GIT_TAG        master"), "{cmake}");
 }

@@ -5,7 +5,6 @@
 /// - Import resolution (single file, multi-file, @import chains)
 /// - End-to-end codegen (parse → IR → Rust output)
 /// - Error cases (missing files, cycles, bad lang)
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -37,11 +36,7 @@ fn run(args: &[&str]) -> (String, String, bool) {
 
 /// Run cddlc in --dry-run mode (no output files written).
 fn dry_run(input: &Path, extra: &[&str]) -> (String, String, bool) {
-    let mut args = vec![
-        "generate",
-        input.to_str().unwrap(),
-        "--dry-run",
-    ];
+    let mut args = vec!["generate", input.to_str().unwrap(), "--dry-run"];
     args.extend_from_slice(extra);
     run(&args)
 }
@@ -52,7 +47,8 @@ fn generate(input: &Path, extra: &[&str]) -> (TestDir, String, bool) {
     let mut args = vec![
         "generate",
         input.to_str().unwrap(),
-        "-o", dir.to_str().unwrap(),
+        "-o",
+        dir.to_str().unwrap(),
     ];
     args.extend_from_slice(extra);
     let (_, stderr, ok) = run(&args);
@@ -136,16 +132,31 @@ fn test_nonexistent_input_fails() {
 fn test_unsupported_lang_fails() {
     // clap rejects unknown enum values before our code runs
     let input = fixture("sensor.cddl");
-    let (_, stderr, ok) = run(&["generate", input.to_str().unwrap(), "--lang", "cobol", "--dry-run"]);
+    let (_, stderr, ok) = run(&[
+        "generate",
+        input.to_str().unwrap(),
+        "--lang",
+        "cobol",
+        "--dry-run",
+    ]);
     assert!(!ok);
-    assert!(stderr.contains("cobol") || stderr.contains("invalid") || stderr.contains("error"),
-        "expected error for unknown lang, got: {stderr}");
+    assert!(
+        stderr.contains("cobol") || stderr.contains("invalid") || stderr.contains("error"),
+        "expected error for unknown lang, got: {stderr}"
+    );
 }
 
 #[test]
 fn test_no_std_requires_rust() {
     let input = fixture("sensor.cddl");
-    let (_, stderr, ok) = run(&["generate", input.to_str().unwrap(), "--lang", "c", "--no-std", "--dry-run"]);
+    let (_, stderr, ok) = run(&[
+        "generate",
+        input.to_str().unwrap(),
+        "--lang",
+        "c",
+        "--no-std",
+        "--dry-run",
+    ]);
     assert!(!ok);
     assert!(stderr.contains("no-std") || stderr.contains("rust"));
 }
@@ -188,8 +199,10 @@ fn test_import_chain_dry_run() {
 fn test_import_chain_verbose_shows_both_files() {
     let (_, stderr, ok) = dry_run(&fixture("message.cddl"), &["--verbose"]);
     assert!(ok, "{stderr}");
-    assert!(stderr.contains("primitives.cddl") || stderr.contains("primitives"),
-        "expected primitives.cddl in verbose output, got: {stderr}");
+    assert!(
+        stderr.contains("primitives.cddl") || stderr.contains("primitives"),
+        "expected primitives.cddl in verbose output, got: {stderr}"
+    );
 }
 
 #[test]
@@ -208,10 +221,14 @@ fn test_include_dir_flag() {
 
     // Write a schema that imports primitives without a relative path
     let schema = tmp.join("test.cddl");
-    fs::write(&schema, r#"
+    fs::write(
+        &schema,
+        r#"
 ; @import "primitives.cddl"
 msg = { id: device-id, value: float32 }
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let (_, stderr, ok) = dry_run(&schema, &["--include-dir", tmp.to_str().unwrap()]);
     assert!(ok, "include-dir failed: {stderr}");
@@ -226,7 +243,11 @@ fn test_generates_rust_file() {
 
     // Should have written a crate with src/lib.rs
     let lib_rs = find_rs_recursive(&dir);
-    assert!(lib_rs.is_some(), "no lib.rs generated under {}", dir.display());
+    assert!(
+        lib_rs.is_some(),
+        "no lib.rs generated under {}",
+        dir.display()
+    );
 }
 
 #[test]
@@ -236,7 +257,10 @@ fn test_generated_file_contains_struct() {
 
     let rs_file = find_rs_file(&dir);
     let content = fs::read_to_string(&rs_file).unwrap();
-    assert!(content.contains("pub struct Sensor"), "expected Sensor struct in:\n{content}");
+    assert!(
+        content.contains("pub struct Sensor"),
+        "expected Sensor struct in:\n{content}"
+    );
 }
 
 #[test]
@@ -272,8 +296,10 @@ fn test_generated_array_type() {
     assert!(ok, "{stderr}");
 
     let content = fs::read_to_string(find_rs_file(&dir)).unwrap();
-    assert!(content.contains("Readings") || content.contains("readings"),
-        "expected array type in:\n{content}");
+    assert!(
+        content.contains("Readings") || content.contains("readings"),
+        "expected array type in:\n{content}"
+    );
 }
 
 #[test]
@@ -282,8 +308,14 @@ fn test_generated_tagged_types() {
     assert!(ok, "{stderr}");
 
     let content = fs::read_to_string(find_rs_file(&dir)).unwrap();
-    assert!(content.contains("Tag::new(1)"), "expected tag 1 in:\n{content}");
-    assert!(content.contains("Tag::new(0)"), "expected tag 0 in:\n{content}");
+    assert!(
+        content.contains("Tag::new(1)"),
+        "expected tag 1 in:\n{content}"
+    );
+    assert!(
+        content.contains("Tag::new(0)"),
+        "expected tag 0 in:\n{content}"
+    );
 }
 
 #[test]
@@ -293,8 +325,10 @@ fn test_no_std_flag_emits_no_std() {
 
     let content = fs::read_to_string(find_rs_file(&dir)).unwrap();
     // no_std is emitted as a cfg_attr feature gate so the crate works in both envs
-    assert!(content.contains("cfg_attr") && content.contains("no_std"),
-        "expected cfg_attr no_std in:\n{content}");
+    assert!(
+        content.contains("cfg_attr") && content.contains("no_std"),
+        "expected cfg_attr no_std in:\n{content}"
+    );
 }
 
 #[test]
@@ -333,7 +367,8 @@ fn test_output_dir_created() {
     let (_, stderr, ok) = run(&[
         "generate",
         input.to_str().unwrap(),
-        "-o", output.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
     ]);
     assert!(ok, "failed to create nested output dir: {stderr}");
     assert!(output.exists(), "output dir not created");
@@ -346,8 +381,10 @@ fn test_import_chain_codegen() {
 
     let content = fs::read_to_string(find_rs_file(&dir)).unwrap();
     // message.cddl defines sensor-message; primitives.cddl defines device-id etc.
-    assert!(content.contains("SensorMessage") || content.contains("sensor_message"),
-        "expected SensorMessage in:\n{content}");
+    assert!(
+        content.contains("SensorMessage") || content.contains("sensor_message"),
+        "expected SensorMessage in:\n{content}"
+    );
 }
 
 #[test]
@@ -361,7 +398,10 @@ fn test_max_array_flag() {
     assert!(ok, "{stderr}");
 
     let content = fs::read_to_string(find_rs_file(&dir)).unwrap();
-    assert!(content.contains(", 8>"), "expected capacity 8 in heapless::Vec:\n{content}");
+    assert!(
+        content.contains(", 8>"),
+        "expected capacity 8 in heapless::Vec:\n{content}"
+    );
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -369,8 +409,7 @@ fn test_max_array_flag() {
 fn find_rs_file(dir: &Path) -> PathBuf {
     // Output is now a crate: <dir>/<module>-cbor/src/lib.rs
     // Walk recursively to find lib.rs
-    find_rs_recursive(dir)
-        .unwrap_or_else(|| panic!("no lib.rs found under {}", dir.display()))
+    find_rs_recursive(dir).unwrap_or_else(|| panic!("no lib.rs found under {}", dir.display()))
 }
 
 fn find_rs_recursive(dir: &Path) -> Option<PathBuf> {
@@ -396,8 +435,11 @@ fn test_validate_json_ok() {
     fs::write(&data, r#"{"id":1,"label":"a","value":1.5}"#).unwrap();
 
     let (stdout, stderr, ok) = run(&[
-        "validate", "--cddl", fixture("sensor.cddl").to_str().unwrap(),
-        "--json", data.to_str().unwrap(),
+        "validate",
+        "--cddl",
+        fixture("sensor.cddl").to_str().unwrap(),
+        "--json",
+        data.to_str().unwrap(),
     ]);
     assert!(ok, "{stderr}");
     assert!(stdout.contains("OK"), "{stdout}");
@@ -411,12 +453,18 @@ fn test_validate_json_fail_exit_code_and_message() {
     fs::write(&data, r#"{"id":1,"label":"a"}"#).unwrap();
 
     let (stdout, _stderr, ok) = run(&[
-        "validate", "--cddl", fixture("sensor.cddl").to_str().unwrap(),
-        "--json", data.to_str().unwrap(),
+        "validate",
+        "--cddl",
+        fixture("sensor.cddl").to_str().unwrap(),
+        "--json",
+        data.to_str().unwrap(),
     ]);
     assert!(!ok, "expected non-zero exit for a failing validation");
     assert!(stdout.contains("FAIL"), "{stdout}");
-    assert!(stdout.contains("value"), "expected mention of missing field 'value':\n{stdout}");
+    assert!(
+        stdout.contains("value"),
+        "expected mention of missing field 'value':\n{stdout}"
+    );
 }
 
 #[test]
@@ -426,9 +474,13 @@ fn test_validate_explicit_type_flag() {
     fs::write(&data, r#""warn""#).unwrap();
 
     let (stdout, stderr, ok) = run(&[
-        "validate", "--cddl", fixture("sensor.cddl").to_str().unwrap(),
-        "--type", "status",
-        "--json", data.to_str().unwrap(),
+        "validate",
+        "--cddl",
+        fixture("sensor.cddl").to_str().unwrap(),
+        "--type",
+        "status",
+        "--json",
+        data.to_str().unwrap(),
     ]);
     assert!(ok, "{stderr}");
     assert!(stdout.contains("OK"), "{stdout}");
@@ -437,10 +489,15 @@ fn test_validate_explicit_type_flag() {
 #[test]
 fn test_validate_no_data_files_errors() {
     let (_, stderr, ok) = run(&[
-        "validate", "--cddl", fixture("sensor.cddl").to_str().unwrap(),
+        "validate",
+        "--cddl",
+        fixture("sensor.cddl").to_str().unwrap(),
     ]);
     assert!(!ok);
-    assert!(stderr.contains("--json") || stderr.contains("--cbor"), "{stderr}");
+    assert!(
+        stderr.contains("--json") || stderr.contains("--cbor"),
+        "{stderr}"
+    );
 }
 
 fn run_generate(input: &Path, extra: &[&str]) -> (TestDir, String, bool) {
@@ -448,7 +505,8 @@ fn run_generate(input: &Path, extra: &[&str]) -> (TestDir, String, bool) {
     let mut args = vec![
         "generate",
         input.to_str().unwrap(),
-        "-o", dir.to_str().unwrap(),
+        "-o",
+        dir.to_str().unwrap(),
     ];
     args.extend_from_slice(extra);
     let (_, stderr, ok) = run(&args);
@@ -476,7 +534,11 @@ fn generate_commented(extra: &[&str]) -> String {
         .args(extra)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let lib = fs::read_to_string(dir.join("out/t-cbor/src/lib.rs")).unwrap();
     let _ = fs::remove_dir_all(&dir);
     lib
@@ -509,19 +571,36 @@ fn the_schemas_boilerplate_heads_every_generated_file() {
     .unwrap();
     let bin = env!("CARGO_BIN_EXE_cddlc");
     for (lang, files, open) in [
-        ("rust",   &["Cargo.toml", "src/lib.rs", "tests/roundtrip.rs"][..], &["# ", "// ", "// "][..]),
-        ("c",      &["CMakeLists.txt", "include/t.h", "compat/endian.h"][..], &["# ", " * ", " * "][..]),
-        ("lua",    &["t-cbor-0.1.0-1.rockspec", "src/t.lua"][..], &["-- ", "-- "][..]),
+        (
+            "rust",
+            &["Cargo.toml", "src/lib.rs", "tests/roundtrip.rs"][..],
+            &["# ", "// ", "// "][..],
+        ),
+        (
+            "c",
+            &["CMakeLists.txt", "include/t.h", "compat/endian.h"][..],
+            &["# ", " * ", " * "][..],
+        ),
+        (
+            "lua",
+            &["t-cbor-0.1.0-1.rockspec", "src/t.lua"][..],
+            &["-- ", "-- "][..],
+        ),
     ] {
         let out = std::process::Command::new(bin)
             .current_dir(&dir)
             .args(["generate", "t.cddl", "--lang", lang, "-o", lang])
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         for (f, open) in files.iter().zip(open) {
             let text = fs::read_to_string(dir.join(lang).join("t-cbor").join(f)).unwrap();
-            let want = format!("{open}Copyright (c) 2026 Acme\n{open}SPDX-License-Identifier: MIT\n");
+            let want =
+                format!("{open}Copyright (c) 2026 Acme\n{open}SPDX-License-Identifier: MIT\n");
             assert!(text.contains(&want), "{lang} {f}:\n{text}");
             assert!(!text.contains(";;;"), "{lang} {f}");
         }
@@ -532,10 +611,19 @@ fn the_schemas_boilerplate_heads_every_generated_file() {
 #[test]
 fn comments_and_source_lines_become_docs() {
     let lib = generate_commented(&[]);
-    assert!(lib.contains("/// A thing.\n/// cddl: schema/t.cddl:2: thing = {\n"), "{lib}");
-    assert!(lib.contains("/// its id\n    /// cddl: schema/t.cddl:3: id: uint,   ; its id\n"), "{lib}");
+    assert!(
+        lib.contains("/// A thing.\n/// cddl: schema/t.cddl:2: thing = {\n"),
+        "{lib}"
+    );
+    assert!(
+        lib.contains("/// its id\n    /// cddl: schema/t.cddl:3: id: uint,   ; its id\n"),
+        "{lib}"
+    );
     let quiet = generate_commented(&["--no-source-comments"]);
-    assert!(quiet.contains("/// A thing.\n") && !quiet.contains("cddl: "), "{quiet}");
+    assert!(
+        quiet.contains("/// A thing.\n") && !quiet.contains("cddl: "),
+        "{quiet}"
+    );
 }
 
 // ── sample (dgtlrift/cddlc#110) ──────────────────────────────────────────────
@@ -549,7 +637,10 @@ fn sample_writes_an_example_that_validate_accepts() {
 
     let (json, err, ok) = run(&["sample", "--cddl", s]);
     assert!(ok, "{err}");
-    assert_eq!(json, "{\n  \"id\": 1,\n  \"kind\": \"temp\",\n  \"note\": \"text\",\n  \"key\": \"AAA\"\n}\n");
+    assert_eq!(
+        json,
+        "{\n  \"id\": 1,\n  \"kind\": \"temp\",\n  \"note\": \"text\",\n  \"key\": \"AAA\"\n}\n"
+    );
 
     let (diag, err, ok) = run(&["sample", "--cddl", s, "--format", "diag", "--minimal"]);
     assert!(ok, "{err}");
@@ -558,7 +649,15 @@ fn sample_writes_an_example_that_validate_accepts() {
     // The CBOR and JSON it writes validate.
     for (fmt, flag) in [("cbor", "--cbor"), ("json", "--json")] {
         let out = dir.join(format!("sample.{fmt}"));
-        let (_, err, ok) = run(&["sample", "--cddl", s, "--format", fmt, "-o", out.to_str().unwrap()]);
+        let (_, err, ok) = run(&[
+            "sample",
+            "--cddl",
+            s,
+            "--format",
+            fmt,
+            "-o",
+            out.to_str().unwrap(),
+        ]);
         assert!(ok, "{err}");
         let (stdout, err, ok) = run(&["validate", "--cddl", s, flag, out.to_str().unwrap()]);
         assert!(ok && stdout.contains("OK"), "{stdout}{err}");
@@ -573,5 +672,8 @@ fn sample_warns_and_fails_when_its_example_does_not_validate() {
     let (stdout, err, ok) = run(&["sample", "--cddl", schema.to_str().unwrap()]);
     assert!(!ok);
     assert!(stdout.contains("\"code\""), "{stdout}");
-    assert!(err.contains("doesn't validate") && err.contains("does not match pattern"), "{err}");
+    assert!(
+        err.contains("doesn't validate") && err.contains("does not match pattern"),
+        "{err}"
+    );
 }

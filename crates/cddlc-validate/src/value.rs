@@ -56,7 +56,9 @@ impl From<serde_json::Value> for Value {
             serde_json::Value::String(s) => Value::Text(s),
             serde_json::Value::Array(a) => Value::Array(a.into_iter().map(Value::from).collect()),
             serde_json::Value::Object(o) => Value::Map(
-                o.into_iter().map(|(k, v)| (Value::Text(k), Value::from(v))).collect(),
+                o.into_iter()
+                    .map(|(k, v)| (Value::Text(k), Value::from(v)))
+                    .collect(),
             ),
         }
     }
@@ -74,7 +76,9 @@ impl From<ciborium::Value> for Value {
             ciborium::Value::Tag(t, inner) => Value::Tag(t, Box::new(Value::from(*inner))),
             ciborium::Value::Array(a) => Value::Array(a.into_iter().map(Value::from).collect()),
             ciborium::Value::Map(m) => Value::Map(
-                m.into_iter().map(|(k, v)| (Value::from(k), Value::from(v))).collect(),
+                m.into_iter()
+                    .map(|(k, v)| (Value::from(k), Value::from(v)))
+                    .collect(),
             ),
             // `ciborium::Value` is #[non_exhaustive]; any future variant we
             // don't know about degrades to Null rather than failing to build.

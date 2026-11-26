@@ -6,28 +6,29 @@
 ///     include/<module>.h      ← type declarations + callback API
 ///     src/<module>.c          ← encode/decode implementations
 ///     test/test_roundtrip.c   ← roundtrip tests (Unity framework)
-
 use cddlc_codegen::{
-    capacity_value, constraint_to_c_check, primitive_to_c,
-    to_screaming_snake, to_snake_case,
-    Backend, CodegenError, CodegenOptions, CodegenOutput, GeneratedFile,
-    IndentWriter,
+    capacity_value, constraint_to_c_check, primitive_to_c, to_screaming_snake, to_snake_case,
+    Backend, CodegenError, CodegenOptions, CodegenOutput, GeneratedFile, IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Capacity, Constraint, EnumDef,
-    IrModule, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    AliasDef, ArrayDef, Capacity, Constraint, EnumDef, IrModule, MapDef, Occurrence, Primitive,
+    StructDef, TypeDef, TypeRef,
 };
 
 pub struct CBackend;
 
 impl Backend for CBackend {
-    fn language_name(&self) -> &str { "C" }
-    fn file_extension(&self) -> &str { "h" }
+    fn language_name(&self) -> &str {
+        "C"
+    }
+    fn file_extension(&self) -> &str {
+        "h"
+    }
 
     fn generate(
         &self,
         module: &IrModule,
-        opts:   &CodegenOptions,
+        opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "C", true)?;
         if let Some(msg) = unsupported_recursion(module) {
@@ -36,29 +37,30 @@ impl Backend for CBackend {
         // A rule whose `<rule>_t` the C library or the runtime already has
         // (`mode_t`, `time_t`, `cbor_str_t`) is `<module>_<rule>_t`
         // (dgtlrift/cddlc#154).
-        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::c_reserved_renames(module));
+        let renamed =
+            cddlc_codegen::rename_types(module, &cddlc_codegen::c_reserved_renames(module));
         let module = &renamed;
-        let name      = module.name.as_str();
-        let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
+        let name = module.name.as_str();
+        let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
 
         if opts.is_json() {
             return Ok(CodegenOutput {
                 files: vec![
                     GeneratedFile {
-                        path:    format!("{crate_dir}/CMakeLists.txt"),
+                        path: format!("{crate_dir}/CMakeLists.txt"),
                         content: emit_cmake_json(name, opts),
                     },
                     GeneratedFile {
-                        path:    format!("{crate_dir}/include/{name}.h"),
+                        path: format!("{crate_dir}/include/{name}.h"),
                         content: emit_header_json(module, opts),
                     },
                     GeneratedFile {
-                        path:    format!("{crate_dir}/src/{name}.c"),
+                        path: format!("{crate_dir}/src/{name}.c"),
                         content: emit_source_json(module, opts),
                     },
                     GeneratedFile {
-                        path:    format!("{crate_dir}/test/test_roundtrip.c"),
+                        path: format!("{crate_dir}/test/test_roundtrip.c"),
                         content: emit_tests_json(module, opts),
                     },
                 ],
@@ -68,23 +70,23 @@ impl Backend for CBackend {
         Ok(CodegenOutput {
             files: vec![
                 GeneratedFile {
-                    path:    format!("{crate_dir}/CMakeLists.txt"),
+                    path: format!("{crate_dir}/CMakeLists.txt"),
                     content: emit_cmake(name, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/include/{name}.h"),
+                    path: format!("{crate_dir}/include/{name}.h"),
                     content: emit_header(module, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/compat/endian.h"),
+                    path: format!("{crate_dir}/compat/endian.h"),
                     content: nanocbor_macos_compat_h(opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/src/{name}.c"),
+                    path: format!("{crate_dir}/src/{name}.c"),
                     content: emit_source(module, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/test/test_roundtrip.c"),
+                    path: format!("{crate_dir}/test/test_roundtrip.c"),
                     content: emit_tests(module, opts),
                 },
             ],
@@ -126,7 +128,8 @@ const NANOCBOR_MACOS_COMPAT_H: &str = r#"/* macOS stand-in for Linux's <endian.h
 
 fn emit_cmake(name: &str, opts: &CodegenOptions) -> String {
     let header = cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Hash);
-    format!(r#"{header}cmake_minimum_required(VERSION 3.16)
+    format!(
+        r#"{header}cmake_minimum_required(VERSION 3.16)
 project({name}_cbor C)
 
 set(CMAKE_C_STANDARD 11)
@@ -161,15 +164,16 @@ enable_testing()
 add_executable(test_roundtrip test/test_roundtrip.c)
 target_link_libraries(test_roundtrip {name}_cbor)
 add_test(NAME roundtrip COMMAND test_roundtrip)
-"#)
+"#
+    )
 }
 
 // ── Header file ───────────────────────────────────────────────────────────────
 
 fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name    = module.name.as_str();
-    let guard   = format!("{}_H", to_screaming_snake(&name));
-    let mut w   = IndentWriter::new(4);
+    let name = module.name.as_str();
+    let guard = format!("{}_H", to_screaming_snake(&name));
+    let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
         w.line(&l);
@@ -256,13 +260,21 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     for t in &targets {
         w.line(&format!("typedef struct {t}_s {t}_t;"));
     }
-    if !targets.is_empty() { w.blank(); }
+    if !targets.is_empty() {
+        w.blank();
+    }
     for tname in cddlc_codegen::inline_decl_order(module) {
-        let Some(def) = module.get(&tname) else { continue };
+        let Some(def) = module.get(&tname) else {
+            continue;
+        };
         let mut sub = IndentWriter::new(4);
         emit_type_decl_h(&mut sub, def, module, opts);
         for line in declare_tagged(sub.finish(), &to_snake_case(&tname), &targets).lines() {
-            if line.is_empty() { w.blank() } else { w.line(line) }
+            if line.is_empty() {
+                w.blank()
+            } else {
+                w.line(line)
+            }
         }
         w.blank();
     }
@@ -275,7 +287,9 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
         // `_release` (dgtlrift/cddlc#156).
         if needs_release(def.name(), module) {
             let (p, t) = (to_snake_case(name), to_snake_case(def.name()));
-            w.line(&format!("void {p}_{t}_release({t}_t *val, const {p}_callbacks_t *cb, void *ctx);"));
+            w.line(&format!(
+                "void {p}_{t}_release({t}_t *val, const {p}_callbacks_t *cb, void *ctx);"
+            ));
         }
     }
     w.blank();
@@ -287,10 +301,10 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
 fn emit_type_decl_h(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct_decl(w, s, module, opts),
-        TypeDef::Enum(e)   => emit_enum_decl(w, e, module, opts),
-        TypeDef::Array(a)  => emit_array_decl(w, a, opts),
-        TypeDef::Alias(a)  => emit_alias_decl(w, a, opts),
-        TypeDef::Map(m)    => emit_map_decl(w, m, opts),
+        TypeDef::Enum(e) => emit_enum_decl(w, e, module, opts),
+        TypeDef::Array(a) => emit_array_decl(w, a, opts),
+        TypeDef::Alias(a) => emit_alias_decl(w, a, opts),
+        TypeDef::Map(m) => emit_map_decl(w, m, opts),
     }
 }
 
@@ -307,7 +321,7 @@ fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts
         } else {
             c_field_type(&f.ty, &f.occurrence, opts)
         };
-        let fname  = to_snake_case(&f.name);
+        let fname = to_snake_case(&f.name);
         if ty_str.contains("{name}") {
             w.line(&format!("{};", ty_str.replace("{name}", &fname)));
         } else {
@@ -321,14 +335,23 @@ fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts
     // The map's other entries, up to their capacity (dgtlrift/cddlc#82).
     if let Some(r) = &s.rest {
         let cap = capacity_value(
-            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+            r.occurrence
+                .capacity()
+                .unwrap_or(&Capacity::Bounded(opts.max_array)),
             opts.max_array,
         );
         let rname = to_snake_case(&r.name);
         w.line("/* The map's other entries. */");
         // Text keys, or integers or a choice of them (dgtlrift/cddlc#136).
-        let key = if text_rest(r) { "cbor_str_t".to_owned() } else { typeref_to_c(&r.key_ty, opts) };
-        w.line(&format!("struct {{ {key} key; {} value; }} {rname}[{cap}];", typeref_to_c(&r.val_ty, opts)));
+        let key = if text_rest(r) {
+            "cbor_str_t".to_owned()
+        } else {
+            typeref_to_c(&r.key_ty, opts)
+        };
+        w.line(&format!(
+            "struct {{ {key} key; {} value; }} {rname}[{cap}];",
+            typeref_to_c(&r.val_ty, opts)
+        ));
         w.line(&format!("size_t {rname}_count;"));
     }
     w.dedent();
@@ -343,7 +366,11 @@ fn emit_enum_decl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, _opts: &
     w.line("typedef enum {");
     w.indent();
     for (i, v) in e.variants.iter().enumerate() {
-        let vname = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+        let vname = format!(
+            "{}_{}",
+            to_screaming_snake(&e.name),
+            to_screaming_snake(&v.name)
+        );
         if i == e.variants.len() - 1 {
             w.line(&format!("{vname}"));
         } else {
@@ -387,9 +414,11 @@ fn emit_enum_decl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, _opts: &
 fn emit_array_decl(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     emit_c_doc(w, a.doc.as_deref());
     let type_name = to_snake_case(&a.name);
-    let elem_ty   = typeref_to_c(&a.element, opts);
-    let cap       = capacity_value(
-        a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+    let elem_ty = typeref_to_c(&a.element, opts);
+    let cap = capacity_value(
+        a.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     w.line(&format!("typedef struct {{"));
@@ -406,7 +435,9 @@ fn emit_map_decl(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     emit_c_doc(w, m.doc.as_deref());
     let type_name = to_snake_case(&m.name);
     let cap = capacity_value(
-        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        m.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     w.line("typedef struct {");
@@ -427,7 +458,9 @@ fn emit_alias_decl(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     if a.tagged.is_some() || !a.constraints.is_empty() {
         // Newtype struct for tagged/constrained aliases
         let inner = typeref_to_c(&a.ty, opts);
-        w.line(&format!("typedef struct {{ {inner} value; }} {type_name}_t;"));
+        w.line(&format!(
+            "typedef struct {{ {inner} value; }} {type_name}_t;"
+        ));
     } else {
         let inner = typeref_to_c(&a.ty, opts);
         w.line(&format!("typedef {inner} {type_name}_t;"));
@@ -436,7 +469,7 @@ fn emit_alias_decl(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
 
 fn emit_fn_decls(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, _opts: &CodegenOptions) {
     let type_name = to_snake_case(def.name());
-    let pfx       = to_snake_case(mod_name);
+    let pfx = to_snake_case(mod_name);
 
     w.line(&format!(
         "int {pfx}_{type_name}_encode(nanocbor_encoder_t *enc, const {type_name}_t *val);"
@@ -450,7 +483,7 @@ fn emit_fn_decls(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, _opts: &Co
 // ── Source file ───────────────────────────────────────────────────────────────
 
 fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name  = module.name.as_str();
+    let name = module.name.as_str();
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
@@ -461,7 +494,9 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
     if cddlc_codegen::module_uses_bits(module) {
         w.line("/* `.bits`: only the bits `m` has set may be set (bit n is bit n % 8 of byte n / 8). */");
-        w.line("static bool cddlc_bits_ok(const uint8_t *p, size_t n, const uint8_t *m, size_t mn) {");
+        w.line(
+            "static bool cddlc_bits_ok(const uint8_t *p, size_t n, const uint8_t *m, size_t mn) {",
+        );
         w.indent();
         w.line("size_t i;");
         w.line("for (i = 0; i < n; i++) {");
@@ -504,10 +539,16 @@ fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m StructDef> 
 fn emit_c_repeat_check(w: &mut IndentWriter, f: &cddlc_ir::FieldDef, n: &str) {
     let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
     if min > 0 {
-        w.line(&format!("if ({n} < {min}) return -1; /* too few '{}' items */", f.name));
+        w.line(&format!(
+            "if ({n} < {min}) return -1; /* too few '{}' items */",
+            f.name
+        ));
     }
     if let Some(max) = max {
-        w.line(&format!("if ({n} > {max}) return -1; /* too many '{}' items */", f.name));
+        w.line(&format!(
+            "if ({n} > {max}) return -1; /* too many '{}' items */",
+            f.name
+        ));
     }
 }
 
@@ -516,13 +557,22 @@ fn c_bytes_eq(val_expr: &str, b: &[u8]) -> String {
     if b.is_empty() {
         return format!("({val_expr}.len == 0)");
     }
-    let bytes = b.iter().map(|x| format!("{x:#04x}")).collect::<Vec<_>>().join(", ");
-    format!("({val_expr}.len == {n} && memcmp({val_expr}.ptr, (const uint8_t[]){{{bytes}}}, {n}) == 0)", n = b.len())
+    let bytes = b
+        .iter()
+        .map(|x| format!("{x:#04x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "({val_expr}.len == {n} && memcmp({val_expr}.ptr, (const uint8_t[]){{{bytes}}}, {n}) == 0)",
+        n = b.len()
+    )
 }
 
 /// Whether an enum variant is a text literal (`"on"`), not any text (`tstr`).
 fn is_text_literal(v: &cddlc_ir::EnumVariant) -> bool {
-    v.constraints.iter().any(|c| matches!(c, Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
+    v.constraints
+        .iter()
+        .any(|c| matches!(c, Constraint::Eq(cddlc_ir::LiteralValue::Text(_))))
 }
 
 // ── Recursion (dgtlrift/cddlc#156) ───────────────────────────────────────────
@@ -562,7 +612,9 @@ fn resolve_named<'a>(n: &'a str, module: &'a IrModule) -> &'a str {
 /// The C type a pointer member or variant points at: the type its alias
 /// chain ends at, declared ahead (`typedef struct <t>_s <t>_t;`).
 fn ptr_type(ty: &TypeRef, module: &IrModule) -> String {
-    let n = named_of(ty).map(|n| resolve_named(n, module)).unwrap_or("void");
+    let n = named_of(ty)
+        .map(|n| resolve_named(n, module))
+        .unwrap_or("void");
     format!("{}_t", to_snake_case(n))
 }
 
@@ -572,9 +624,12 @@ fn ptr_targets(module: &IrModule) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     for (name, def) in &module.types {
         let tys: Vec<&TypeRef> = match def {
-            TypeDef::Struct(s) => s.fields.iter()
+            TypeDef::Struct(s) => s
+                .fields
+                .iter()
                 .filter(|f| matches!(f.occurrence, Occurrence::Required | Occurrence::Optional))
-                .map(|f| &f.ty).collect(),
+                .map(|f| &f.ty)
+                .collect(),
             TypeDef::Enum(e) => e.variants.iter().map(|v| &v.ty).collect(),
             _ => vec![],
         };
@@ -596,16 +651,27 @@ fn needs_release(name: &str, module: &IrModule) -> bool {
         if !seen.insert(name.to_owned()) {
             return false;
         }
-        let refs = |ty: &TypeRef| -> Vec<String> { named_of(ty).map(|n| vec![n.to_owned()]).unwrap_or_default() };
+        let refs = |ty: &TypeRef| -> Vec<String> {
+            named_of(ty).map(|n| vec![n.to_owned()]).unwrap_or_default()
+        };
         match module.get(name) {
             Some(TypeDef::Struct(s)) => {
                 s.fields.iter().any(|f| indirect(name, &f.ty, module))
-                    || s.fields.iter().flat_map(|f| refs(&f.ty)).any(|n| go(&n, module, seen))
-                    || s.rest.iter().flat_map(|r| refs(&r.val_ty)).any(|n| go(&n, module, seen))
+                    || s.fields
+                        .iter()
+                        .flat_map(|f| refs(&f.ty))
+                        .any(|n| go(&n, module, seen))
+                    || s.rest
+                        .iter()
+                        .flat_map(|r| refs(&r.val_ty))
+                        .any(|n| go(&n, module, seen))
             }
             Some(TypeDef::Enum(e)) => {
                 e.variants.iter().any(|v| indirect(name, &v.ty, module))
-                    || e.variants.iter().flat_map(|v| refs(&v.ty)).any(|n| go(&n, module, seen))
+                    || e.variants
+                        .iter()
+                        .flat_map(|v| refs(&v.ty))
+                        .any(|n| go(&n, module, seen))
             }
             Some(TypeDef::Array(a)) => refs(&a.element).iter().any(|n| go(n, module, seen)),
             Some(TypeDef::Map(m)) => refs(&m.val_ty).iter().any(|n| go(n, module, seen)),
@@ -654,7 +720,11 @@ fn unsupported_recursion(module: &IrModule) -> Option<String> {
 
 /// A type's declaration, tagged when something points at it: `struct <t>_s {
 /// ... };`, its `typedef` declared ahead.
-fn declare_tagged(decl: String, snake: &str, targets: &std::collections::BTreeSet<String>) -> String {
+fn declare_tagged(
+    decl: String,
+    snake: &str,
+    targets: &std::collections::BTreeSet<String>,
+) -> String {
     if !targets.contains(snake) {
         return decl;
     }
@@ -663,7 +733,9 @@ fn declare_tagged(decl: String, snake: &str, targets: &std::collections::BTreeSe
     match (decl.rfind(open), decl.rfind(&close)) {
         (Some(o), Some(c)) if o < c => format!(
             "{}struct {snake}_s {{{}}};{}",
-            &decl[..o], &decl[o + open.len()..c], &decl[c + close.len()..]
+            &decl[..o],
+            &decl[o + open.len()..c],
+            &decl[c + close.len()..]
         ),
         _ => decl,
     }
@@ -684,7 +756,13 @@ fn emit_release_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, pfx: 
         format!("void {pfx}_{t}_release({t}_t *val, const {pfx}_callbacks_t *cb, void *ctx)")
     };
     let args = if json { "" } else { ", cb, ctx" };
-    let free_ptr = |p: &str| if json { format!("free({p});") } else { format!("if (cb && cb->release) cb->release(ctx, {p});") };
+    let free_ptr = |p: &str| {
+        if json {
+            format!("free({p});")
+        } else {
+            format!("if (cb && cb->release) cb->release(ctx, {p});")
+        }
+    };
     // Releases what `expr` (a value of `ty`) holds, through a pointer or not.
     let release = |w: &mut IndentWriter, ty: &TypeRef, expr: &str, ptr: bool| {
         let Some(n) = named_of(ty) else { return };
@@ -694,19 +772,27 @@ fn emit_release_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, pfx: 
             w.line(&format!("if ({expr}) {{"));
             w.indent();
             if inner {
-                w.line(&format!("{pfx}_{}_release({expr}{args});", to_snake_case(target)));
+                w.line(&format!(
+                    "{pfx}_{}_release({expr}{args});",
+                    to_snake_case(target)
+                ));
             }
             w.line(&free_ptr(expr));
             w.line(&format!("{expr} = NULL;"));
             w.dedent();
             w.line("}");
         } else if inner {
-            w.line(&format!("{pfx}_{}_release(&{expr}{args});", to_snake_case(target)));
+            w.line(&format!(
+                "{pfx}_{}_release(&{expr}{args});",
+                to_snake_case(target)
+            ));
         }
     };
     w.line(&format!("{sig} {{"));
     w.indent();
-    if !json { w.line("(void)cb; (void)ctx;"); }
+    if !json {
+        w.line("(void)cb; (void)ctx;");
+    }
     w.line("if (!val) return;");
     match def {
         TypeDef::Struct(st) => {
@@ -716,7 +802,9 @@ fn emit_release_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, pfx: 
                     release(w, &f.ty, &format!("val->{fname}"), true);
                 } else if f.occurrence.is_repeated() {
                     if named_of(&f.ty).is_some_and(|n| needs_release(n, module)) {
-                        w.line(&format!("for (size_t i = 0; i < val->{fname}_count; i++) {{"));
+                        w.line(&format!(
+                            "for (size_t i = 0; i < val->{fname}_count; i++) {{"
+                        ));
                         w.indent();
                         release(w, &f.ty, &format!("val->{fname}[i]"), false);
                         w.dedent();
@@ -737,7 +825,9 @@ fn emit_release_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, pfx: 
             if let Some(r) = &st.rest {
                 if named_of(&r.val_ty).is_some_and(|n| needs_release(n, module)) {
                     let rname = to_snake_case(&r.name);
-                    w.line(&format!("for (size_t i = 0; i < val->{rname}_count; i++) {{"));
+                    w.line(&format!(
+                        "for (size_t i = 0; i < val->{rname}_count; i++) {{"
+                    ));
                     w.indent();
                     release(w, &r.val_ty, &format!("val->{rname}[i].value"), false);
                     w.dedent();
@@ -748,12 +838,23 @@ fn emit_release_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, pfx: 
         TypeDef::Enum(e) => {
             w.line("switch (val->tag) {");
             for v in &e.variants {
-                if named_of(&v.ty).is_none() { continue; }
+                if named_of(&v.ty).is_none() {
+                    continue;
+                }
                 let vname = to_snake_case(&v.name);
-                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                let vconst = format!(
+                    "{}_{}",
+                    to_screaming_snake(&e.name),
+                    to_screaming_snake(&v.name)
+                );
                 w.line(&format!("case {vconst}:"));
                 w.indent();
-                release(w, &v.ty, &format!("val->value.{vname}"), indirect(&e.name, &v.ty, module));
+                release(
+                    w,
+                    &v.ty,
+                    &format!("val->value.{vname}"),
+                    indirect(&e.name, &v.ty, module),
+                );
                 w.line("break;");
                 w.dedent();
             }
@@ -789,7 +890,14 @@ fn emit_release_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, pfx: 
 
 /// Where a member decodes to: the member, or for a pointer member, memory
 /// from the caller's `alloc`, which it then points at (dgtlrift/cddlc#156).
-fn c_decode_dest(w: &mut IndentWriter, s: &StructDef, f: &cddlc_ir::FieldDef, module: &IrModule, pfx: &str, pfx_upper: &str) -> String {
+fn c_decode_dest(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    f: &cddlc_ir::FieldDef,
+    module: &IrModule,
+    pfx: &str,
+    pfx_upper: &str,
+) -> String {
     let fname = to_snake_case(&f.name);
     if !indirect(&s.name, &f.ty, module) {
         return format!("out->{fname}");
@@ -823,9 +931,15 @@ fn c_key_write(key: &cddlc_ir::FieldKey) -> String {
     }
 }
 
-fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
+fn emit_encode_fn(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    module: &IrModule,
+    mod_name: &str,
+    opts: &CodegenOptions,
+) {
     let type_name = to_snake_case(def.name());
-    let pfx       = to_snake_case(mod_name);
+    let pfx = to_snake_case(mod_name);
 
     w.line(&format!(
         "int {pfx}_{type_name}_encode(nanocbor_encoder_t *enc, const {type_name}_t *val) {{"
@@ -847,8 +961,14 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 s.fields.iter().collect()
             };
             // Compute map count: required fields always present; optional only when _present flag set
-            let req_count = fields.iter().filter(|f| !matches!(f.occurrence, Occurrence::Optional)).count();
-            let opt_fields: Vec<_> = fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+            let req_count = fields
+                .iter()
+                .filter(|f| !matches!(f.occurrence, Occurrence::Optional))
+                .count();
+            let opt_fields: Vec<_> = fields
+                .iter()
+                .filter(|f| matches!(f.occurrence, Occurrence::Optional))
+                .collect();
             // A record (RFC 8610 §3.4) is an array of the members' values, in
             // order; optional members come last, so one present after an absent
             // one can't be written.
@@ -857,10 +977,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 for pair in opt_fields.windows(2) {
                     w.line(&format!(
                         "if (val->{}_present && !val->{}_present) return -1;",
-                        to_snake_case(&pair[1].name), to_snake_case(&pair[0].name)
+                        to_snake_case(&pair[1].name),
+                        to_snake_case(&pair[0].name)
                     ));
                 }
-                let opt_sum: String = opt_fields.iter()
+                let opt_sum: String = opt_fields
+                    .iter()
                     .map(|f| format!(" + (val->{}_present ? 1u : 0u)", to_snake_case(&f.name)))
                     .collect();
                 // A repeated member's items go inline (dgtlrift/cddlc#134).
@@ -869,56 +991,102 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                         let rf = &s.fields[ri];
                         let rname = to_snake_case(&rf.name);
                         emit_c_repeat_check(w, rf, &format!("val->{rname}_count"));
-                        w.line(&format!("nanocbor_fmt_array(enc, {}u + val->{rname}_count);", req_count - 1));
+                        w.line(&format!(
+                            "nanocbor_fmt_array(enc, {}u + val->{rname}_count);",
+                            req_count - 1
+                        ));
                     }
                     None => w.line(&format!("nanocbor_fmt_array(enc, {req_count}u{opt_sum});")),
                 }
             } else {
-                let rest_count = s.rest.as_ref()
+                let rest_count = s
+                    .rest
+                    .as_ref()
                     .map(|r| format!(" + val->{}_count", to_snake_case(&r.name)))
                     .unwrap_or_default();
-                let opt_sum: String = opt_fields.iter().map(|f| {
-                    let fname = to_snake_case(&f.name);
-                    format!(" + (val->{fname}_present ? 1u : 0u)")
-                }).collect();
-                w.line(&format!("nanocbor_fmt_map(enc, {req_count}u{opt_sum}{rest_count});"));
+                let opt_sum: String = opt_fields
+                    .iter()
+                    .map(|f| {
+                        let fname = to_snake_case(&f.name);
+                        format!(" + (val->{fname}_present ? 1u : 0u)")
+                    })
+                    .collect();
+                w.line(&format!(
+                    "nanocbor_fmt_map(enc, {req_count}u{opt_sum}{rest_count});"
+                ));
             }
             for f in &fields {
                 let fname = to_snake_case(&f.name);
                 // A pointer member is encoded through it (dgtlrift/cddlc#156).
-                let fexpr = if indirect(&s.name, &f.ty, module) { format!("(*val->{fname})") } else { format!("val->{fname}") };
+                let fexpr = if indirect(&s.name, &f.ty, module) {
+                    format!("(*val->{fname})")
+                } else {
+                    format!("val->{fname}")
+                };
                 // A required pointer member must point at a value.
                 if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
-                    w.line(&format!("if (!val->{fname}) return -1; /* '{}' is required */", f.name));
+                    w.line(&format!(
+                        "if (!val->{fname}) return -1; /* '{}' is required */",
+                        f.name
+                    ));
                 }
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("if (val->{fname}_present) {{"));
                     w.indent();
-                    if !record { w.line(&c_key_write(&f.key)); }
+                    if !record {
+                        w.line(&c_key_write(&f.key));
+                    }
                     emit_c_encode_field(w, &f.ty, &fexpr, &f.occurrence, mod_name, opts);
                     w.dedent();
                     w.line("}");
                 } else if record && f.occurrence.is_repeated() {
-                    w.line(&format!("for (size_t i = 0; i < val->{fname}_count; i++) {{"));
+                    w.line(&format!(
+                        "for (size_t i = 0; i < val->{fname}_count; i++) {{"
+                    ));
                     w.indent();
-                    emit_c_encode_field(w, &f.ty, &format!("val->{fname}[i]"), &Occurrence::Required, mod_name, opts);
+                    emit_c_encode_field(
+                        w,
+                        &f.ty,
+                        &format!("val->{fname}[i]"),
+                        &Occurrence::Required,
+                        mod_name,
+                        opts,
+                    );
                     w.dedent();
                     w.line("}");
                 } else {
-                    if !record { w.line(&c_key_write(&f.key)); }
+                    if !record {
+                        w.line(&c_key_write(&f.key));
+                    }
                     emit_c_encode_field(w, &f.ty, &fexpr, &f.occurrence, mod_name, opts);
                 }
             }
             if let Some(r) = &s.rest {
                 let rname = to_snake_case(&r.name);
-                w.line(&format!("for (size_t i = 0; i < val->{rname}_count; i++) {{"));
+                w.line(&format!(
+                    "for (size_t i = 0; i < val->{rname}_count; i++) {{"
+                ));
                 w.indent();
                 if text_rest(r) {
                     w.line(&format!("nanocbor_put_tstrn(enc, val->{rname}[i].key.ptr, val->{rname}[i].key.len);"));
                 } else {
-                    emit_c_encode_field(w, &r.key_ty, &format!("val->{rname}[i].key"), &Occurrence::Required, mod_name, opts);
+                    emit_c_encode_field(
+                        w,
+                        &r.key_ty,
+                        &format!("val->{rname}[i].key"),
+                        &Occurrence::Required,
+                        mod_name,
+                        opts,
+                    );
                 }
-                emit_c_encode_field(w, &r.val_ty, &format!("val->{rname}[i].value"), &Occurrence::Required, mod_name, opts);
+                emit_c_encode_field(
+                    w,
+                    &r.val_ty,
+                    &format!("val->{rname}[i].value"),
+                    &Occurrence::Required,
+                    mod_name,
+                    opts,
+                );
                 w.dedent();
                 w.line("}");
             }
@@ -930,8 +1098,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             }
             w.line(&format!("switch (val->tag) {{"));
             for v in &e.variants {
-                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-                let vname  = to_snake_case(&v.name);
+                let vconst = format!(
+                    "{}_{}",
+                    to_screaming_snake(&e.name),
+                    to_screaming_snake(&v.name)
+                );
+                let vname = to_snake_case(&v.name);
                 w.line(&format!("case {vconst}:"));
                 w.indent();
                 match &v.ty {
@@ -981,7 +1153,10 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             }
             // A repeated group's members sit inline (dgtlrift/cddlc#90).
             if let Some(rec) = flat_record(a, module) {
-                w.line(&format!("nanocbor_fmt_array(enc, val->count * {});", rec.fields.len()));
+                w.line(&format!(
+                    "nanocbor_fmt_array(enc, val->count * {});",
+                    rec.fields.len()
+                ));
                 w.line("for (size_t i = 0; i < val->count; i++) {");
                 w.indent();
                 for f in &rec.fields {
@@ -998,7 +1173,14 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.line("nanocbor_fmt_array(enc, val->count);");
             w.line("for (size_t i = 0; i < val->count; i++) {");
             w.indent();
-            emit_c_encode_field(w, &a.element, "val->items[i]", &Occurrence::Required, mod_name, opts);
+            emit_c_encode_field(
+                w,
+                &a.element,
+                "val->items[i]",
+                &Occurrence::Required,
+                mod_name,
+                opts,
+            );
             w.dedent();
             w.line("}");
             w.line("return NANOCBOR_OK;");
@@ -1022,8 +1204,22 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.line("nanocbor_fmt_map(enc, val->count);");
             w.line("for (size_t i = 0; i < val->count; i++) {");
             w.indent();
-            emit_c_encode_field(w, &m.key_ty, "val->entries[i].key", &Occurrence::Required, mod_name, opts);
-            emit_c_encode_field(w, &m.val_ty, "val->entries[i].value", &Occurrence::Required, mod_name, opts);
+            emit_c_encode_field(
+                w,
+                &m.key_ty,
+                "val->entries[i].key",
+                &Occurrence::Required,
+                mod_name,
+                opts,
+            );
+            emit_c_encode_field(
+                w,
+                &m.val_ty,
+                "val->entries[i].value",
+                &Occurrence::Required,
+                mod_name,
+                opts,
+            );
             w.dedent();
             w.line("}");
             w.line("return NANOCBOR_OK;");
@@ -1035,12 +1231,12 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
 }
 
 fn emit_c_encode_field(
-    w:        &mut IndentWriter,
-    ty:       &TypeRef,
-    expr:     &str,
-    occ:      &Occurrence,
+    w: &mut IndentWriter,
+    ty: &TypeRef,
+    expr: &str,
+    occ: &Occurrence,
     mod_name: &str,
-    opts:     &CodegenOptions,
+    opts: &CodegenOptions,
 ) {
     match ty {
         TypeRef::Primitive(p) => {
@@ -1049,7 +1245,7 @@ fn emit_c_encode_field(
         }
         TypeRef::Named(n) => {
             let pfx = to_snake_case(mod_name);
-            let tn  = to_snake_case(n);
+            let tn = to_snake_case(n);
             w.line(&format!("{pfx}_{tn}_encode(enc, &{expr});"));
         }
         TypeRef::Tagged(tag, inner) => {
@@ -1061,7 +1257,10 @@ fn emit_c_encode_field(
             Some(alts) => {
                 w.line(&format!("switch ({expr}.kind) {{"));
                 for (i, p) in alts.iter().enumerate() {
-                    w.line(&format!("case {i}: {}; break;", c_encode_call(p, &format!("{expr}.as.alt{i}"))));
+                    w.line(&format!(
+                        "case {i}: {}; break;",
+                        c_encode_call(p, &format!("{expr}.as.alt{i}"))
+                    ));
                 }
                 w.line("default: return -1;");
                 w.line("}");
@@ -1077,9 +1276,15 @@ fn emit_c_encode_field(
 fn prim_choice_c(cs: &[TypeRef]) -> Option<Vec<Primitive>> {
     let mut alts: Vec<Primitive> = Vec::new();
     for c in cs {
-        let TypeRef::Primitive(p) = c else { return None };
-        if matches!(p, Primitive::Any) { return None; }
-        if alts.iter().any(|q| primitive_to_c(q) == primitive_to_c(p)) { return None; }
+        let TypeRef::Primitive(p) = c else {
+            return None;
+        };
+        if matches!(p, Primitive::Any) {
+            return None;
+        }
+        if alts.iter().any(|q| primitive_to_c(q) == primitive_to_c(p)) {
+            return None;
+        }
         alts.push(p.clone());
     }
     (alts.len() > 1).then_some(alts)
@@ -1087,26 +1292,29 @@ fn prim_choice_c(cs: &[TypeRef]) -> Option<Vec<Primitive>> {
 
 fn c_encode_call(p: &Primitive, expr: &str) -> String {
     match p {
-        Primitive::Bool               => format!("nanocbor_fmt_bool(enc, {expr})"),
+        Primitive::Bool => format!("nanocbor_fmt_bool(enc, {expr})"),
         Primitive::Null | Primitive::Undefined => "nanocbor_fmt_null(enc)".into(),
-        Primitive::Uint               => format!("nanocbor_fmt_uint(enc, {expr})"),
-        Primitive::Int                => format!("nanocbor_fmt_int(enc, {expr})"),
-        Primitive::Float32            => format!("nanocbor_fmt_float(enc, {expr})"),
+        Primitive::Uint => format!("nanocbor_fmt_uint(enc, {expr})"),
+        Primitive::Int => format!("nanocbor_fmt_int(enc, {expr})"),
+        Primitive::Float32 => format!("nanocbor_fmt_float(enc, {expr})"),
         Primitive::Float64 | Primitive::Float => format!("nanocbor_fmt_double(enc, {expr})"),
-        Primitive::Float16            => format!("nanocbor_fmt_float(enc, {expr})"),
-        Primitive::Bstr =>
-            format!("nanocbor_put_bstr(enc, {expr}.ptr, {expr}.len)"),
+        Primitive::Float16 => format!("nanocbor_fmt_float(enc, {expr})"),
+        Primitive::Bstr => format!("nanocbor_put_bstr(enc, {expr}.ptr, {expr}.len)"),
         // The encoded item, written back unchanged (dgtlrift/cddlc#178).
-        Primitive::Any =>
-            format!("cddlc_put_item(enc, {expr}.ptr, {expr}.len)"),
-        Primitive::Tstr               =>
-            format!("nanocbor_put_tstrn(enc, {expr}.ptr, {expr}.len)"),
+        Primitive::Any => format!("cddlc_put_item(enc, {expr}.ptr, {expr}.len)"),
+        Primitive::Tstr => format!("nanocbor_put_tstrn(enc, {expr}.ptr, {expr}.len)"),
     }
 }
 
-fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
+fn emit_decode_fn(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    module: &IrModule,
+    mod_name: &str,
+    opts: &CodegenOptions,
+) {
     let type_name = to_snake_case(def.name());
-    let pfx       = to_snake_case(mod_name);
+    let pfx = to_snake_case(mod_name);
     let pfx_upper = to_screaming_snake(mod_name);
 
     w.line(&format!(
@@ -1151,14 +1359,27 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                     w.line("size_t count = 0;");
                     w.line("{ nanocbor_value_t probe = arr; while (!nanocbor_at_end(&probe)) { if (nanocbor_skip(&probe) < 0) return -1; count++; } }");
                 }
-                let required = s.fields.iter().filter(|f| f.occurrence.is_required()).count();
+                let required = s
+                    .fields
+                    .iter()
+                    .filter(|f| f.occurrence.is_required())
+                    .count();
                 // A repeated member holds the items the others leave.
                 if let Some(ri) = repeated {
                     let rf = &s.fields[ri];
-                    let cap = capacity_value(rf.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)), opts.max_array);
-                    w.line(&format!("if (count < {required}) return -1; /* too few items */"));
+                    let cap = capacity_value(
+                        rf.occurrence
+                            .capacity()
+                            .unwrap_or(&Capacity::Bounded(opts.max_array)),
+                        opts.max_array,
+                    );
+                    w.line(&format!(
+                        "if (count < {required}) return -1; /* too few items */"
+                    ));
                     w.line(&format!("size_t reps = count - {required};"));
-                    w.line(&format!("if (reps > {cap}) return -1; /* more items than its capacity */"));
+                    w.line(&format!(
+                        "if (reps > {cap}) return -1; /* more items than its capacity */"
+                    ));
                     emit_c_repeat_check(w, rf, "reps");
                 }
                 for (i, f) in s.fields.iter().enumerate() {
@@ -1166,7 +1387,17 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                     if f.occurrence.is_repeated() {
                         w.line("for (size_t i = 0; i < reps; i++) {");
                         w.indent();
-                        emit_c_decode_field(w, &f.ty, &format!("out->{fname}[i]"), &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
+                        emit_c_decode_field(
+                            w,
+                            &f.ty,
+                            &format!("out->{fname}[i]"),
+                            &f.constraints,
+                            &fname,
+                            &pfx,
+                            &pfx_upper,
+                            "&arr",
+                            opts,
+                        );
                         w.dedent();
                         w.line("}");
                         w.line(&format!("out->{fname}_count = reps;"));
@@ -1178,7 +1409,17 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                         }
                         w.indent();
                         let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
-                        emit_c_decode_field(w, &f.ty, &dest, &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
+                        emit_c_decode_field(
+                            w,
+                            &f.ty,
+                            &dest,
+                            &f.constraints,
+                            &fname,
+                            &pfx,
+                            &pfx_upper,
+                            "&arr",
+                            opts,
+                        );
                         w.line(&format!("out->{fname}_present = true;"));
                         w.dedent();
                         w.line("}");
@@ -1193,7 +1434,17 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                         w.dedent();
                         w.line("}");
                         let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
-                        emit_c_decode_field(w, &f.ty, &dest, &f.constraints, &fname, &pfx, &pfx_upper, "&arr", opts);
+                        emit_c_decode_field(
+                            w,
+                            &f.ty,
+                            &dest,
+                            &f.constraints,
+                            &fname,
+                            &pfx,
+                            &pfx_upper,
+                            "&arr",
+                            opts,
+                        );
                     }
                 }
                 w.line("if (!nanocbor_at_end(&arr)) return -1; /* too many items */");
@@ -1242,19 +1493,40 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.blank();
 
             for f in &s.fields {
-                let fname  = to_snake_case(&f.name);
+                let fname = to_snake_case(&f.name);
                 let cond = match &f.key {
                     cddlc_ir::FieldKey::Text(t) => {
-                        let text = format!("key_len == {} && memcmp(key_ptr, {:?}, {}) == 0", t.len(), t.as_str(), t.len());
-                        if int_keys { format!("!key_is_int && {text}") } else { text }
+                        let text = format!(
+                            "key_len == {} && memcmp(key_ptr, {:?}, {}) == 0",
+                            t.len(),
+                            t.as_str(),
+                            t.len()
+                        );
+                        if int_keys {
+                            format!("!key_is_int && {text}")
+                        } else {
+                            text
+                        }
                     }
                     cddlc_ir::FieldKey::Int(n) => format!("key_is_int && key_int == {n}LL"),
-                    cddlc_ir::FieldKey::Uint(n) => format!("key_is_int && key_int == {}LL", (*n).min(i64::MAX as u64)),
+                    cddlc_ir::FieldKey::Uint(n) => {
+                        format!("key_is_int && key_int == {}LL", (*n).min(i64::MAX as u64))
+                    }
                 };
                 w.line(&format!("if ({cond}) {{"));
                 w.indent();
                 let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
-                emit_c_decode_field(w, &f.ty, &dest, &f.constraints, &fname, &pfx, &pfx_upper, "&map", opts);
+                emit_c_decode_field(
+                    w,
+                    &f.ty,
+                    &dest,
+                    &f.constraints,
+                    &fname,
+                    &pfx,
+                    &pfx_upper,
+                    "&map",
+                    opts,
+                );
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("out->{fname}_present = true;"));
                 }
@@ -1268,11 +1540,15 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 // Other keys are the map's other entries (dgtlrift/cddlc#82).
                 let rname = to_snake_case(&r.name);
                 let cap = capacity_value(
-                    r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                    r.occurrence
+                        .capacity()
+                        .unwrap_or(&Capacity::Bounded(opts.max_array)),
                     opts.max_array,
                 );
                 if int_keys && !typed_rest {
-                    w.line("if (key_is_int) return -1; /* the other entries have text keys */ else");
+                    w.line(
+                        "if (key_is_int) return -1; /* the other entries have text keys */ else",
+                    );
                 }
                 w.line("{");
                 w.indent();
@@ -1281,11 +1557,31 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 ));
                 if typed_rest {
                     w.line("nanocbor_value_t kd = key_start;");
-                    emit_c_decode_field(w, &r.key_ty, &format!("out->{rname}[out->{rname}_count].key"), &[], &rname, &pfx, &pfx_upper, "&kd", opts);
+                    emit_c_decode_field(
+                        w,
+                        &r.key_ty,
+                        &format!("out->{rname}[out->{rname}_count].key"),
+                        &[],
+                        &rname,
+                        &pfx,
+                        &pfx_upper,
+                        "&kd",
+                        opts,
+                    );
                 } else {
                     w.line(&format!("out->{rname}[out->{rname}_count].key = (cbor_str_t){{ (const char*)key_ptr, key_len }};"));
                 }
-                emit_c_decode_field(w, &r.val_ty, &format!("out->{rname}[out->{rname}_count].value"), &[], &rname, &pfx, &pfx_upper, "&map", opts);
+                emit_c_decode_field(
+                    w,
+                    &r.val_ty,
+                    &format!("out->{rname}[out->{rname}_count].value"),
+                    &[],
+                    &rname,
+                    &pfx,
+                    &pfx_upper,
+                    "&map",
+                    opts,
+                );
                 w.line(&format!("out->{rname}_count++;"));
                 w.dedent();
                 w.line("}");
@@ -1339,11 +1635,18 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             // the value, each tried on a copy of the decoder (dgtlrift/cddlc#102).
             for v in &e.variants {
                 let TypeRef::Named(n) = &v.ty else { continue };
-                if !matches!(module.get(n), Some(TypeDef::Struct(_) | TypeDef::Array(_) | TypeDef::Map(_))) {
+                if !matches!(
+                    module.get(n),
+                    Some(TypeDef::Struct(_) | TypeDef::Array(_) | TypeDef::Map(_))
+                ) {
                     continue;
                 }
-                let vname  = to_snake_case(&v.name);
-                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                let vname = to_snake_case(&v.name);
+                let vconst = format!(
+                    "{}_{}",
+                    to_screaming_snake(&e.name),
+                    to_screaming_snake(&v.name)
+                );
                 w.line("{");
                 w.indent();
                 w.line("nanocbor_value_t probe = *dec;");
@@ -1353,11 +1656,16 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                     // (dgtlrift/cddlc#156).
                     let ptr = ptr_type(&v.ty, module);
                     let rel = if needs_release(resolve_named(n, module), module) {
-                        format!("{pfx}_{}_release(p, cb, ctx); ", to_snake_case(resolve_named(n, module)))
+                        format!(
+                            "{pfx}_{}_release(p, cb, ctx); ",
+                            to_snake_case(resolve_named(n, module))
+                        )
                     } else {
                         String::new()
                     };
-                    w.line(&format!("{ptr} *p = (cb && cb->alloc) ? ({ptr} *)cb->alloc(ctx, sizeof *p) : NULL;"));
+                    w.line(&format!(
+                        "{ptr} *p = (cb && cb->alloc) ? ({ptr} *)cb->alloc(ctx, sizeof *p) : NULL;"
+                    ));
                     w.line("if (p) {");
                     w.indent();
                     w.line("memset(p, 0, sizeof *p);");
@@ -1382,19 +1690,31 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             // `null` (CBOR null, dgtlrift/cddlc#147), a bool, or an integer:
             // each tried on a copy of the decoder.
             for v in &e.variants {
-                let vname  = to_snake_case(&v.name);
-                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                let vname = to_snake_case(&v.name);
+                let vconst = format!(
+                    "{}_{}",
+                    to_screaming_snake(&e.name),
+                    to_screaming_snake(&v.name)
+                );
                 let get = match &v.ty {
                     TypeRef::Primitive(Primitive::Null) => "nanocbor_get_null(&probe)".to_owned(),
-                    TypeRef::Primitive(Primitive::Bool) => format!("nanocbor_get_bool(&probe, &out->value.{vname})"),
-                    TypeRef::Primitive(Primitive::Uint) => format!("nanocbor_get_uint64(&probe, &out->value.{vname})"),
-                    TypeRef::Primitive(Primitive::Int) => format!("nanocbor_get_int64(&probe, &out->value.{vname})"),
+                    TypeRef::Primitive(Primitive::Bool) => {
+                        format!("nanocbor_get_bool(&probe, &out->value.{vname})")
+                    }
+                    TypeRef::Primitive(Primitive::Uint) => {
+                        format!("nanocbor_get_uint64(&probe, &out->value.{vname})")
+                    }
+                    TypeRef::Primitive(Primitive::Int) => {
+                        format!("nanocbor_get_int64(&probe, &out->value.{vname})")
+                    }
                     _ => continue,
                 };
                 w.line("{");
                 w.indent();
                 w.line("nanocbor_value_t probe = *dec;");
-                w.line(&format!("if ({get} >= 0) {{ *dec = probe; out->tag = {vconst}; return NANOCBOR_OK; }}"));
+                w.line(&format!(
+                    "if ({get} >= 0) {{ *dec = probe; out->tag = {vconst}; return NANOCBOR_OK; }}"
+                ));
                 w.dedent();
                 w.line("}");
             }
@@ -1402,7 +1722,10 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             // Peek at type
             // An `any` alternative takes what the others don't (dgtlrift/cddlc#178),
             // so text that matches no alternative is read from a probe.
-            let any = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Any)));
+            let any = e
+                .variants
+                .iter()
+                .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Any)));
             w.line("uint8_t major = nanocbor_get_type(dec);");
             w.line("if (major == NANOCBOR_TYPE_TSTR) {");
             w.indent();
@@ -1412,7 +1735,11 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             for v in &e.variants {
                 if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v) {
                     let cddl_str = cddlc_codegen::enum_variant_text(v);
-                    let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                    let vconst = format!(
+                        "{}_{}",
+                        to_screaming_snake(&e.name),
+                        to_screaming_snake(&v.name)
+                    );
                     w.line(&format!(
                         "if (slen == {} && memcmp(s, {:?}, {}) == 0) {{ *dec = _t; out->tag = {vconst}; return NANOCBOR_OK; }}",
                         cddl_str.len(), cddl_str, cddl_str.len()
@@ -1420,8 +1747,14 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 }
             }
             // A `tstr` alternative takes any other text.
-            if let Some(v) = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v)) {
-                let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+            if let Some(v) = e.variants.iter().find(|v| {
+                matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v)
+            }) {
+                let vconst = format!(
+                    "{}_{}",
+                    to_screaming_snake(&e.name),
+                    to_screaming_snake(&v.name)
+                );
                 w.line(&format!(
                     "*dec = _t; out->value.{} = (cbor_str_t){{ (const char*)s, slen }}; out->tag = {vconst}; return NANOCBOR_OK;",
                     to_snake_case(&v.name)
@@ -1434,7 +1767,11 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.line("}");
             match any {
                 Some(v) => {
-                    let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+                    let vconst = format!(
+                        "{}_{}",
+                        to_screaming_snake(&e.name),
+                        to_screaming_snake(&v.name)
+                    );
                     let vname = to_snake_case(&v.name);
                     w.line(&format!("if (nanocbor_get_subcbor(dec, &out->value.{vname}.ptr, &out->value.{vname}.len) < 0) return -1;"));
                     w.line(&format!("out->tag = {vconst}; return NANOCBOR_OK;"));
@@ -1454,21 +1791,45 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 w.line("}");
             }
             let cap = capacity_value(
-                a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                a.occurrence
+                    .capacity()
+                    .unwrap_or(&Capacity::Bounded(opts.max_array)),
                 opts.max_array,
             );
             w.line("nanocbor_value_t arr;");
             w.line("if (nanocbor_enter_array(dec, &arr) < 0) return -1;");
             w.line("out->count = 0;");
-            w.line(&format!("while (!nanocbor_at_end(&arr) && out->count < {cap}) {{"));
+            w.line(&format!(
+                "while (!nanocbor_at_end(&arr) && out->count < {cap}) {{"
+            ));
             w.indent();
             if let Some(rec) = flat_record(a, module) {
                 for f in &rec.fields {
                     let item = format!("out->items[out->count].{}", to_snake_case(&f.name));
-                    emit_c_decode_field(w, &f.ty, &item, &f.constraints, &f.name, &pfx, &pfx_upper, "&arr", opts);
+                    emit_c_decode_field(
+                        w,
+                        &f.ty,
+                        &item,
+                        &f.constraints,
+                        &f.name,
+                        &pfx,
+                        &pfx_upper,
+                        "&arr",
+                        opts,
+                    );
                 }
             } else {
-                emit_c_decode_field(w, &a.element, "out->items[out->count]", &[], "item", &pfx, &pfx_upper, "&arr", opts);
+                emit_c_decode_field(
+                    w,
+                    &a.element,
+                    "out->items[out->count]",
+                    &[],
+                    "item",
+                    &pfx,
+                    &pfx_upper,
+                    "&arr",
+                    opts,
+                );
             }
             w.line("out->count++;");
             w.dedent();
@@ -1499,7 +1860,17 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             } else {
                 "(*out)".to_string()
             };
-            emit_c_decode_field(w, &a.ty, &dest, &a.constraints, &type_name, &pfx, &pfx_upper, "dec", opts);
+            emit_c_decode_field(
+                w,
+                &a.ty,
+                &dest,
+                &a.constraints,
+                &type_name,
+                &pfx,
+                &pfx_upper,
+                "dec",
+                opts,
+            );
             w.line("return NANOCBOR_OK;");
         }
 
@@ -1514,7 +1885,9 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
                 w.line("}");
             }
             let cap = capacity_value(
-                m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+                m.occurrence
+                    .capacity()
+                    .unwrap_or(&Capacity::Bounded(opts.max_array)),
                 opts.max_array,
             );
             w.line("nanocbor_value_t map;");
@@ -1525,8 +1898,28 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
             w.line(&format!(
                 "if (out->count >= {cap}) {{ if (cb && cb->on_error) cb->on_error(ctx, ({pfx}_field_err_t){{{pfx_upper}_ERR_OVERFLOW, \"{type_name}\", 0}}); return -1; }}"
             ));
-            emit_c_decode_field(w, &m.key_ty, "out->entries[out->count].key", &[], "key", &pfx, &pfx_upper, "&map", opts);
-            emit_c_decode_field(w, &m.val_ty, "out->entries[out->count].value", &[], "value", &pfx, &pfx_upper, "&map", opts);
+            emit_c_decode_field(
+                w,
+                &m.key_ty,
+                "out->entries[out->count].key",
+                &[],
+                "key",
+                &pfx,
+                &pfx_upper,
+                "&map",
+                opts,
+            );
+            emit_c_decode_field(
+                w,
+                &m.val_ty,
+                "out->entries[out->count].value",
+                &[],
+                "value",
+                &pfx,
+                &pfx_upper,
+                "&map",
+                opts,
+            );
             w.line("out->count++;");
             w.dedent();
             w.line("}");
@@ -1540,15 +1933,15 @@ fn emit_decode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_na
 }
 
 fn emit_c_decode_field(
-    w:           &mut IndentWriter,
-    ty:          &TypeRef,
-    dest:        &str,
+    w: &mut IndentWriter,
+    ty: &TypeRef,
+    dest: &str,
     constraints: &[Constraint],
-    field_name:  &str,
-    pfx:         &str,
-    pfx_upper:   &str,
-    dec_expr:    &str,
-    opts:        &CodegenOptions,
+    field_name: &str,
+    pfx: &str,
+    pfx_upper: &str,
+    dec_expr: &str,
+    opts: &CodegenOptions,
 ) {
     match ty {
         TypeRef::Primitive(p) => {
@@ -1572,15 +1965,29 @@ fn emit_c_decode_field(
         }
         TypeRef::Named(n) => {
             let tn = to_snake_case(n);
-            w.line(&format!("if ({pfx}_{tn}_decode({dec_expr}, &{dest}, cb, ctx) < 0) return -1;"));
+            w.line(&format!(
+                "if ({pfx}_{tn}_decode({dec_expr}, &{dest}, cb, ctx) < 0) return -1;"
+            ));
         }
         TypeRef::Tagged(tag, inner) => {
             w.line("{");
             w.indent();
             w.line("uint32_t tag;");
-            w.line(&format!("if (nanocbor_get_tag({dec_expr}, &tag) < 0) return -1;"));
+            w.line(&format!(
+                "if (nanocbor_get_tag({dec_expr}, &tag) < 0) return -1;"
+            ));
             w.line(&format!("if (tag != {}) return -1;", tag.0));
-            emit_c_decode_field(w, inner, dest, constraints, field_name, pfx, pfx_upper, dec_expr, opts);
+            emit_c_decode_field(
+                w,
+                inner,
+                dest,
+                constraints,
+                field_name,
+                pfx,
+                pfx_upper,
+                dec_expr,
+                opts,
+            );
             w.dedent();
             w.line("}");
         }
@@ -1645,16 +2052,25 @@ fn c_constraint_check(c: &Constraint, val_expr: &str, p: &Primitive) -> Option<S
         )),
         // A byte-string literal (RFC 9277's `'BOR'`): compare length and
         // bytes (dgtlrift/cddlc#142).
-        Constraint::Eq(cddlc_ir::LiteralValue::Bytes(b)) if *p == Primitive::Bstr => Some(c_bytes_eq(val_expr, b)),
-        Constraint::Ne(cddlc_ir::LiteralValue::Bytes(b)) if *p == Primitive::Bstr => Some(format!("!{}", c_bytes_eq(val_expr, b))),
+        Constraint::Eq(cddlc_ir::LiteralValue::Bytes(b)) if *p == Primitive::Bstr => {
+            Some(c_bytes_eq(val_expr, b))
+        }
+        Constraint::Ne(cddlc_ir::LiteralValue::Bytes(b)) if *p == Primitive::Bstr => {
+            Some(format!("!{}", c_bytes_eq(val_expr, b)))
+        }
         // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
         Constraint::Bits(bits) => match p {
             Primitive::Uint => Some(format!(
-                "(({val_expr}) & ~UINT64_C({:#x})) == 0", cddlc_codegen::bits_mask_u64(bits)
+                "(({val_expr}) & ~UINT64_C({:#x})) == 0",
+                cddlc_codegen::bits_mask_u64(bits)
             )),
             Primitive::Bstr => {
                 let m = cddlc_codegen::bits_mask_bytes(bits);
-                let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+                let bytes = m
+                    .iter()
+                    .map(|b| format!("{b:#04x}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 Some(format!(
                     "cddlc_bits_ok({val_expr}.ptr, {val_expr}.len, (const uint8_t[]){{{bytes}}}, {})", m.len()
                 ))
@@ -1695,33 +2111,30 @@ fn int_range_for_bytes(n: usize) -> Option<(i64, i64)> {
 
 fn c_decode_call_expr(p: &Primitive, dest: &str, dec_expr: &str) -> String {
     match p {
-        Primitive::Bool =>
-            format!("nanocbor_get_bool({dec_expr}, &{dest})"),
-        Primitive::Null | Primitive::Undefined =>
-            format!("nanocbor_get_null({dec_expr})"),
-        Primitive::Uint =>
-            format!("nanocbor_get_uint64({dec_expr}, &{dest})"),
-        Primitive::Int =>
-            format!("nanocbor_get_int64({dec_expr}, &{dest})"),
-        Primitive::Float32 | Primitive::Float16 =>
-            format!("nanocbor_get_float({dec_expr}, &{dest})"),
-        Primitive::Float64 | Primitive::Float =>
-            format!("nanocbor_get_double({dec_expr}, &{dest})"),
-        Primitive::Tstr =>
-            format!("(nanocbor_get_tstr({dec_expr}, (const uint8_t**)&{dest}.ptr, &{dest}.len))"),
-        Primitive::Bstr =>
-            format!("nanocbor_get_bstr({dec_expr}, &{dest}.ptr, &{dest}.len)"),
+        Primitive::Bool => format!("nanocbor_get_bool({dec_expr}, &{dest})"),
+        Primitive::Null | Primitive::Undefined => format!("nanocbor_get_null({dec_expr})"),
+        Primitive::Uint => format!("nanocbor_get_uint64({dec_expr}, &{dest})"),
+        Primitive::Int => format!("nanocbor_get_int64({dec_expr}, &{dest})"),
+        Primitive::Float32 | Primitive::Float16 => {
+            format!("nanocbor_get_float({dec_expr}, &{dest})")
+        }
+        Primitive::Float64 | Primitive::Float => {
+            format!("nanocbor_get_double({dec_expr}, &{dest})")
+        }
+        Primitive::Tstr => {
+            format!("(nanocbor_get_tstr({dec_expr}, (const uint8_t**)&{dest}.ptr, &{dest}.len))")
+        }
+        Primitive::Bstr => format!("nanocbor_get_bstr({dec_expr}, &{dest}.ptr, &{dest}.len)"),
         // The whole item's encoding, which nanocbor then skips.
-        Primitive::Any =>
-            format!("nanocbor_get_subcbor({dec_expr}, &{dest}.ptr, &{dest}.len)"),
+        Primitive::Any => format!("nanocbor_get_subcbor({dec_expr}, &{dest}.ptr, &{dest}.len)"),
     }
 }
 
 // ── Test file ─────────────────────────────────────────────────────────────────
 
 fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name  = module.name.as_str();
-    let pfx   = to_snake_case(name);
+    let name = module.name.as_str();
+    let pfx = to_snake_case(name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
@@ -1738,7 +2151,9 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.blank();
     // A recursive member's memory, from the heap here; any allocator (a pool,
     // an arena) works (dgtlrift/cddlc#156).
-    w.line("static void *test_alloc(void *ctx, size_t size) { (void)ctx; return calloc(1, size); }");
+    w.line(
+        "static void *test_alloc(void *ctx, size_t size) { (void)ctx; return calloc(1, size); }",
+    );
     w.line("static void test_release(void *ctx, void *ptr) { (void)ctx; free(ptr); }");
     w.line(&format!("static const {pfx}_callbacks_t test_cb = {{ .alloc = test_alloc, .release = test_release }};"));
     w.blank();
@@ -1746,10 +2161,10 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     for (_, def) in &module.types {
         match def {
             TypeDef::Struct(s) => emit_c_struct_test(&mut w, s, &pfx, module, opts),
-            TypeDef::Alias(a)  => emit_c_alias_test(&mut w, a, &pfx, opts),
-            TypeDef::Array(a)  => emit_c_array_test(&mut w, a, &pfx, opts),
-            TypeDef::Enum(e)   => emit_c_enum_test(&mut w, e, &pfx, module, opts),
-            TypeDef::Map(m)    => emit_c_map_test(&mut w, m, &pfx, opts),
+            TypeDef::Alias(a) => emit_c_alias_test(&mut w, a, &pfx, opts),
+            TypeDef::Array(a) => emit_c_array_test(&mut w, a, &pfx, opts),
+            TypeDef::Enum(e) => emit_c_enum_test(&mut w, e, &pfx, module, opts),
+            TypeDef::Map(m) => emit_c_map_test(&mut w, m, &pfx, opts),
         }
         w.blank();
     }
@@ -1769,20 +2184,35 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &IrModule, opts: &CodegenOptions) {
+fn emit_c_struct_test(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    pfx: &str,
+    module: &IrModule,
+    opts: &CodegenOptions,
+) {
     let type_name = to_snake_case(&s.name);
-    w.line(&format!("static void test_{pfx}_{type_name}_roundtrip(void) {{"));
+    w.line(&format!(
+        "static void test_{pfx}_{type_name}_roundtrip(void) {{"
+    ));
     w.indent();
 
     // Static buffers for any size-constrained tstr named fields, and for inline Tstr/Bstr/Any fields
     for f in &s.fields {
-        if matches!(f.occurrence, Occurrence::Optional) { continue; }
-        if is_prim_choice_c(&f.ty) { continue; }
+        if matches!(f.occurrence, Occurrence::Optional) {
+            continue;
+        }
+        if is_prim_choice_c(&f.ty) {
+            continue;
+        }
         let fname = to_snake_case(&f.name);
         if let TypeRef::Named(n) = &f.ty {
             if let Some(n) = tstr_size_constraint_for(n, module) {
                 let s_lit: String = "a".repeat(n);
-                w.line(&format!("static const char _{fname}_data[{n}] = {:?};", s_lit));
+                w.line(&format!(
+                    "static const char _{fname}_data[{n}] = {:?};",
+                    s_lit
+                ));
             }
         }
         match effective_primitive(&f.ty) {
@@ -1793,11 +2223,20 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
             // `.bits`: the mask itself is a value it allows (dgtlrift/cddlc#107).
             Some(Primitive::Bstr) if bits_of(f).is_some() => {
                 let m = cddlc_codegen::bits_mask_bytes(bits_of(f).expect("checked"));
-                let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
-                w.line(&format!("static const uint8_t _{fname}_cbor[{}] = {{{bytes}}};", m.len().max(1)));
+                let bytes = m
+                    .iter()
+                    .map(|b| format!("{b:#04x}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                w.line(&format!(
+                    "static const uint8_t _{fname}_cbor[{}] = {{{bytes}}};",
+                    m.len().max(1)
+                ));
             }
             Some(Primitive::Bstr | Primitive::Any) => {
-                w.line(&format!("static const uint8_t _{fname}_cbor[1] = {{0xf6}};"));
+                w.line(&format!(
+                    "static const uint8_t _{fname}_cbor[1] = {{0xf6}};"
+                ));
             }
             _ => {}
         }
@@ -1808,22 +2247,35 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
 
     // Fill in default values for each field
     for f in &s.fields {
-        if matches!(f.occurrence, Occurrence::Optional) { continue; }
+        if matches!(f.occurrence, Occurrence::Optional) {
+            continue;
+        }
         // A choice's zeroed union is its first alternative's zero.
-        if is_prim_choice_c(&f.ty) { continue; }
+        if is_prim_choice_c(&f.ty) {
+            continue;
+        }
         // A required pointer member points at a zero value of its type
         // (dgtlrift/cddlc#156); an optional one stays absent.
         if indirect(&s.name, &f.ty, module) {
             let fname = to_snake_case(&f.name);
-            w.line(&format!("static {} _{fname}_target;", ptr_type(&f.ty, module)));
+            w.line(&format!(
+                "static {} _{fname}_target;",
+                ptr_type(&f.ty, module)
+            ));
             w.line(&format!("original.{fname} = &_{fname}_target;"));
             continue;
         }
         // A repeated member gets as many items as it needs, each like the
         // first (dgtlrift/cddlc#134); one that may be empty stays empty.
-        if f.occurrence.is_repeated() && cddlc_codegen::repeat_bounds(&f.occurrence).0 == 0 { continue; }
+        if f.occurrence.is_repeated() && cddlc_codegen::repeat_bounds(&f.occurrence).0 == 0 {
+            continue;
+        }
         let base = to_snake_case(&f.name);
-        let fname = if f.occurrence.is_repeated() { format!("{}[0]", to_snake_case(&f.name)) } else { to_snake_case(&f.name) };
+        let fname = if f.occurrence.is_repeated() {
+            format!("{}[0]", to_snake_case(&f.name))
+        } else {
+            to_snake_case(&f.name)
+        };
         if let TypeRef::Named(n) = &f.ty {
             if let Some(n) = tstr_size_constraint_for(n, module) {
                 w.line(&format!("original.{fname}.value.ptr = _{base}_data;"));
@@ -1865,9 +2317,13 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
     }
     for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
         let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
-        if min == 0 || is_prim_choice_c(&f.ty) { continue; }
+        if min == 0 || is_prim_choice_c(&f.ty) {
+            continue;
+        }
         let fname = to_snake_case(&f.name);
-        w.line(&format!("for (size_t i = 1; i < {min}; i++) original.{fname}[i] = original.{fname}[0];"));
+        w.line(&format!(
+            "for (size_t i = 1; i < {min}; i++) original.{fname}[i] = original.{fname}[0];"
+        ));
         w.line(&format!("original.{fname}_count = {min};"));
     }
     w.blank();
@@ -1875,7 +2331,9 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
     // Encode
     w.line("nanocbor_encoder_t enc;");
     w.line("nanocbor_encoder_init(&enc, buf, sizeof(buf));");
-    w.line(&format!("assert({pfx}_{type_name}_encode(&enc, &original) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_encode(&enc, &original) == 0);"
+    ));
     w.line("size_t enc_len = nanocbor_encoded_len(&enc);");
     w.blank();
 
@@ -1883,19 +2341,25 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"
+    ));
     w.blank();
 
     // Assert equality for scalar fields
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
         if f.occurrence.is_repeated() {
-            w.line(&format!("assert(original.{fname}_count == decoded.{fname}_count);"));
+            w.line(&format!(
+                "assert(original.{fname}_count == decoded.{fname}_count);"
+            ));
             continue;
         }
         match &f.ty {
             TypeRef::Primitive(Primitive::Tstr | Primitive::Bstr | Primitive::Any) => {
-                w.line(&format!("assert(original.{fname}.len == decoded.{fname}.len);"));
+                w.line(&format!(
+                    "assert(original.{fname}.len == decoded.{fname}.len);"
+                ));
             }
             TypeRef::Primitive(_) => {
                 w.line(&format!("assert(original.{fname} == decoded.{fname});"));
@@ -1905,36 +2369,55 @@ fn emit_c_struct_test(w: &mut IndentWriter, s: &StructDef, pfx: &str, module: &I
     }
 
     if needs_release(&s.name, module) {
-        w.line(&format!("{pfx}_{type_name}_release(&decoded, &test_cb, NULL);"));
+        w.line(&format!(
+            "{pfx}_{type_name}_release(&decoded, &test_cb, NULL);"
+        ));
     }
-    w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
+    w.line(&format!(
+        "printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"
+    ));
     w.dedent();
     w.line("}");
 }
 
 fn emit_c_alias_test(w: &mut IndentWriter, a: &AliasDef, pfx: &str, _opts: &CodegenOptions) {
     let type_name = to_snake_case(&a.name);
-    w.line(&format!("static void test_{pfx}_{type_name}_roundtrip(void) {{"));
+    w.line(&format!(
+        "static void test_{pfx}_{type_name}_roundtrip(void) {{"
+    ));
     w.indent();
 
     // For size-constrained tstr aliases, initialise with a valid-length literal
     // so that the roundtrip encode→decode passes constraint validation.
-    let tstr_size = a.constraints.iter().find_map(|c| match c {
-        Constraint::SizeExact(n) => Some(*n),
-        Constraint::SizeRange { min: Some(n), .. } => Some(*n),
-        _ => None,
-    }).filter(|_| matches!(&a.ty, TypeRef::Primitive(Primitive::Tstr)));
+    let tstr_size = a
+        .constraints
+        .iter()
+        .find_map(|c| match c {
+            Constraint::SizeExact(n) => Some(*n),
+            Constraint::SizeRange { min: Some(n), .. } => Some(*n),
+            _ => None,
+        })
+        .filter(|_| matches!(&a.ty, TypeRef::Primitive(Primitive::Tstr)));
 
     w.line(&format!("{type_name}_t original = {{0}};"));
     // A value pinned to a literal, or with a lower bound (`40 .plus 2`,
     // `uint .within (1..5)`; dgtlrift/cddlc#86).
     for c in &a.constraints {
         let set = match c {
-            Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => format!("(cbor_str_t){{ {t:?}, {} }}", t.len()),
+            Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => {
+                format!("(cbor_str_t){{ {t:?}, {} }}", t.len())
+            }
             // A byte-string literal (dgtlrift/cddlc#142).
             Constraint::Eq(cddlc_ir::LiteralValue::Bytes(b)) if !b.is_empty() => {
-                let bytes = b.iter().map(|x| format!("{x:#04x}")).collect::<Vec<_>>().join(", ");
-                format!("(cbor_slice_t){{ (const uint8_t[]){{{bytes}}}, {} }}", b.len())
+                let bytes = b
+                    .iter()
+                    .map(|x| format!("{x:#04x}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "(cbor_slice_t){{ (const uint8_t[]){{{bytes}}}, {} }}",
+                    b.len()
+                )
             }
             Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => format!("{n}U"),
             Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => format!("{n}"),
@@ -1953,40 +2436,56 @@ fn emit_c_alias_test(w: &mut IndentWriter, a: &AliasDef, pfx: &str, _opts: &Code
     }
     w.line("nanocbor_encoder_t enc;");
     w.line("nanocbor_encoder_init(&enc, buf, sizeof(buf));");
-    w.line(&format!("assert({pfx}_{type_name}_encode(&enc, &original) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_encode(&enc, &original) == 0);"
+    ));
     w.line("size_t enc_len = nanocbor_encoded_len(&enc);");
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
-    w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"
+    ));
+    w.line(&format!(
+        "printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"
+    ));
     w.dedent();
     w.line("}");
 }
 
 fn emit_c_array_test(w: &mut IndentWriter, a: &ArrayDef, pfx: &str, _opts: &CodegenOptions) {
     let type_name = to_snake_case(&a.name);
-    w.line(&format!("static void test_{pfx}_{type_name}_roundtrip(void) {{"));
+    w.line(&format!(
+        "static void test_{pfx}_{type_name}_roundtrip(void) {{"
+    ));
     w.indent();
     w.line(&format!("{type_name}_t original = {{0}};"));
     w.line("original.count = 0;");
     w.line("nanocbor_encoder_t enc;");
     w.line("nanocbor_encoder_init(&enc, buf, sizeof(buf));");
-    w.line(&format!("assert({pfx}_{type_name}_encode(&enc, &original) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_encode(&enc, &original) == 0);"
+    ));
     w.line("size_t enc_len = nanocbor_encoded_len(&enc);");
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"
+    ));
     w.line("assert(decoded.count == original.count);");
-    w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
+    w.line(&format!(
+        "printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"
+    ));
     w.dedent();
     w.line("}");
 }
 
 fn emit_c_map_test(w: &mut IndentWriter, m: &MapDef, pfx: &str, opts: &CodegenOptions) {
     let type_name = to_snake_case(&m.name);
-    w.line(&format!("static void test_{pfx}_{type_name}_roundtrip(void) {{"));
+    w.line(&format!(
+        "static void test_{pfx}_{type_name}_roundtrip(void) {{"
+    ));
     w.indent();
     w.line(&format!("{type_name}_t original = {{0}};"));
     // One entry when the key is text and the value a scalar.
@@ -1999,34 +2498,55 @@ fn emit_c_map_test(w: &mut IndentWriter, m: &MapDef, pfx: &str, opts: &CodegenOp
     }
     w.line("nanocbor_encoder_t enc;");
     w.line("nanocbor_encoder_init(&enc, buf, sizeof(buf));");
-    w.line(&format!("assert({pfx}_{type_name}_encode(&enc, &original) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_encode(&enc, &original) == 0);"
+    ));
     w.line("size_t enc_len = nanocbor_encoded_len(&enc);");
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"
+    ));
     w.line("assert(decoded.count == original.count);");
     if one {
         w.line("assert(decoded.entries[0].key.len == 1 && memcmp(decoded.entries[0].key.ptr, \"k\", 1) == 0);");
         w.line("assert(decoded.entries[0].value == original.entries[0].value);");
     }
-    w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
+    w.line(&format!(
+        "printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"
+    ));
     w.dedent();
     w.line("}");
 }
 
-fn emit_c_enum_test(w: &mut IndentWriter, e: &EnumDef, pfx: &str, module: &IrModule, _opts: &CodegenOptions) {
+fn emit_c_enum_test(
+    w: &mut IndentWriter,
+    e: &EnumDef,
+    pfx: &str,
+    module: &IrModule,
+    _opts: &CodegenOptions,
+) {
     let type_name = to_snake_case(&e.name);
-    w.line(&format!("static void test_{pfx}_{type_name}_roundtrip(void) {{"));
+    w.line(&format!(
+        "static void test_{pfx}_{type_name}_roundtrip(void) {{"
+    ));
     w.indent();
     if let Some(v) = e.variants.first() {
-        let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+        let vconst = format!(
+            "{}_{}",
+            to_screaming_snake(&e.name),
+            to_screaming_snake(&v.name)
+        );
         w.line(&format!("{type_name}_t original = {{ .tag = {vconst} }};"));
         // A pointer alternative points at a zero value of its type
         // (dgtlrift/cddlc#156).
         if indirect(&e.name, &v.ty, module) {
             w.line(&format!("static {} _target;", ptr_type(&v.ty, module)));
-            w.line(&format!("original.value.{} = &_target;", to_snake_case(&v.name)));
+            w.line(&format!(
+                "original.value.{} = &_target;",
+                to_snake_case(&v.name)
+            ));
         }
         // A map variant's members pinned to a literal (`type: "start"`) hold it.
         if let (TypeRef::Named(n), false) = (&v.ty, indirect(&e.name, &v.ty, module)) {
@@ -2035,7 +2555,10 @@ fn emit_c_enum_test(w: &mut IndentWriter, e: &EnumDef, pfx: &str, module: &IrMod
                 for f in st.fields.iter().filter(|f| f.occurrence.is_required()) {
                     let fname = to_snake_case(&f.name);
                     if let Some(t) = text_literal_of(f) {
-                        w.line(&format!("original.value.{vname}.{fname} = (cbor_str_t){{ {t:?}, {} }};", t.len()));
+                        w.line(&format!(
+                            "original.value.{vname}.{fname} = (cbor_str_t){{ {t:?}, {} }};",
+                            t.len()
+                        ));
                     } else if let Some(x) = scalar_literal_of(f) {
                         w.line(&format!("original.value.{vname}.{fname} = {x};"));
                     }
@@ -2047,17 +2570,25 @@ fn emit_c_enum_test(w: &mut IndentWriter, e: &EnumDef, pfx: &str, module: &IrMod
     }
     w.line("nanocbor_encoder_t enc;");
     w.line("nanocbor_encoder_init(&enc, buf, sizeof(buf));");
-    w.line(&format!("assert({pfx}_{type_name}_encode(&enc, &original) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_encode(&enc, &original) == 0);"
+    ));
     w.line("size_t enc_len = nanocbor_encoded_len(&enc);");
     w.line(&format!("{type_name}_t decoded = {{0}};"));
     w.line("nanocbor_value_t dec;");
     w.line("nanocbor_decoder_init(&dec, buf, enc_len);");
-    w.line(&format!("assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"));
+    w.line(&format!(
+        "assert({pfx}_{type_name}_decode(&dec, &decoded, &test_cb, NULL) == 0);"
+    ));
     w.line("assert(decoded.tag == original.tag);");
     if needs_release(&e.name, module) {
-        w.line(&format!("{pfx}_{type_name}_release(&decoded, &test_cb, NULL);"));
+        w.line(&format!(
+            "{pfx}_{type_name}_release(&decoded, &test_cb, NULL);"
+        ));
     }
-    w.line(&format!("printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"));
+    w.line(&format!(
+        "printf(\"{pfx}_{type_name}_roundtrip: PASS\\n\");"
+    ));
     w.dedent();
     w.line("}");
 }
@@ -2066,9 +2597,10 @@ fn emit_c_enum_test(w: &mut IndentWriter, e: &EnumDef, pfx: &str, module: &IrMod
 
 fn c_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     match occ {
-        Occurrence::ZeroOrMore { capacity } | Occurrence::OneOrMore { capacity }
+        Occurrence::ZeroOrMore { capacity }
+        | Occurrence::OneOrMore { capacity }
         | Occurrence::Bounded { capacity, .. } => {
-            let cap  = capacity_value(capacity, opts.max_array);
+            let cap = capacity_value(capacity, opts.max_array);
             let base = typeref_to_c(ty, opts);
             // `T name[cap]; size_t name_count`: the declaration puts the
             // member's name in (dgtlrift/cddlc#134).
@@ -2090,17 +2622,20 @@ fn is_prim_choice_c(ty: &TypeRef) -> bool {
 
 fn typeref_to_c(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(p)    => primitive_to_c(p).to_owned(),
-        TypeRef::Named(n)        => format!("{}_t", to_snake_case(n)),
+        TypeRef::Primitive(p) => primitive_to_c(p).to_owned(),
+        TypeRef::Named(n) => format!("{}_t", to_snake_case(n)),
         TypeRef::Tagged(_, inner) => typeref_to_c(inner, opts),
         TypeRef::Choice(cs) => match prim_choice_c(cs) {
             Some(alts) => {
-                let members: String = alts.iter().enumerate()
+                let members: String = alts
+                    .iter()
+                    .enumerate()
                     .map(|(i, p)| format!("{} alt{i}; ", primitive_to_c(p)))
                     .collect();
                 format!("struct {{ uint8_t kind; union {{ {members}}} as; }}")
             }
-            None => cs.first()
+            None => cs
+                .first()
                 .map(|c| typeref_to_c(c, opts))
                 .unwrap_or_else(|| "void*".into()),
         },
@@ -2110,8 +2645,8 @@ fn typeref_to_c(ty: &TypeRef, opts: &CodegenOptions) -> String {
 /// Returns the first concrete Primitive in a TypeRef, following Tagged and Choice.
 fn effective_primitive(ty: &TypeRef) -> Option<&Primitive> {
     match ty {
-        TypeRef::Primitive(p)     => Some(p),
-        TypeRef::Choice(cs)       => cs.first().and_then(|c| effective_primitive(c)),
+        TypeRef::Primitive(p) => Some(p),
+        TypeRef::Choice(cs) => cs.first().and_then(|c| effective_primitive(c)),
         TypeRef::Tagged(_, inner) => effective_primitive(inner),
         _ => None,
     }
@@ -2152,10 +2687,10 @@ fn scalar_literal_of(f: &cddlc_ir::FieldDef) -> Option<String> {
 fn c_default_value(ty: &TypeRef, _opts: &CodegenOptions) -> Option<String> {
     match ty {
         TypeRef::Primitive(Primitive::Uint) => Some("42U".into()),
-        TypeRef::Primitive(Primitive::Int)  => Some("-1".into()),
+        TypeRef::Primitive(Primitive::Int) => Some("-1".into()),
         TypeRef::Primitive(Primitive::Bool) => Some("true".into()),
         TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) => Some("1.0f".into()),
-        TypeRef::Primitive(Primitive::Float64 | Primitive::Float)   => Some("1.0".into()),
+        TypeRef::Primitive(Primitive::Float64 | Primitive::Float) => Some("1.0".into()),
         _ => None,
     }
 }
@@ -2168,7 +2703,8 @@ fn emit_c_doc(w: &mut IndentWriter, doc: Option<&str>) {
 
 fn emit_cmake_json(name: &str, opts: &CodegenOptions) -> String {
     let header = cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Hash);
-    format!(r#"{header}cmake_minimum_required(VERSION 3.16)
+    format!(
+        r#"{header}cmake_minimum_required(VERSION 3.16)
 project({name}_json C)
 
 set(CMAKE_C_STANDARD 11)
@@ -2195,7 +2731,8 @@ enable_testing()
 add_executable(test_roundtrip test/test_roundtrip.c)
 target_link_libraries(test_roundtrip PRIVATE {name}_json cjson)
 add_test(NAME roundtrip COMMAND test_roundtrip)
-"#)
+"#
+    )
 }
 
 #[allow(dead_code)]
@@ -2207,13 +2744,14 @@ fn c_json_field_type(ty: &TypeRef, opts: &CodegenOptions) -> String {
 
 fn typeref_to_c_json(ty: &TypeRef) -> String {
     match ty {
-        TypeRef::Primitive(Primitive::Tstr)                  => "json_str_t".into(),
-        TypeRef::Primitive(Primitive::Bstr)                  => "json_bytes_t".into(),
-        TypeRef::Primitive(Primitive::Any)                   => "json_any_t".into(),
-        TypeRef::Primitive(p)                                => primitive_to_c(p).to_owned(),
-        TypeRef::Named(n)                                    => format!("{}_t", to_snake_case(n)),
-        TypeRef::Tagged(_, inner)                            => typeref_to_c_json(inner),
-        TypeRef::Choice(cs)                                  => cs.first()
+        TypeRef::Primitive(Primitive::Tstr) => "json_str_t".into(),
+        TypeRef::Primitive(Primitive::Bstr) => "json_bytes_t".into(),
+        TypeRef::Primitive(Primitive::Any) => "json_any_t".into(),
+        TypeRef::Primitive(p) => primitive_to_c(p).to_owned(),
+        TypeRef::Named(n) => format!("{}_t", to_snake_case(n)),
+        TypeRef::Tagged(_, inner) => typeref_to_c_json(inner),
+        TypeRef::Choice(cs) => cs
+            .first()
             .map(|c| typeref_to_c_json(c))
             .unwrap_or_else(|| "json_bytes_t".into()),
     }
@@ -2221,9 +2759,10 @@ fn typeref_to_c_json(ty: &TypeRef) -> String {
 
 fn c_field_type_json(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     match occ {
-        Occurrence::ZeroOrMore { capacity } | Occurrence::OneOrMore { capacity }
+        Occurrence::ZeroOrMore { capacity }
+        | Occurrence::OneOrMore { capacity }
         | Occurrence::Bounded { capacity, .. } => {
-            let cap  = capacity_value(capacity, opts.max_array);
+            let cap = capacity_value(capacity, opts.max_array);
             let base = typeref_to_c_json(ty);
             // `T name[cap]; size_t name_count`: the declaration puts the
             // member's name in (dgtlrift/cddlc#134).
@@ -2233,7 +2772,12 @@ fn c_field_type_json(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> S
     }
 }
 
-fn emit_struct_decl_json(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts: &CodegenOptions) {
+fn emit_struct_decl_json(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    module: &IrModule,
+    opts: &CodegenOptions,
+) {
     emit_c_doc(w, s.doc.as_deref());
     let type_name = to_snake_case(&s.name);
     w.line("typedef struct {");
@@ -2246,7 +2790,7 @@ fn emit_struct_decl_json(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
         } else {
             c_field_type_json(&f.ty, &f.occurrence, opts)
         };
-        let fname  = to_snake_case(&f.name);
+        let fname = to_snake_case(&f.name);
         if ty_str.contains("{name}") {
             w.line(&format!("{};", ty_str.replace("{name}", &fname)));
         } else {
@@ -2259,12 +2803,17 @@ fn emit_struct_decl_json(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
     // The map's other entries (dgtlrift/cddlc#82).
     if let Some(r) = &s.rest {
         let cap = capacity_value(
-            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+            r.occurrence
+                .capacity()
+                .unwrap_or(&Capacity::Bounded(opts.max_array)),
             opts.max_array,
         );
         let rname = to_snake_case(&r.name);
         w.line("/* The map's other entries. */");
-        w.line(&format!("struct {{ json_str_t key; {} value; }} {rname}[{cap}];", typeref_to_c_json(&r.val_ty)));
+        w.line(&format!(
+            "struct {{ json_str_t key; {} value; }} {rname}[{cap}];",
+            typeref_to_c_json(&r.val_ty)
+        ));
         w.line(&format!("size_t {rname}_count;"));
     }
     w.dedent();
@@ -2278,8 +2827,16 @@ fn emit_enum_decl_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule) {
     w.line("typedef enum {");
     w.indent();
     for (i, v) in e.variants.iter().enumerate() {
-        let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-        if i == e.variants.len() - 1 { w.line(&vconst); } else { w.line(&format!("{vconst},")); }
+        let vconst = format!(
+            "{}_{}",
+            to_screaming_snake(&e.name),
+            to_screaming_snake(&v.name)
+        );
+        if i == e.variants.len() - 1 {
+            w.line(&vconst);
+        } else {
+            w.line(&format!("{vconst},"));
+        }
     }
     w.dedent();
     w.line(&format!("}} {type_name}_tag_t;"));
@@ -2293,13 +2850,25 @@ fn emit_enum_decl_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule) {
     for v in &e.variants {
         let vname = to_snake_case(&v.name);
         match &v.ty {
-            TypeRef::Primitive(Primitive::Null)                  => {}
-            TypeRef::Primitive(Primitive::Tstr)                  => { w.line(&format!("json_str_t {vname};")); }
-            TypeRef::Primitive(Primitive::Bstr)                  => { w.line(&format!("json_bytes_t {vname};")); }
-            TypeRef::Primitive(Primitive::Any)                   => { w.line(&format!("json_any_t {vname};")); }
-            TypeRef::Primitive(p)                                => { w.line(&format!("{} {vname};", primitive_to_c(p))); }
-            TypeRef::Named(_) if indirect(&e.name, &v.ty, module) => { w.line(&format!("{} *{vname};", ptr_type(&v.ty, module))); }
-            TypeRef::Named(n)                                    => { w.line(&format!("{}_t {vname};", to_snake_case(n))); }
+            TypeRef::Primitive(Primitive::Null) => {}
+            TypeRef::Primitive(Primitive::Tstr) => {
+                w.line(&format!("json_str_t {vname};"));
+            }
+            TypeRef::Primitive(Primitive::Bstr) => {
+                w.line(&format!("json_bytes_t {vname};"));
+            }
+            TypeRef::Primitive(Primitive::Any) => {
+                w.line(&format!("json_any_t {vname};"));
+            }
+            TypeRef::Primitive(p) => {
+                w.line(&format!("{} {vname};", primitive_to_c(p)));
+            }
+            TypeRef::Named(_) if indirect(&e.name, &v.ty, module) => {
+                w.line(&format!("{} *{vname};", ptr_type(&v.ty, module)));
+            }
+            TypeRef::Named(n) => {
+                w.line(&format!("{}_t {vname};", to_snake_case(n)));
+            }
             _ => {}
         }
     }
@@ -2312,9 +2881,11 @@ fn emit_enum_decl_json(w: &mut IndentWriter, e: &EnumDef, module: &IrModule) {
 fn emit_array_decl_json(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     emit_c_doc(w, a.doc.as_deref());
     let type_name = to_snake_case(&a.name);
-    let elem_ty   = typeref_to_c_json(&a.element);
-    let cap       = capacity_value(
-        a.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+    let elem_ty = typeref_to_c_json(&a.element);
+    let cap = capacity_value(
+        a.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     w.line("typedef struct {");
@@ -2330,12 +2901,17 @@ fn emit_map_decl_json(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     emit_c_doc(w, m.doc.as_deref());
     let type_name = to_snake_case(&m.name);
     let cap = capacity_value(
-        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        m.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
     w.line("typedef struct {");
     w.indent();
-    w.line(&format!("struct {{ json_str_t key; {} value; }} entries[{cap}];", typeref_to_c_json(&m.val_ty)));
+    w.line(&format!(
+        "struct {{ json_str_t key; {} value; }} entries[{cap}];",
+        typeref_to_c_json(&m.val_ty)
+    ));
     w.line("size_t count;");
     w.dedent();
     w.line(&format!("}} {type_name}_t;"));
@@ -2346,28 +2922,35 @@ fn emit_alias_decl_json(w: &mut IndentWriter, a: &AliasDef) {
     let type_name = to_snake_case(&a.name);
     if a.tagged.is_some() || !a.constraints.is_empty() {
         let inner = typeref_to_c_json(&a.ty);
-        w.line(&format!("typedef struct {{ {inner} value; }} {type_name}_t;"));
+        w.line(&format!(
+            "typedef struct {{ {inner} value; }} {type_name}_t;"
+        ));
     } else {
         let inner = typeref_to_c_json(&a.ty);
         w.line(&format!("typedef {inner} {type_name}_t;"));
     }
 }
 
-fn emit_type_decl_h_json(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
+fn emit_type_decl_h_json(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    module: &IrModule,
+    opts: &CodegenOptions,
+) {
     match def {
         TypeDef::Struct(s) => emit_struct_decl_json(w, s, module, opts),
-        TypeDef::Enum(e)   => emit_enum_decl_json(w, e, module),
-        TypeDef::Array(a)  => emit_array_decl_json(w, a, opts),
-        TypeDef::Alias(a)  => emit_alias_decl_json(w, a),
-        TypeDef::Map(m)    => emit_map_decl_json(w, m, opts),
+        TypeDef::Enum(e) => emit_enum_decl_json(w, e, module),
+        TypeDef::Array(a) => emit_array_decl_json(w, a, opts),
+        TypeDef::Alias(a) => emit_alias_decl_json(w, a),
+        TypeDef::Map(m) => emit_map_decl_json(w, m, opts),
     }
 }
 
 fn emit_header_json(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name     = module.name.as_str();
-    let guard    = to_screaming_snake(&name);
+    let name = module.name.as_str();
+    let guard = to_screaming_snake(&name);
     let mod_name = to_snake_case(&name);
-    let mut w    = IndentWriter::new(4);
+    let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
         w.line(&l);
@@ -2404,13 +2987,21 @@ fn emit_header_json(module: &IrModule, opts: &CodegenOptions) -> String {
     for t in &targets {
         w.line(&format!("typedef struct {t}_s {t}_t;"));
     }
-    if !targets.is_empty() { w.blank(); }
+    if !targets.is_empty() {
+        w.blank();
+    }
     for tname in cddlc_codegen::inline_decl_order(module) {
-        let Some(def) = module.get(&tname) else { continue };
+        let Some(def) = module.get(&tname) else {
+            continue;
+        };
         let mut sub = IndentWriter::new(4);
         emit_type_decl_h_json(&mut sub, def, module, opts);
         for line in declare_tagged(sub.finish(), &to_snake_case(&tname), &targets).lines() {
-            if line.is_empty() { w.blank() } else { w.line(line) }
+            if line.is_empty() {
+                w.blank()
+            } else {
+                w.line(line)
+            }
         }
         w.blank();
     }
@@ -2434,24 +3025,30 @@ fn emit_header_json(module: &IrModule, opts: &CodegenOptions) -> String {
 fn emit_json_fn_decls(w: &mut IndentWriter, def: &TypeDef, mod_name: &str, opts: &CodegenOptions) {
     let (name, ctype) = match def {
         TypeDef::Struct(s) => (s.name.as_str(), format!("{}_t", to_snake_case(&s.name))),
-        TypeDef::Enum(e)   => (e.name.as_str(), format!("{}_t", to_snake_case(&e.name))),
-        TypeDef::Array(a)  => (a.name.as_str(), format!("{}_t", to_snake_case(&a.name))),
-        TypeDef::Alias(a)  => (a.name.as_str(), format!("{}_t", to_snake_case(&a.name))),
-        TypeDef::Map(m)    => (m.name.as_str(), format!("{}_t", to_snake_case(&m.name))),
+        TypeDef::Enum(e) => (e.name.as_str(), format!("{}_t", to_snake_case(&e.name))),
+        TypeDef::Array(a) => (a.name.as_str(), format!("{}_t", to_snake_case(&a.name))),
+        TypeDef::Alias(a) => (a.name.as_str(), format!("{}_t", to_snake_case(&a.name))),
+        TypeDef::Map(m) => (m.name.as_str(), format!("{}_t", to_snake_case(&m.name))),
     };
     let snake = to_snake_case(&name);
-    let pfx   = format!("{mod_name}_{snake}");
+    let pfx = format!("{mod_name}_{snake}");
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj);"));
-    w.line(&format!("bool   {pfx}_from_json(const cJSON* j, {ctype}* out);"));
-    w.line(&format!("char*  {pfx}_encode(const {ctype}* obj);  /* caller frees */"));
-    w.line(&format!("bool   {pfx}_decode(const char* s, {ctype}* out);"));
+    w.line(&format!(
+        "bool   {pfx}_from_json(const cJSON* j, {ctype}* out);"
+    ));
+    w.line(&format!(
+        "char*  {pfx}_encode(const {ctype}* obj);  /* caller frees */"
+    ));
+    w.line(&format!(
+        "bool   {pfx}_decode(const char* s, {ctype}* out);"
+    ));
     let _ = opts;
 }
 
 fn emit_source_json(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name     = module.name.as_str();
+    let name = module.name.as_str();
     let mod_name = to_snake_case(&name);
-    let mut w    = IndentWriter::new(4);
+    let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
         w.line(&l);
@@ -2541,7 +3138,9 @@ fn emit_source_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.indent();
     w.line("int a = DEC[(uint8_t)s[i]], b = DEC[(uint8_t)s[i+1]];");
     w.line("if (a>=0&&b>=0) out[j++]=(a<<2)|(b>>4);");
-    w.line("if (i+2 < slen) { int c=DEC[(uint8_t)s[i+2]]; if(b>=0&&c>=0) out[j++]=(b<<4)|(c>>2); }");
+    w.line(
+        "if (i+2 < slen) { int c=DEC[(uint8_t)s[i+2]]; if(b>=0&&c>=0) out[j++]=(b<<4)|(c>>2); }",
+    );
     w.dedent();
     w.line("}");
     w.line("*out_len = j;");
@@ -2559,13 +3158,25 @@ fn emit_source_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_json_type_impl(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_type_impl(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    module: &IrModule,
+    mod_name: &str,
+    opts: &CodegenOptions,
+) {
     match def {
         TypeDef::Struct(s) => emit_json_struct_impl(w, s, module, mod_name, opts),
-        TypeDef::Enum(e)   => emit_json_enum_impl(w, e, module, mod_name, opts),
-        TypeDef::Array(a)  => emit_json_array_impl(w, a, flat_record(a, module).map(|r| r.fields.len()), mod_name, opts),
-        TypeDef::Alias(a)  => emit_json_alias_impl(w, a, mod_name, opts),
-        TypeDef::Map(m)    => emit_json_map_impl(w, m, mod_name, opts),
+        TypeDef::Enum(e) => emit_json_enum_impl(w, e, module, mod_name, opts),
+        TypeDef::Array(a) => emit_json_array_impl(
+            w,
+            a,
+            flat_record(a, module).map(|r| r.fields.len()),
+            mod_name,
+            opts,
+        ),
+        TypeDef::Alias(a) => emit_json_alias_impl(w, a, mod_name, opts),
+        TypeDef::Map(m) => emit_json_map_impl(w, m, mod_name, opts),
     }
 }
 
@@ -2573,12 +3184,14 @@ fn json_value_expr(ty: &TypeRef, expr: &str, mod_name: &str) -> String {
     match ty {
         TypeRef::Primitive(Primitive::Bool) => format!("cJSON_CreateBool({expr})"),
         TypeRef::Primitive(Primitive::Uint) => format!("cJSON_CreateNumber((double){expr})"),
-        TypeRef::Primitive(Primitive::Int)  => format!("cJSON_CreateNumber((double){expr})"),
-        TypeRef::Primitive(Primitive::Float32 | Primitive::Float16
-            | Primitive::Float64 | Primitive::Float) => format!("cJSON_CreateNumber((double){expr})"),
+        TypeRef::Primitive(Primitive::Int) => format!("cJSON_CreateNumber((double){expr})"),
+        TypeRef::Primitive(
+            Primitive::Float32 | Primitive::Float16 | Primitive::Float64 | Primitive::Float,
+        ) => format!("cJSON_CreateNumber((double){expr})"),
         TypeRef::Primitive(Primitive::Tstr) => format!("cJSON_CreateString({expr})"),
-        TypeRef::Primitive(Primitive::Bstr) =>
-            format!("cJSON_CreateString(cddlc_b64url_encode(({expr}).data, ({expr}).len))"),
+        TypeRef::Primitive(Primitive::Bstr) => {
+            format!("cJSON_CreateString(cddlc_b64url_encode(({expr}).data, ({expr}).len))")
+        }
         TypeRef::Primitive(Primitive::Any) => format!("cddlc_json_any_to(&({expr}))"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "cJSON_CreateNull()".into(),
         TypeRef::Named(n) => {
@@ -2590,10 +3203,16 @@ fn json_value_expr(ty: &TypeRef, expr: &str, mod_name: &str) -> String {
     }
 }
 
-fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_struct_impl(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    module: &IrModule,
+    mod_name: &str,
+    opts: &CodegenOptions,
+) {
     let snake = to_snake_case(&s.name);
     let ctype = format!("{}_t", to_snake_case(&s.name));
-    let pfx   = format!("{mod_name}_{snake}");
+    let pfx = format!("{mod_name}_{snake}");
 
     if s.encoding == cddlc_ir::StructEncoding::Array {
         emit_json_record_impl(w, s, module, mod_name, &pfx, &ctype, opts);
@@ -2607,19 +3226,23 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
     w.line("cJSON* j = cJSON_CreateObject();");
     w.line("if (!j) return NULL;");
     for f in &s.fields {
-        let fname    = to_snake_case(&f.name);
+        let fname = to_snake_case(&f.name);
         let key_text = cddlc_codegen::field_key_json(&f.key);
-        let key      = key_text.as_str();
-        let access   = json_access(&s.name, f, module);
+        let key = key_text.as_str();
+        let access = json_access(&s.name, f, module);
         let val_expr = json_value_expr(&f.ty, &access, mod_name);
         // A required pointer member must point at a value (dgtlrift/cddlc#156).
         if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
-            w.line(&format!("if (!obj->{fname}) {{ cJSON_Delete(j); return NULL; }}"));
+            w.line(&format!(
+                "if (!obj->{fname}) {{ cJSON_Delete(j); return NULL; }}"
+            ));
         }
         match &f.occurrence {
             Occurrence::Optional => {
                 let present_field = format!("{fname}_present");
-                w.line(&format!("if (obj->{present_field}) cJSON_AddItemToObject(j, {key:?}, {val_expr});"));
+                w.line(&format!(
+                    "if (obj->{present_field}) cJSON_AddItemToObject(j, {key:?}, {val_expr});"
+                ));
             }
             _ => {
                 w.line(&format!("cJSON_AddItemToObject(j, {key:?}, {val_expr});"));
@@ -2637,23 +3260,40 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
     w.blank();
 
     // from_json
-    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.line(&format!(
+        "bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"
+    ));
     w.indent();
     w.line("if (!cJSON_IsObject(j)) return false;");
     w.line("memset(out, 0, sizeof(*out));");
     // A map has only the members its schema gives it (dgtlrift/cddlc#102).
     if s.rest.is_none() {
-        let named: Vec<String> = s.fields.iter().map(|f| format!("strcmp(k->string, {:?}) == 0", cddlc_codegen::field_key_json(&f.key))).collect();
+        let named: Vec<String> = s
+            .fields
+            .iter()
+            .map(|f| {
+                format!(
+                    "strcmp(k->string, {:?}) == 0",
+                    cddlc_codegen::field_key_json(&f.key)
+                )
+            })
+            .collect();
         w.line(&format!(
             "{{ cJSON* k; cJSON_ArrayForEach(k, j) {{ if (!({})) return false; }} }}",
-            if named.is_empty() { "0".into() } else { named.join(" || ") }
+            if named.is_empty() {
+                "0".into()
+            } else {
+                named.join(" || ")
+            }
         ));
     }
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
         let key_text = cddlc_codegen::field_key_json(&f.key);
-        let key   = key_text.as_str();
-        w.line(&format!("cJSON* _{fname} = cJSON_GetObjectItemCaseSensitive(j, {key:?});"));
+        let key = key_text.as_str();
+        w.line(&format!(
+            "cJSON* _{fname} = cJSON_GetObjectItemCaseSensitive(j, {key:?});"
+        ));
         match &f.occurrence {
             Occurrence::Optional => {
                 let present_field = format!("{fname}_present");
@@ -2674,10 +3314,21 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
     if let Some(r) = &s.rest {
         let rname = to_snake_case(&r.name);
         let cap = capacity_value(
-            r.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+            r.occurrence
+                .capacity()
+                .unwrap_or(&Capacity::Bounded(opts.max_array)),
             opts.max_array,
         );
-        let named: Vec<String> = s.fields.iter().map(|f| format!("strcmp(item->string, {:?}) == 0", cddlc_codegen::field_key_json(&f.key))).collect();
+        let named: Vec<String> = s
+            .fields
+            .iter()
+            .map(|f| {
+                format!(
+                    "strcmp(item->string, {:?}) == 0",
+                    cddlc_codegen::field_key_json(&f.key)
+                )
+            })
+            .collect();
         w.line("cJSON* item; cJSON_ArrayForEach(item, j) {");
         w.indent();
         if !named.is_empty() {
@@ -2685,7 +3336,14 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
         }
         w.line(&format!("if (out->{rname}_count >= {cap}) return false;"));
         w.line(&format!("strncpy(out->{rname}[out->{rname}_count].key, item->string, sizeof(out->{rname}[out->{rname}_count].key) - 1);"));
-        json_decode_field(w, &r.val_ty, &format!("{rname}[out->{rname}_count].value"), "item", mod_name, opts);
+        json_decode_field(
+            w,
+            &r.val_ty,
+            &format!("{rname}[out->{rname}_count].value"),
+            "item",
+            mod_name,
+            opts,
+        );
         w.line(&format!("out->{rname}_count++;"));
         w.dedent();
         w.line("}");
@@ -2702,18 +3360,31 @@ fn emit_json_struct_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
 /// A record's to_json / from_json (RFC 8610 §3.4): a JSON array of the members'
 /// values, in order. Optional members come last: one present after an absent
 /// one can't be written, so to_json returns NULL.
-fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
+fn emit_json_record_impl(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    module: &IrModule,
+    mod_name: &str,
+    pfx: &str,
+    ctype: &str,
+    opts: &CodegenOptions,
+) {
     if let Some(ri) = cddlc_codegen::record_repeated(s) {
         emit_json_record_repeated(w, s, ri, module, mod_name, pfx, ctype, opts);
         return;
     }
-    let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+    let optional: Vec<_> = s
+        .fields
+        .iter()
+        .filter(|f| matches!(f.occurrence, Occurrence::Optional))
+        .collect();
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
     w.indent();
     for pair in optional.windows(2) {
         w.line(&format!(
             "if (obj->{}_present && !obj->{}_present) return NULL;",
-            to_snake_case(&pair[1].name), to_snake_case(&pair[0].name)
+            to_snake_case(&pair[1].name),
+            to_snake_case(&pair[0].name)
         ));
     }
     w.line("cJSON* j = cJSON_CreateArray();");
@@ -2723,10 +3394,14 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
         let val_expr = json_value_expr(&f.ty, &json_access(&s.name, f, module), mod_name);
         // A required pointer member must point at a value (dgtlrift/cddlc#156).
         if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
-            w.line(&format!("if (!obj->{fname}) {{ cJSON_Delete(j); return NULL; }}"));
+            w.line(&format!(
+                "if (!obj->{fname}) {{ cJSON_Delete(j); return NULL; }}"
+            ));
         }
         if matches!(f.occurrence, Occurrence::Optional) {
-            w.line(&format!("if (obj->{fname}_present) cJSON_AddItemToArray(j, {val_expr});"));
+            w.line(&format!(
+                "if (obj->{fname}_present) cJSON_AddItemToArray(j, {val_expr});"
+            ));
         } else {
             w.line(&format!("cJSON_AddItemToArray(j, {val_expr});"));
         }
@@ -2736,19 +3411,31 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
     w.line("}");
     w.blank();
 
-    let required = s.fields.iter().filter(|f| !matches!(f.occurrence, Occurrence::Optional)).count();
-    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    let required = s
+        .fields
+        .iter()
+        .filter(|f| !matches!(f.occurrence, Occurrence::Optional))
+        .count();
+    w.line(&format!(
+        "bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"
+    ));
     w.indent();
     w.line("if (!cJSON_IsArray(j)) return false;");
     w.line("int n = cJSON_GetArraySize(j);");
-    w.line(&format!("if (n < {required} || n > {}) return false;", s.fields.len()));
+    w.line(&format!(
+        "if (n < {required} || n > {}) return false;",
+        s.fields.len()
+    ));
     w.line("memset(out, 0, sizeof(*out));");
     // One optional member before required ones: present when the array holds
     // every member; the members after it move down one when it's absent
     // (dgtlrift/cddlc#134).
     let before = cddlc_codegen::record_optionals_before(s);
     let index = |i: usize| match &before {
-        Some(b) if b[i] > 0 => { let x = required + b[i]; format!("(n >= {x} ? {i} : {i} - ({x} - n))") }
+        Some(b) if b[i] > 0 => {
+            let x = required + b[i];
+            format!("(n >= {x} ? {i} : {i} - ({x} - n))")
+        }
         _ => i.to_string(),
     };
     for (i, f) in s.fields.iter().enumerate() {
@@ -2766,7 +3453,10 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
             w.dedent();
             w.line("}");
         } else {
-            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {});", index(i)));
+            w.line(&format!(
+                "cJSON* _{fname} = cJSON_GetArrayItem(j, {});",
+                index(i)
+            ));
             json_decode_member(w, &s.name, f, &format!("_{fname}"), module, mod_name, opts);
         }
     }
@@ -2779,15 +3469,33 @@ fn emit_json_record_impl(w: &mut IndentWriter, s: &StructDef, module: &IrModule,
 /// A record with a repeated member (`[primary, * extension, payload]`): its
 /// items go inline, where it stands, and the array's length says how many
 /// there are (dgtlrift/cddlc#134).
-fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, module: &IrModule, mod_name: &str, pfx: &str, ctype: &str, opts: &CodegenOptions) {
+fn emit_json_record_repeated(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    ri: usize,
+    module: &IrModule,
+    mod_name: &str,
+    pfx: &str,
+    ctype: &str,
+    opts: &CodegenOptions,
+) {
     let rf = &s.fields[ri];
     let rname = to_snake_case(&rf.name);
     let fixed = s.fields.len() - 1;
     let (min, max) = cddlc_codegen::repeat_bounds(&rf.occurrence);
-    let cap = capacity_value(rf.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)), opts.max_array);
+    let cap = capacity_value(
+        rf.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
+        opts.max_array,
+    );
     let bounds = |w: &mut IndentWriter, n: &str, fail: &str| {
-        if min > 0 { w.line(&format!("if ({n} < {min}) return {fail};")); }
-        if let Some(max) = max { w.line(&format!("if ({n} > {max}) return {fail};")); }
+        if min > 0 {
+            w.line(&format!("if ({n} < {min}) return {fail};"));
+        }
+        if let Some(max) = max {
+            w.line(&format!("if ({n} > {max}) return {fail};"));
+        }
     };
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
     w.indent();
@@ -2809,7 +3517,9 @@ fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, mod
     w.line("}");
     w.blank();
 
-    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.line(&format!(
+        "bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"
+    ));
     w.indent();
     w.line("if (!cJSON_IsArray(j)) return false;");
     w.line("int n = cJSON_GetArraySize(j);");
@@ -2823,14 +3533,29 @@ fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, mod
         if f.occurrence.is_repeated() {
             w.line("for (int k = 0; k < reps; k++) {");
             w.indent();
-            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {i} + k);"));
-            json_decode_field(w, &f.ty, &format!("{fname}[k]"), &format!("_{fname}"), mod_name, opts);
+            w.line(&format!(
+                "cJSON* _{fname} = cJSON_GetArrayItem(j, {i} + k);"
+            ));
+            json_decode_field(
+                w,
+                &f.ty,
+                &format!("{fname}[k]"),
+                &format!("_{fname}"),
+                mod_name,
+                opts,
+            );
             w.dedent();
             w.line("}");
             w.line(&format!("out->{fname}_count = (size_t)reps;"));
         } else {
-            let index = if i < ri { i.to_string() } else { format!("{} + reps", i - 1) };
-            w.line(&format!("cJSON* _{fname} = cJSON_GetArrayItem(j, {index});"));
+            let index = if i < ri {
+                i.to_string()
+            } else {
+                format!("{} + reps", i - 1)
+            };
+            w.line(&format!(
+                "cJSON* _{fname} = cJSON_GetArrayItem(j, {index});"
+            ));
             json_decode_member(w, &s.name, f, &format!("_{fname}"), module, mod_name, opts);
         }
     }
@@ -2844,13 +3569,25 @@ fn emit_json_record_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, mod
 /// (dgtlrift/cddlc#156).
 fn json_access(owner: &str, f: &cddlc_ir::FieldDef, module: &IrModule) -> String {
     let fname = to_snake_case(&f.name);
-    if indirect(owner, &f.ty, module) { format!("(*obj->{fname})") } else { format!("obj->{fname}") }
+    if indirect(owner, &f.ty, module) {
+        format!("(*obj->{fname})")
+    } else {
+        format!("obj->{fname}")
+    }
 }
 
 /// Reads a member from the JSON value `src`. A pointer member gets its memory
 /// from the heap (cJSON's own values are on it too), freed by `_release`
 /// (dgtlrift/cddlc#156).
-fn json_decode_member(w: &mut IndentWriter, owner: &str, f: &cddlc_ir::FieldDef, src: &str, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
+fn json_decode_member(
+    w: &mut IndentWriter,
+    owner: &str,
+    f: &cddlc_ir::FieldDef,
+    src: &str,
+    module: &IrModule,
+    mod_name: &str,
+    opts: &CodegenOptions,
+) {
     let fname = to_snake_case(&f.name);
     if !indirect(owner, &f.ty, module) {
         json_decode_field(w, &f.ty, &fname, src, mod_name, opts);
@@ -2859,59 +3596,102 @@ fn json_decode_member(w: &mut IndentWriter, owner: &str, f: &cddlc_ir::FieldDef,
     let n = named_of(&f.ty).unwrap_or_default();
     w.line(&format!("out->{fname} = calloc(1, sizeof *out->{fname});"));
     w.line(&format!("if (!out->{fname}) return false;"));
-    w.line(&format!("if (!{mod_name}_{}_from_json({src}, out->{fname})) return false;", to_snake_case(n)));
+    w.line(&format!(
+        "if (!{mod_name}_{}_from_json({src}, out->{fname})) return false;",
+        to_snake_case(n)
+    ));
 }
 
 /// `expr` as a C identifier fragment: `items[out->count]` → `items_out_count_`.
 fn c_ident(expr: &str) -> String {
-    expr.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
+    expr.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
-fn json_decode_field(w: &mut IndentWriter, ty: &TypeRef, dest: &str, src: &str, mod_name: &str, _opts: &CodegenOptions) {
+fn json_decode_field(
+    w: &mut IndentWriter,
+    ty: &TypeRef,
+    dest: &str,
+    src: &str,
+    mod_name: &str,
+    _opts: &CodegenOptions,
+) {
     match ty {
-        TypeRef::Primitive(Primitive::Bool) =>
-            w.line(&format!("out->{dest} = cJSON_IsTrue({src});")),
-        TypeRef::Primitive(Primitive::Uint) =>
-            w.line(&format!("out->{dest} = (uint64_t)cJSON_GetNumberValue({src});")),
-        TypeRef::Primitive(Primitive::Int) =>
-            w.line(&format!("out->{dest} = (int64_t)cJSON_GetNumberValue({src});")),
-        TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) =>
-            w.line(&format!("out->{dest} = (float)cJSON_GetNumberValue({src});")),
-        TypeRef::Primitive(Primitive::Float64 | Primitive::Float) =>
-            w.line(&format!("out->{dest} = cJSON_GetNumberValue({src});")),
+        TypeRef::Primitive(Primitive::Bool) => {
+            w.line(&format!("out->{dest} = cJSON_IsTrue({src});"))
+        }
+        TypeRef::Primitive(Primitive::Uint) => w.line(&format!(
+            "out->{dest} = (uint64_t)cJSON_GetNumberValue({src});"
+        )),
+        TypeRef::Primitive(Primitive::Int) => w.line(&format!(
+            "out->{dest} = (int64_t)cJSON_GetNumberValue({src});"
+        )),
+        TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) => w.line(&format!(
+            "out->{dest} = (float)cJSON_GetNumberValue({src});"
+        )),
+        TypeRef::Primitive(Primitive::Float64 | Primitive::Float) => {
+            w.line(&format!("out->{dest} = cJSON_GetNumberValue({src});"))
+        }
         // Temporaries are named for `dest`, as an identifier.
         TypeRef::Primitive(Primitive::Tstr) => {
             let v = c_ident(dest);
-            w.line(&format!("const char* _s_{v} = cJSON_GetStringValue({src});"));
-            w.line(&format!("if (_s_{v}) {{ strncpy(out->{dest}, _s_{v}, sizeof(out->{dest}) - 1); }}"));
+            w.line(&format!(
+                "const char* _s_{v} = cJSON_GetStringValue({src});"
+            ));
+            w.line(&format!(
+                "if (_s_{v}) {{ strncpy(out->{dest}, _s_{v}, sizeof(out->{dest}) - 1); }}"
+            ));
         }
         TypeRef::Primitive(Primitive::Any) => {
-            w.line(&format!("if (!cddlc_json_any_from({src}, &out->{dest})) return false;"));
+            w.line(&format!(
+                "if (!cddlc_json_any_from({src}, &out->{dest})) return false;"
+            ));
         }
         TypeRef::Primitive(Primitive::Bstr) => {
             let v = c_ident(dest);
-            w.line(&format!("const char* _b64_{v} = cJSON_GetStringValue({src});"));
+            w.line(&format!(
+                "const char* _b64_{v} = cJSON_GetStringValue({src});"
+            ));
             w.line(&format!("if (_b64_{v}) {{ size_t _bl; uint8_t* _bd = cddlc_b64url_decode(_b64_{v}, &_bl); if(_bd) {{ memcpy(out->{dest}.data, _bd, _bl); out->{dest}.len = _bl; free(_bd); }} }}"));
         }
         TypeRef::Named(n) => {
             let snake = to_snake_case(&n);
-            w.line(&format!("{mod_name}_{snake}_from_json({src}, &out->{dest});"));
+            w.line(&format!(
+                "{mod_name}_{snake}_from_json({src}, &out->{dest});"
+            ));
         }
         TypeRef::Tagged(_, inner) => json_decode_field(w, inner, dest, src, mod_name, _opts),
         _ => {}
     }
 }
 
-fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_enum_impl(
+    w: &mut IndentWriter,
+    e: &EnumDef,
+    module: &IrModule,
+    mod_name: &str,
+    opts: &CodegenOptions,
+) {
     let snake = to_snake_case(&e.name);
     let ctype = format!("{}_t", to_snake_case(&e.name));
-    let pfx   = format!("{mod_name}_{snake}");
+    let pfx = format!("{mod_name}_{snake}");
 
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
     w.indent();
     w.line("switch (obj->tag) {");
     for v in &e.variants {
-        let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+        let vconst = format!(
+            "{}_{}",
+            to_screaming_snake(&e.name),
+            to_screaming_snake(&v.name)
+        );
         let vsnake = to_snake_case(&v.name);
         let cddl_str = cddlc_codegen::enum_variant_text(v);
         w.line(&format!("case {vconst}:"));
@@ -2919,23 +3699,32 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
         match &v.ty {
             // `null` is JSON null, not text (dgtlrift/cddlc#147).
             TypeRef::Primitive(Primitive::Null) => w.line("return cJSON_CreateNull();"),
-            TypeRef::Primitive(Primitive::Tstr) =>
-                w.line(&format!("return cJSON_CreateString({cddl_str:?});")),
-            TypeRef::Primitive(Primitive::Uint) =>
-                w.line(&format!("return cJSON_CreateNumber((double)obj->value.{vsnake});")),
-            TypeRef::Primitive(Primitive::Int) =>
-                w.line(&format!("return cJSON_CreateNumber((double)obj->value.{vsnake});")),
-            TypeRef::Primitive(Primitive::Bool) =>
-                w.line(&format!("return cJSON_CreateBool(obj->value.{vsnake});")),
+            TypeRef::Primitive(Primitive::Tstr) => {
+                w.line(&format!("return cJSON_CreateString({cddl_str:?});"))
+            }
+            TypeRef::Primitive(Primitive::Uint) => w.line(&format!(
+                "return cJSON_CreateNumber((double)obj->value.{vsnake});"
+            )),
+            TypeRef::Primitive(Primitive::Int) => w.line(&format!(
+                "return cJSON_CreateNumber((double)obj->value.{vsnake});"
+            )),
+            TypeRef::Primitive(Primitive::Bool) => {
+                w.line(&format!("return cJSON_CreateBool(obj->value.{vsnake});"))
+            }
             // The value an `any` holds as text (dgtlrift/cddlc#178).
-            TypeRef::Primitive(Primitive::Any) =>
-                w.line(&format!("return cddlc_json_any_to(&obj->value.{vsnake});")),
+            TypeRef::Primitive(Primitive::Any) => {
+                w.line(&format!("return cddlc_json_any_to(&obj->value.{vsnake});"))
+            }
             // A variant of a named type (dgtlrift/cddlc#102).
             // A pointer alternative is read through it (dgtlrift/cddlc#156).
-            TypeRef::Named(n) if indirect(&e.name, &v.ty, module) =>
-                w.line(&format!("return {mod_name}_{}_to_json(obj->value.{vsnake});", to_snake_case(&n))),
-            TypeRef::Named(n) =>
-                w.line(&format!("return {mod_name}_{}_to_json(&obj->value.{vsnake});", to_snake_case(&n))),
+            TypeRef::Named(n) if indirect(&e.name, &v.ty, module) => w.line(&format!(
+                "return {mod_name}_{}_to_json(obj->value.{vsnake});",
+                to_snake_case(&n)
+            )),
+            TypeRef::Named(n) => w.line(&format!(
+                "return {mod_name}_{}_to_json(&obj->value.{vsnake});",
+                to_snake_case(&n)
+            )),
             _ => w.line("return cJSON_CreateNull();"),
         }
         w.dedent();
@@ -2946,19 +3735,29 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
     w.line("}");
     w.blank();
 
-    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.line(&format!(
+        "bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"
+    ));
     w.indent();
     // A variant of a map or array type: the first whose decoder reads the value.
     for v in &e.variants {
         let TypeRef::Named(n) = &v.ty else { continue };
-        let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+        let vconst = format!(
+            "{}_{}",
+            to_screaming_snake(&e.name),
+            to_screaming_snake(&v.name)
+        );
         let vsnake = to_snake_case(&v.name);
         if indirect(&e.name, &v.ty, module) {
             // A pointer alternative: memory from the heap, freed if it isn't
             // this one (dgtlrift/cddlc#156).
             let ptr = ptr_type(&v.ty, module);
             let target = resolve_named(n, module);
-            let rel = if needs_release(target, module) { format!("{mod_name}_{}_release(p); ", to_snake_case(target)) } else { String::new() };
+            let rel = if needs_release(target, module) {
+                format!("{mod_name}_{}_release(p); ", to_snake_case(target))
+            } else {
+                String::new()
+            };
             w.line("if (cJSON_IsObject(j) || cJSON_IsArray(j)) {");
             w.indent();
             w.line(&format!("{ptr} *p = ({ptr} *)calloc(1, sizeof *p);"));
@@ -2979,8 +3778,14 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
     }
     for v in &e.variants {
         if matches!(&v.ty, TypeRef::Primitive(Primitive::Null)) {
-            let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-            w.line(&format!("if (cJSON_IsNull(j)) {{ out->tag = {vconst}; return true; }}"));
+            let vconst = format!(
+                "{}_{}",
+                to_screaming_snake(&e.name),
+                to_screaming_snake(&v.name)
+            );
+            w.line(&format!(
+                "if (cJSON_IsNull(j)) {{ out->tag = {vconst}; return true; }}"
+            ));
         }
     }
     w.line("if (cJSON_IsString(j)) {");
@@ -2988,34 +3793,53 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
     w.line("const char* s = cJSON_GetStringValue(j);");
     for v in &e.variants {
         if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
-            let vconst   = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+            let vconst = format!(
+                "{}_{}",
+                to_screaming_snake(&e.name),
+                to_screaming_snake(&v.name)
+            );
             let cddl_str = cddlc_codegen::enum_variant_text(v);
-            w.line(&format!("if (strcmp(s, {cddl_str:?}) == 0) {{ out->tag = {vconst}; return true; }}"));
+            w.line(&format!(
+                "if (strcmp(s, {cddl_str:?}) == 0) {{ out->tag = {vconst}; return true; }}"
+            ));
         }
     }
     // An `any` alternative takes what the others don't (dgtlrift/cddlc#178).
-    let any = e.variants.iter().find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Any)));
+    let any = e
+        .variants
+        .iter()
+        .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Any)));
     if any.is_none() {
         w.line("return false;");
     }
     w.dedent();
     w.line("}");
-    let has_num = e.variants.iter().any(|v|
-        matches!(&v.ty, TypeRef::Primitive(Primitive::Uint | Primitive::Int)));
+    let has_num = e
+        .variants
+        .iter()
+        .any(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Uint | Primitive::Int)));
     if has_num {
         w.line("if (cJSON_IsNumber(j)) {");
         w.indent();
         for v in &e.variants {
-            let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
+            let vconst = format!(
+                "{}_{}",
+                to_screaming_snake(&e.name),
+                to_screaming_snake(&v.name)
+            );
             let vsnake = to_snake_case(&v.name);
             if matches!(&v.ty, TypeRef::Primitive(Primitive::Uint)) {
                 w.line(&format!("out->tag = {vconst};"));
-                w.line(&format!("out->value.{vsnake} = (uint64_t)cJSON_GetNumberValue(j);"));
+                w.line(&format!(
+                    "out->value.{vsnake} = (uint64_t)cJSON_GetNumberValue(j);"
+                ));
                 w.line("return true;");
                 break;
             } else if matches!(&v.ty, TypeRef::Primitive(Primitive::Int)) {
                 w.line(&format!("out->tag = {vconst};"));
-                w.line(&format!("out->value.{vsnake} = (int64_t)cJSON_GetNumberValue(j);"));
+                w.line(&format!(
+                    "out->value.{vsnake} = (int64_t)cJSON_GetNumberValue(j);"
+                ));
                 w.line("return true;");
                 break;
             }
@@ -3025,8 +3849,15 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
     }
     match any {
         Some(v) => {
-            let vconst = format!("{}_{}", to_screaming_snake(&e.name), to_screaming_snake(&v.name));
-            w.line(&format!("if (!cddlc_json_any_from(j, &out->value.{})) return false;", to_snake_case(&v.name)));
+            let vconst = format!(
+                "{}_{}",
+                to_screaming_snake(&e.name),
+                to_screaming_snake(&v.name)
+            );
+            w.line(&format!(
+                "if (!cddlc_json_any_from(j, &out->value.{})) return false;",
+                to_snake_case(&v.name)
+            ));
             w.line(&format!("out->tag = {vconst}; return true;"));
         }
         None => w.line("return false;"),
@@ -3039,10 +3870,16 @@ fn emit_json_enum_impl(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, mod
     let _ = opts;
 }
 
-fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_array_impl(
+    w: &mut IndentWriter,
+    a: &ArrayDef,
+    flat: Option<usize>,
+    mod_name: &str,
+    opts: &CodegenOptions,
+) {
     let snake = to_snake_case(&a.name);
     let ctype = format!("{}_t", to_snake_case(&a.name));
-    let pfx   = format!("{mod_name}_{snake}");
+    let pfx = format!("{mod_name}_{snake}");
 
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
     w.indent();
@@ -3056,7 +3893,9 @@ fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>,
         w.line(&format!("cJSON* g = {val_expr};"));
         w.line("if (!g) { cJSON_Delete(arr); return NULL; }");
         w.line("cJSON* m;");
-        w.line("while ((m = cJSON_DetachItemFromArray(g, 0)) != NULL) cJSON_AddItemToArray(arr, m);");
+        w.line(
+            "while ((m = cJSON_DetachItemFromArray(g, 0)) != NULL) cJSON_AddItemToArray(arr, m);",
+        );
         w.line("cJSON_Delete(g);");
     } else {
         w.line(&format!("cJSON_AddItemToArray(arr, {val_expr});"));
@@ -3068,7 +3907,9 @@ fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>,
     w.line("}");
     w.blank();
 
-    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.line(&format!(
+        "bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"
+    ));
     w.indent();
     w.line("if (!cJSON_IsArray(j)) return false;");
     w.line("out->count = 0;");
@@ -3077,12 +3918,17 @@ fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>,
         let entry_fn = format!("{mod_name}_{}_from_json", to_snake_case(entry));
         w.line("int n = cJSON_GetArraySize(j);");
         w.line(&format!("if (n % {n} != 0) return false;"));
-        w.line(&format!("for (int i = 0; i < n && out->count < {}; i += {n}) {{", opts.max_array));
+        w.line(&format!(
+            "for (int i = 0; i < n && out->count < {}; i += {n}) {{",
+            opts.max_array
+        ));
         w.indent();
         w.line("cJSON* g = cJSON_CreateArray();");
         w.line("if (!g) return false;");
         w.line(&format!("for (int k = 0; k < {n}; k++) cJSON_AddItemReferenceToArray(g, cJSON_GetArrayItem(j, i + k));"));
-        w.line(&format!("bool ok = {entry_fn}(g, &out->items[out->count]);"));
+        w.line(&format!(
+            "bool ok = {entry_fn}(g, &out->items[out->count]);"
+        ));
         w.line("cJSON_Delete(g);");
         w.line("if (!ok) return false;");
         w.line("out->count++;");
@@ -3113,9 +3959,11 @@ fn emit_json_array_impl(w: &mut IndentWriter, a: &ArrayDef, flat: Option<usize>,
 fn emit_json_map_impl(w: &mut IndentWriter, m: &MapDef, mod_name: &str, opts: &CodegenOptions) {
     let snake = to_snake_case(&m.name);
     let ctype = format!("{}_t", to_snake_case(&m.name));
-    let pfx   = format!("{mod_name}_{snake}");
+    let pfx = format!("{mod_name}_{snake}");
     let cap = capacity_value(
-        m.occurrence.capacity().unwrap_or(&Capacity::Bounded(opts.max_array)),
+        m.occurrence
+            .capacity()
+            .unwrap_or(&Capacity::Bounded(opts.max_array)),
         opts.max_array,
     );
 
@@ -3126,7 +3974,9 @@ fn emit_json_map_impl(w: &mut IndentWriter, m: &MapDef, mod_name: &str, opts: &C
     w.line("for (size_t i = 0; i < obj->count; i++) {");
     w.indent();
     let val_expr = json_value_expr(&m.val_ty, "obj->entries[i].value", mod_name);
-    w.line(&format!("cJSON_AddItemToObject(o, obj->entries[i].key, {val_expr});"));
+    w.line(&format!(
+        "cJSON_AddItemToObject(o, obj->entries[i].key, {val_expr});"
+    ));
     w.dedent();
     w.line("}");
     w.line("return o;");
@@ -3134,7 +3984,9 @@ fn emit_json_map_impl(w: &mut IndentWriter, m: &MapDef, mod_name: &str, opts: &C
     w.line("}");
     w.blank();
 
-    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.line(&format!(
+        "bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"
+    ));
     w.indent();
     w.line("if (!cJSON_IsObject(j)) return false;");
     w.line("out->count = 0;");
@@ -3142,7 +3994,14 @@ fn emit_json_map_impl(w: &mut IndentWriter, m: &MapDef, mod_name: &str, opts: &C
     w.indent();
     w.line(&format!("if (out->count >= {cap}) return false;"));
     w.line("strncpy(out->entries[out->count].key, item->string, sizeof(out->entries[out->count].key) - 1);");
-    json_decode_field(w, &m.val_ty, "entries[out->count].value", "item", mod_name, opts);
+    json_decode_field(
+        w,
+        &m.val_ty,
+        "entries[out->count].value",
+        "item",
+        mod_name,
+        opts,
+    );
     w.line("out->count++;");
     w.dedent();
     w.line("}");
@@ -3155,23 +4014,29 @@ fn emit_json_map_impl(w: &mut IndentWriter, m: &MapDef, mod_name: &str, opts: &C
 }
 
 fn emit_json_alias_impl(w: &mut IndentWriter, a: &AliasDef, mod_name: &str, opts: &CodegenOptions) {
-    let snake      = to_snake_case(&a.name);
-    let ctype      = format!("{}_t", to_snake_case(&a.name));
-    let pfx        = format!("{mod_name}_{snake}");
+    let snake = to_snake_case(&a.name);
+    let ctype = format!("{}_t", to_snake_case(&a.name));
+    let pfx = format!("{mod_name}_{snake}");
     let is_newtype = a.tagged.is_some() || !a.constraints.is_empty();
 
     // to_json
     w.line(&format!("cJSON* {pfx}_to_json(const {ctype}* obj) {{"));
     w.indent();
-    let inner_expr = if is_newtype { "obj->value".to_owned() } else { "(*obj)".to_owned() };
-    let val_expr   = json_value_expr(&a.ty, &inner_expr, mod_name);
+    let inner_expr = if is_newtype {
+        "obj->value".to_owned()
+    } else {
+        "(*obj)".to_owned()
+    };
+    let val_expr = json_value_expr(&a.ty, &inner_expr, mod_name);
     w.line(&format!("return {val_expr};"));
     w.dedent();
     w.line("}");
     w.blank();
 
     // from_json
-    w.line(&format!("bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"));
+    w.line(&format!(
+        "bool {pfx}_from_json(const cJSON* j, {ctype}* out) {{"
+    ));
     w.indent();
     if is_newtype {
         json_decode_field(w, &a.ty, "value", "j", mod_name, opts);
@@ -3212,7 +4077,9 @@ fn emit_json_alias_impl(w: &mut IndentWriter, a: &AliasDef, mod_name: &str, opts
                 w.line("if (!_bd) return false;");
                 w.line("memcpy(out->data, _bd, _bl); out->len = _bl; free(_bd);");
             }
-            _ => { w.line("(void)j;"); }
+            _ => {
+                w.line("(void)j;");
+            }
         }
     }
     w.line("return true;");
@@ -3236,7 +4103,9 @@ fn emit_json_encode_decode(w: &mut IndentWriter, pfx: &str, ctype: &str) {
     w.line("}");
     w.blank();
 
-    w.line(&format!("bool {pfx}_decode(const char* s, {ctype}* out) {{"));
+    w.line(&format!(
+        "bool {pfx}_decode(const char* s, {ctype}* out) {{"
+    ));
     w.indent();
     w.line("cJSON* j = cJSON_Parse(s);");
     w.line("if (!j) return false;");
@@ -3248,9 +4117,9 @@ fn emit_json_encode_decode(w: &mut IndentWriter, pfx: &str, ctype: &str) {
 }
 
 fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name     = module.name.as_str();
+    let name = module.name.as_str();
     let mod_name = to_snake_case(&name);
-    let mut w    = IndentWriter::new(4);
+    let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::CBlock) {
         w.line(&l);
@@ -3270,10 +4139,10 @@ fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
     for (_, def) in &module.types {
         let tname = match def {
             TypeDef::Struct(s) => s.name.as_str(),
-            TypeDef::Enum(e)   => e.name.as_str(),
-            TypeDef::Array(a)  => a.name.as_str(),
-            TypeDef::Alias(a)  => a.name.as_str(),
-            TypeDef::Map(m)    => m.name.as_str(),
+            TypeDef::Enum(e) => e.name.as_str(),
+            TypeDef::Array(a) => a.name.as_str(),
+            TypeDef::Alias(a) => a.name.as_str(),
+            TypeDef::Map(m) => m.name.as_str(),
         };
         let snake = to_snake_case(&tname);
         w.line(&format!("test_{mod_name}_{snake}();"));
@@ -3286,20 +4155,33 @@ fn emit_tests_json(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, mod_name: &str, opts: &CodegenOptions) {
+fn emit_json_type_test(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    module: &IrModule,
+    mod_name: &str,
+    opts: &CodegenOptions,
+) {
     match def {
         TypeDef::Struct(s) => {
             let snake = to_snake_case(&s.name);
             let ctype = format!("{}_t", to_snake_case(&s.name));
-            let pfx   = format!("{mod_name}_{snake}");
+            let pfx = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));
             // A required pointer member points at a zero value of its type
             // (dgtlrift/cddlc#156).
-            for f in s.fields.iter().filter(|f| f.occurrence.is_required() && indirect(&s.name, &f.ty, module)) {
+            for f in s
+                .fields
+                .iter()
+                .filter(|f| f.occurrence.is_required() && indirect(&s.name, &f.ty, module))
+            {
                 let fname = to_snake_case(&f.name);
-                w.line(&format!("static {} _{fname}_target;", ptr_type(&f.ty, module)));
+                w.line(&format!(
+                    "static {} _{fname}_target;",
+                    ptr_type(&f.ty, module)
+                ));
                 w.line(&format!("original.{fname} = &_{fname}_target;"));
             }
             // A repeated member gets as many (zeroed) items as it needs
@@ -3307,7 +4189,10 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, m
             for f in s.fields.iter().filter(|f| f.occurrence.is_repeated()) {
                 let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
                 if min > 0 {
-                    w.line(&format!("original.{}_count = {min};", to_snake_case(&f.name)));
+                    w.line(&format!(
+                        "original.{}_count = {min};",
+                        to_snake_case(&f.name)
+                    ));
                 }
             }
             w.line(&format!("char* encoded = {pfx}_encode(&original);"));
@@ -3325,15 +4210,22 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, m
         TypeDef::Enum(e) => {
             let snake = to_snake_case(&e.name);
             let ctype = format!("{}_t", to_snake_case(&e.name));
-            let pfx   = format!("{mod_name}_{snake}");
+            let pfx = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));
             // A first alternative that's a pointer points at a zero value of
             // its type (dgtlrift/cddlc#156).
-            if let Some(v) = e.variants.first().filter(|v| indirect(&e.name, &v.ty, module)) {
+            if let Some(v) = e
+                .variants
+                .first()
+                .filter(|v| indirect(&e.name, &v.ty, module))
+            {
                 w.line(&format!("static {} _target;", ptr_type(&v.ty, module)));
-                w.line(&format!("original.value.{} = &_target;", to_snake_case(&v.name)));
+                w.line(&format!(
+                    "original.value.{} = &_target;",
+                    to_snake_case(&v.name)
+                ));
             }
             w.line(&format!("char* encoded = {pfx}_encode(&original);"));
             w.line("assert(encoded != NULL);");
@@ -3350,7 +4242,7 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, m
         TypeDef::Array(a) => {
             let snake = to_snake_case(&a.name);
             let ctype = format!("{}_t", to_snake_case(&a.name));
-            let pfx   = format!("{mod_name}_{snake}");
+            let pfx = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));
@@ -3366,7 +4258,7 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, m
         TypeDef::Alias(a) => {
             let snake = to_snake_case(&a.name);
             let ctype = format!("{}_t", to_snake_case(&a.name));
-            let pfx   = format!("{mod_name}_{snake}");
+            let pfx = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));
@@ -3382,7 +4274,7 @@ fn emit_json_type_test(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, m
         TypeDef::Map(m) => {
             let snake = to_snake_case(&m.name);
             let ctype = format!("{}_t", to_snake_case(&m.name));
-            let pfx   = format!("{mod_name}_{snake}");
+            let pfx = format!("{mod_name}_{snake}");
             w.line(&format!("static void test_{pfx}(void) {{"));
             w.indent();
             w.line(&format!("{ctype} original = {{0}};"));

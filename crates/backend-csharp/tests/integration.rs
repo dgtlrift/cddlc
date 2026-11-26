@@ -1,22 +1,21 @@
+use backend_csharp::CSharpBackend;
+use cddlc_codegen::{Backend, CodegenOptions};
+use cddlc_ir::lower;
+use cddlc_parser::parse_cddl;
 /// Integration tests for backend-csharp.
 ///
 /// The backend emits 3 files:
 ///   files[0] = <module>-cbor.csproj
 ///   files[1] = src/<Module>.cs
 ///   files[2] = tests/RoundtripTests.cs
-
 use std::path::PathBuf;
-use backend_csharp::CSharpBackend;
-use cddlc_codegen::{Backend, CodegenOptions};
-use cddlc_ir::lower;
-use cddlc_parser::parse_cddl;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 struct GeneratedCrate {
     csproj: String,
     source: String,
-    tests:  String,
+    tests: String,
 }
 
 fn compile(src: &str) -> GeneratedCrate {
@@ -24,14 +23,16 @@ fn compile(src: &str) -> GeneratedCrate {
 }
 
 fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
-    let parsed  = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
+    let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let out     = CSharpBackend.generate(&lowered.module, &opts).expect("generate");
+    let out = CSharpBackend
+        .generate(&lowered.module, &opts)
+        .expect("generate");
     assert_eq!(out.files.len(), 3, "expected 3 output files");
     GeneratedCrate {
         csproj: out.files[0].content.clone(),
         source: out.files[1].content.clone(),
-        tests:  out.files[2].content.clone(),
+        tests: out.files[2].content.clone(),
     }
 }
 
@@ -39,10 +40,10 @@ fn compile_with_opts(src: &str, opts: CodegenOptions) -> GeneratedCrate {
 
 #[test]
 fn test_emits_three_files() {
-    let opts   = CodegenOptions::default();
+    let opts = CodegenOptions::default();
     let parsed = parse_cddl("x = uint", PathBuf::from("t.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
-    let out    = CSharpBackend.generate(&lowered.module, &opts).unwrap();
+    let out = CSharpBackend.generate(&lowered.module, &opts).unwrap();
     assert_eq!(out.files.len(), 3);
     assert!(out.files[0].path.ends_with(".csproj"));
     assert!(out.files[1].path.ends_with(".cs"));
@@ -51,10 +52,10 @@ fn test_emits_three_files() {
 
 #[test]
 fn test_crate_dir_named_after_module() {
-    let opts   = CodegenOptions::default();
+    let opts = CodegenOptions::default();
     let parsed = parse_cddl("x = uint", PathBuf::from("sensor.cddl")).unwrap();
     let lowered = lower(&parsed.value, 16, 64).unwrap();
-    let out    = CSharpBackend.generate(&lowered.module, &opts).unwrap();
+    let out = CSharpBackend.generate(&lowered.module, &opts).unwrap();
     assert!(out.files[0].path.starts_with("sensor-cbor/"));
     assert!(out.files[1].path.starts_with("sensor-cbor/src/"));
     assert!(out.files[2].path.starts_with("sensor-cbor/tests/"));
@@ -159,7 +160,9 @@ fn test_struct_has_encode_method() {
 #[test]
 fn test_struct_has_decode_method() {
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("public static Sensor Decode(CborReader reader)"));
+    assert!(g
+        .source
+        .contains("public static Sensor Decode(CborReader reader)"));
 }
 
 #[test]
@@ -191,7 +194,12 @@ fn test_struct_decode_has_switch() {
 fn test_struct_unknown_field_rejected() {
     // A map has only the members its schema gives it (dgtlrift/cddlc#102).
     let g = compile("sensor = { id: uint }");
-    assert!(g.source.contains("throw new CborContentException($\"Sensor: unknown member {key}\");"), "{}", g.source);
+    assert!(
+        g.source
+            .contains("throw new CborContentException($\"Sensor: unknown member {key}\");"),
+        "{}",
+        g.source
+    );
 }
 
 #[test]
@@ -240,13 +248,17 @@ fn test_enum_variants_have_instance() {
 #[test]
 fn test_enum_has_abstract_encode() {
     let g = compile(r#"status = "ok" / "warn""#);
-    assert!(g.source.contains("public abstract void Encode(CborWriter writer)"));
+    assert!(g
+        .source
+        .contains("public abstract void Encode(CborWriter writer)"));
 }
 
 #[test]
 fn test_enum_has_static_decode() {
     let g = compile(r#"status = "ok" / "warn""#);
-    assert!(g.source.contains("public static Status Decode(CborReader reader)"));
+    assert!(g
+        .source
+        .contains("public static Status Decode(CborReader reader)"));
 }
 
 #[test]
@@ -288,7 +300,11 @@ fn test_constrained_alias_validates_in_ctor() {
     let g = compile("device-id = tstr .size 16");
     assert!(g.source.contains("class DeviceId"));
     assert!(g.source.contains("CborValidationException"));
-    assert!(g.source.contains("UTF8.GetByteCount(value) == 16"), "{}", g.source);
+    assert!(
+        g.source.contains("UTF8.GetByteCount(value) == 16"),
+        "{}",
+        g.source
+    );
 }
 
 #[test]
@@ -400,17 +416,23 @@ fn test_roundtrip_array_empty_fact() {
 
 #[test]
 fn test_iot_schema_generates() {
-    let g = compile(r#"
+    let g = compile(
+        r#"
 sensor-message = {
     version:   uint,
     device-id: device-id,
     timestamp: #6.1(uint),
 }
 device-id = tstr .size 16
-"#);
+"#,
+    );
     assert!(g.source.contains("class SensorMessage"));
     assert!(g.source.contains("class DeviceId"));
-    assert!(g.source.contains("UTF8.GetByteCount(value) == 16"), "{}", g.source);
+    assert!(
+        g.source.contains("UTF8.GetByteCount(value) == 16"),
+        "{}",
+        g.source
+    );
     assert!(g.source.contains("WriteTag") && g.source.contains("1"));
 }
 
@@ -422,7 +444,11 @@ fn test_text_enum_uses_cddl_literal() {
     assert!(g.source.contains("\"free-space\""), "{}", g.source);
     assert!(g.source.contains("\"Log_Distance\""), "{}", g.source);
     assert!(!g.source.contains("\"freespace\""), "{}", g.source);
-    assert!(!g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""), "{}", g.source);
+    assert!(
+        !g.source.contains("\"log_distance\"") && !g.source.contains("\"logdistance\""),
+        "{}",
+        g.source
+    );
 }
 
 // ── Checked against .NET 8 (build tests and interop vectors) ─────────────────
@@ -438,14 +464,27 @@ fn test_range_bounds_are_valid_csharp() {
 #[test]
 fn test_absent_optional_member_is_left_out() {
     let g = compile("r = { id: uint, ? n: uint }");
-    assert!(g.source.contains("writer.WriteStartMap(1 + (this.N is not null ? 1 : 0));"), "{}", g.source);
-    assert!(g.source.contains("writer.WriteUInt64(this.N.Value);"), "{}", g.source);
+    assert!(
+        g.source
+            .contains("writer.WriteStartMap(1 + (this.N is not null ? 1 : 0));"),
+        "{}",
+        g.source
+    );
+    assert!(
+        g.source.contains("writer.WriteUInt64(this.N.Value);"),
+        "{}",
+        g.source
+    );
 }
 
 #[test]
 fn test_inline_choice_is_object_tried_in_order() {
     let g = compile("r = { v: int / float }");
-    assert!(g.source.contains("public object V { get; set; }"), "{}", g.source);
+    assert!(
+        g.source.contains("public object V { get; set; }"),
+        "{}",
+        g.source
+    );
     assert!(g.source.contains("case long alt_thisV:"), "{}", g.source);
     assert!(g.source.contains("Cddl_.Choice(reader, reader1 => (object?)reader1.ReadInt64(), reader1 => (object?)reader1.ReadDouble())"), "{}", g.source);
 }
@@ -453,19 +492,37 @@ fn test_inline_choice_is_object_tried_in_order() {
 #[test]
 fn test_tagged_member_checks_its_tag() {
     let g = compile("r = { t: #6.1(uint) }");
-    assert!(g.source.contains("Cddl_.Tagged(reader, 1UL, reader1 => reader1.ReadUInt64())"), "{}", g.source);
+    assert!(
+        g.source
+            .contains("Cddl_.Tagged(reader, 1UL, reader1 => reader1.ReadUInt64())"),
+        "{}",
+        g.source
+    );
 }
 
 #[test]
 fn test_integer_enum_writes_its_literal() {
     let g = compile("priority = 1 / 2 / 3");
     assert!(g.source.contains("writer.WriteUInt64(2UL)"), "{}", g.source);
-    assert!(g.source.contains("r => r.ReadUInt64() == 2UL ? Variant2.Instance"), "{}", g.source);
+    assert!(
+        g.source
+            .contains("r => r.ReadUInt64() == 2UL ? Variant2.Instance"),
+        "{}",
+        g.source
+    );
 }
 
 #[test]
 fn test_floats_keep_their_width() {
     let g = compile("r = { a: float32, b: float64 }");
-    assert!(g.source.contains("Cddl_.WriteFloat32(writer, this.A)"), "{}", g.source);
-    assert!(g.source.contains("Cddl_.WriteFloat64(writer, this.B)"), "{}", g.source);
+    assert!(
+        g.source.contains("Cddl_.WriteFloat32(writer, this.A)"),
+        "{}",
+        g.source
+    );
+    assert!(
+        g.source.contains("Cddl_.WriteFloat64(writer, this.B)"),
+        "{}",
+        g.source
+    );
 }

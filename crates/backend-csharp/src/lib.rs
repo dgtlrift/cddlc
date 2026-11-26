@@ -5,50 +5,53 @@
 ///     <module>-cbor.csproj   ← net8.0, System.Formats.Cbor, xUnit test ref
 ///     src/<Module>.cs        ← types + Encode/Decode
 ///     tests/RoundtripTests.cs ← xUnit roundtrip tests
-
 use cddlc_codegen::{
-    to_pascal_case, to_snake_case,
-    Backend, CodegenError, CodegenOptions, CodegenOutput, GeneratedFile,
-    IndentWriter,
+    to_pascal_case, to_snake_case, Backend, CodegenError, CodegenOptions, CodegenOutput,
+    GeneratedFile, IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Constraint, EnumDef,
-    IrModule, LiteralValue, MapDef, Occurrence, Primitive, StructDef, TypeDef, TypeRef,
+    AliasDef, ArrayDef, Constraint, EnumDef, IrModule, LiteralValue, MapDef, Occurrence, Primitive,
+    StructDef, TypeDef, TypeRef,
 };
 
 pub struct CSharpBackend;
 
 impl Backend for CSharpBackend {
-    fn language_name(&self) -> &str { "C#" }
-    fn file_extension(&self) -> &str { "cs" }
+    fn language_name(&self) -> &str {
+        "C#"
+    }
+    fn file_extension(&self) -> &str {
+        "cs"
+    }
 
     fn generate(
         &self,
         module: &IrModule,
-        opts:   &CodegenOptions,
+        opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "C#", true)?;
         // A rule whose class would clash with a member of its JSON converter
         // (`write` → `Write`) is `<module>-<rule>` (dgtlrift/cddlc#191).
-        let renamed = cddlc_codegen::rename_types(module, &cddlc_codegen::csharp_reserved_renames(module));
+        let renamed =
+            cddlc_codegen::rename_types(module, &cddlc_codegen::csharp_reserved_renames(module));
         let module = &renamed;
-        let name      = module.name.as_str();
-        let fmt_tag   = if opts.is_json() { "json" } else { "cbor" };
+        let name = module.name.as_str();
+        let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
-        let ns        = to_pascal_case(name);
+        let ns = to_pascal_case(name);
 
         Ok(CodegenOutput {
             files: vec![
                 GeneratedFile {
-                    path:    format!("{crate_dir}/{name}-{fmt_tag}.csproj"),
+                    path: format!("{crate_dir}/{name}-{fmt_tag}.csproj"),
                     content: emit_csproj(name, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/src/{ns}.cs"),
+                    path: format!("{crate_dir}/src/{ns}.cs"),
                     content: emit_source(module, opts),
                 },
                 GeneratedFile {
-                    path:    format!("{crate_dir}/tests/RoundtripTests.cs"),
+                    path: format!("{crate_dir}/tests/RoundtripTests.cs"),
                     content: emit_tests(module, opts),
                 },
             ],
@@ -61,11 +64,14 @@ impl Backend for CSharpBackend {
 fn emit_csproj(name: &str, opts: &CodegenOptions) -> String {
     let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
     let ns = to_pascal_case(name);
-    let cbor_ref = if opts.is_json() { "".into() } else {
+    let cbor_ref = if opts.is_json() {
+        "".into()
+    } else {
         "  <ItemGroup>\n    <!-- CBOR runtime ships in-box with .NET 5+ -->\n    <PackageReference Include=\"System.Formats.Cbor\" Version=\"8.*\" />\n  </ItemGroup>\n\n".to_owned()
     };
     let header = cddlc_codegen::header_text(opts, cddlc_codegen::CommentStyle::Xml);
-    format!(r#"{header}<Project Sdk="Microsoft.NET.Sdk">
+    format!(
+        r#"{header}<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -81,22 +87,29 @@ fn emit_csproj(name: &str, opts: &CodegenOptions) -> String {
     <PackageReference Include="xunit.runner.visualstudio" Version="2.*" />
   </ItemGroup>
 </Project>
-"#)
+"#
+    )
 }
 
 // ── Source file ───────────────────────────────────────────────────────────────
 
 fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name  = module.name.as_str();
-    let ns    = to_pascal_case(name);
+    let name = module.name.as_str();
+    let ns = to_pascal_case(name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
         w.line(&l);
     }
-    let fmt_label = if opts.is_json() { "JSON (RFC 8259)" } else { "CBOR (RFC 8949)" };
+    let fmt_label = if opts.is_json() {
+        "JSON (RFC 8259)"
+    } else {
+        "CBOR (RFC 8949)"
+    };
     w.line(&format!("// Format: {fmt_label}"));
-    if opts.dcbor { w.line("// Encoding: deterministic (dCBOR)"); }
+    if opts.dcbor {
+        w.line("// Encoding: deterministic (dCBOR)");
+    }
     w.blank();
     w.line("using System;");
     w.line("using System.Collections.Generic;");
@@ -112,12 +125,18 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
 
     // Emit error / helper type
     w.line("/// <summary>Field-level validation exception.</summary>");
-    let exc_name = if opts.is_json() { "JsonValidationException" } else { "CborValidationException" };
+    let exc_name = if opts.is_json() {
+        "JsonValidationException"
+    } else {
+        "CborValidationException"
+    };
     w.line(&format!("public sealed class {exc_name} : Exception"));
     w.line("{");
     w.indent();
     w.line("public string FieldName { get; }");
-    w.line(&format!("public {exc_name}(string fieldName, string message)"));
+    w.line(&format!(
+        "public {exc_name}(string fieldName, string message)"
+    ));
     w.indent();
     w.line(": base($\"Validation failed for '{fieldName}': {message}\")");
     w.dedent();
@@ -164,16 +183,22 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
     w.finish()
 }
 
-fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, ns: &str, opts: &CodegenOptions) {
+fn emit_type(
+    w: &mut IndentWriter,
+    def: &TypeDef,
+    module: &IrModule,
+    ns: &str,
+    opts: &CodegenOptions,
+) {
     match def {
         TypeDef::Struct(s) => emit_struct(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum(w, e, ns, opts),
-        TypeDef::Array(a)  => match flat_record(a, module) {
+        TypeDef::Enum(e) => emit_enum(w, e, ns, opts),
+        TypeDef::Array(a) => match flat_record(a, module) {
             Some(rec) => emit_flat_array(w, a, rec, opts),
             None => emit_array(w, a, opts),
         },
-        TypeDef::Alias(a)  => emit_alias(w, a, opts),
-        TypeDef::Map(m)    => emit_map(w, m, opts),
+        TypeDef::Alias(a) => emit_alias(w, a, opts),
+        TypeDef::Map(m) => emit_map(w, m, opts),
     }
 }
 
@@ -181,13 +206,17 @@ fn emit_type(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, ns: &str, o
 
 fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     emit_doc_comment(w, s.doc.as_deref());
-    if s.deprecated { w.line("[Obsolete]"); }
+    if s.deprecated {
+        w.line("[Obsolete]");
+    }
 
     let type_name = to_pascal_case(&s.name);
 
     let record = s.encoding == cddlc_ir::StructEncoding::Array;
     if record && opts.is_json() {
-        w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]"));
+        w.line(&format!(
+            "[JsonConverter(typeof({type_name}JsonConverter))]"
+        ));
     }
     // A map has only the members its schema gives it (dgtlrift/cddlc#102).
     if !record && opts.is_json() && s.rest.is_none() {
@@ -200,34 +229,51 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     // Properties
     for f in &s.fields {
         emit_doc_comment(w, f.doc.as_deref());
-        if f.deprecated { w.line("[Obsolete]"); }
+        if f.deprecated {
+            w.line("[Obsolete]");
+        }
         if opts.is_json() && !record {
             // JsonPropertyName attribute
-            w.line(&format!("[JsonPropertyName({:?})]", cddlc_codegen::field_key_json(&f.key)));
+            w.line(&format!(
+                "[JsonPropertyName({:?})]",
+                cddlc_codegen::field_key_json(&f.key)
+            ));
             // Skip null for optional fields
             if matches!(f.occurrence, Occurrence::Optional) {
                 w.line("[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]");
             }
             if matches!(f.occurrence, Occurrence::Optional | Occurrence::Required) {
-                if matches!(cs_base(&f.ty), TypeRef::Primitive(Primitive::Bstr | Primitive::Any)) {
+                if matches!(
+                    cs_base(&f.ty),
+                    TypeRef::Primitive(Primitive::Bstr | Primitive::Any)
+                ) {
                     w.line("[JsonConverter(typeof(Base64UrlJsonConverter))]");
                 } else if cs_typeref(&f.ty, opts) == "object" {
-                    w.line(&format!("[JsonConverter(typeof({type_name}{}Json))]", to_pascal_case(&f.name)));
+                    w.line(&format!(
+                        "[JsonConverter(typeof({type_name}{}Json))]",
+                        to_pascal_case(&f.name)
+                    ));
                 }
             }
         }
-        let ty    = cs_field_type(&f.ty, &f.occurrence, opts);
+        let ty = cs_field_type(&f.ty, &f.occurrence, opts);
         let pname = to_pascal_case(&f.name);
         // A required member that's a reference type starts at its type's
         // default, so `new T()` encodes.
         let init = if matches!(f.occurrence, Occurrence::Optional) {
             String::new()
         } else if matches!(f.occurrence, Occurrence::Required) && !f.constraints.is_empty() {
-            format!(" = {};", cs_valid_constrained_value(&f.constraints, &f.ty, opts))
+            format!(
+                " = {};",
+                cs_valid_constrained_value(&f.constraints, &f.ty, opts)
+            )
         } else if cs_is_value_type(&f.ty, opts) && matches!(f.occurrence, Occurrence::Required) {
             String::new()
         } else {
-            format!(" = {};", cs_default_value(&f.ty, &f.occurrence, opts).trim())
+            format!(
+                " = {};",
+                cs_default_value(&f.ty, &f.occurrence, opts).trim()
+            )
         };
         w.line(&format!("public {ty} {pname} {{ get; set; }}{init}"));
     }
@@ -238,9 +284,15 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         let pname = to_pascal_case(&r.name);
         if opts.is_json() {
             w.line("[JsonExtensionData]");
-            w.line(&format!("public Dictionary<string, JsonElement> {pname} {{ get; set; }} = new();"));
+            w.line(&format!(
+                "public Dictionary<string, JsonElement> {pname} {{ get; set; }} = new();"
+            ));
         } else {
-            w.line(&format!("public Dictionary<{}, {}> {pname} {{ get; set; }} = new();", rest_key_cs(r, opts), cs_typeref(&r.val_ty, opts)));
+            w.line(&format!(
+                "public Dictionary<{}, {}> {pname} {{ get; set; }} = new();",
+                rest_key_cs(r, opts),
+                cs_typeref(&r.val_ty, opts)
+            ));
         }
     }
     w.blank();
@@ -268,9 +320,16 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         emit_record_json_converter(w, s, &type_name, opts);
     } else if opts.is_json() {
         for f in &s.fields {
-            if matches!(f.occurrence, Occurrence::Optional | Occurrence::Required) && cs_typeref(&f.ty, opts) == "object" {
+            if matches!(f.occurrence, Occurrence::Optional | Occurrence::Required)
+                && cs_typeref(&f.ty, opts) == "object"
+            {
                 w.blank();
-                emit_choice_member_converter(w, &format!("{type_name}{}Json", to_pascal_case(&f.name)), &f.ty, opts);
+                emit_choice_member_converter(
+                    w,
+                    &format!("{type_name}{}Json", to_pascal_case(&f.name)),
+                    &f.ty,
+                    opts,
+                );
             }
         }
     }
@@ -287,7 +346,11 @@ fn text_rest(r: &cddlc_ir::MapRest) -> bool {
 
 /// The C# type of a map's other entries' keys.
 fn rest_key_cs(r: &cddlc_ir::MapRest, opts: &CodegenOptions) -> String {
-    if text_rest(r) { "string".into() } else { cs_typeref(&r.key_ty, opts) }
+    if text_rest(r) {
+        "string".into()
+    } else {
+        cs_typeref(&r.key_ty, opts)
+    }
 }
 
 /// Writes a map member's key: its text, or an integer key as an integer
@@ -306,7 +369,11 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
         emit_record_cbor_repeated(w, s, ri, type_name, opts);
         return;
     }
-    let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+    let optional: Vec<_> = s
+        .fields
+        .iter()
+        .filter(|f| matches!(f.occurrence, Occurrence::Optional))
+        .collect();
     let required = s.fields.len() - optional.len();
     w.line("public void Encode(CborWriter writer)");
     w.line("{");
@@ -321,7 +388,8 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
     if let Some(tag) = s.tagged {
         w.line(&format!("writer.WriteTag((CborTag){});", tag.0));
     }
-    let present: String = optional.iter()
+    let present: String = optional
+        .iter()
         .map(|f| format!(" + (this.{} is not null ? 1 : 0)", to_pascal_case(&f.name)))
         .collect();
     w.line(&format!("writer.WriteStartArray({required}{present});"));
@@ -343,17 +411,22 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
     w.line("}");
     w.blank();
 
-    w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+    w.line(&format!(
+        "public static {type_name} Decode(CborReader reader)"
+    ));
     w.line("{");
     w.indent();
     if let Some(tag) = s.tagged {
         w.line("var tag = reader.ReadTag();");
-        w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+        w.line(&format!(
+            "if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");",
+            tag.0
+        ));
     }
     for f in &s.fields {
-        let ty    = cs_field_type(&f.ty, &f.occurrence, opts);
+        let ty = cs_field_type(&f.ty, &f.occurrence, opts);
         let local = to_snake_case(&f.name);
-        let def   = cs_default_value(&f.ty, &f.occurrence, opts);
+        let def = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
     // One optional member before required ones: present when the array holds
@@ -365,7 +438,9 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
         w.line("var probe = new CborReader(encoded, reader.ConformanceMode);");
         w.line("probe.ReadStartArray();");
         w.line("int count = 0;");
-        w.line("while (probe.PeekState() != CborReaderState.EndArray) { probe.SkipValue(); count++; }");
+        w.line(
+            "while (probe.PeekState() != CborReaderState.EndArray) { probe.SkipValue(); count++; }",
+        );
         w.line("reader = new CborReader(encoded, reader.ConformanceMode);");
     }
     w.line("var length = reader.ReadStartArray();");
@@ -379,7 +454,15 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
             w.line("if (More())");
             w.line("{");
             w.indent();
-            emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &f.occurrence, opts);
+            emit_cs_decode_field(
+                w,
+                &f.ty,
+                &local,
+                &f.constraints,
+                &f.name,
+                &f.occurrence,
+                opts,
+            );
             w.line("read++;");
             w.dedent();
             w.line("}");
@@ -388,17 +471,32 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
                 "if (!More()) throw new CborContentException({:?});",
                 format!("{type_name}: missing item '{}'", f.name)
             ));
-            emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &f.occurrence, opts);
+            emit_cs_decode_field(
+                w,
+                &f.ty,
+                &local,
+                &f.constraints,
+                &f.name,
+                &f.occurrence,
+                opts,
+            );
             w.line("read++;");
         }
     }
-    w.line(&format!("if (More()) throw new CborContentException({:?});", format!("{type_name}: too many items")));
+    w.line(&format!(
+        "if (More()) throw new CborContentException({:?});",
+        format!("{type_name}: too many items")
+    ));
     w.line("reader.ReadEndArray();");
     w.line(&format!("return new {type_name}"));
     w.line("{");
     w.indent();
     for f in &s.fields {
-        w.line(&format!("{} = {},", to_pascal_case(&f.name), to_snake_case(&f.name)));
+        w.line(&format!(
+            "{} = {},",
+            to_pascal_case(&f.name),
+            to_snake_case(&f.name)
+        ));
     }
     w.dedent();
     w.line("};");
@@ -408,31 +506,57 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
 
 /// Throws (`exc`) unless a repeated member's item count, `n`, is within its
 /// bounds (dgtlrift/cddlc#134).
-fn emit_cs_repeat_check(w: &mut IndentWriter, type_name: &str, f: &cddlc_ir::FieldDef, n: &str, exc: &str) {
+fn emit_cs_repeat_check(
+    w: &mut IndentWriter,
+    type_name: &str,
+    f: &cddlc_ir::FieldDef,
+    n: &str,
+    exc: &str,
+) {
     let (min, max) = cddlc_codegen::repeat_bounds(&f.occurrence);
     if min > 0 {
-        w.line(&format!("if ({n} < {min}) throw new {exc}({:?});", format!("{type_name}.{}: needs at least {min} items", f.name)));
+        w.line(&format!(
+            "if ({n} < {min}) throw new {exc}({:?});",
+            format!("{type_name}.{}: needs at least {min} items", f.name)
+        ));
     }
     if let Some(max) = max {
-        w.line(&format!("if ({n} > {max}) throw new {exc}({:?});", format!("{type_name}.{}: has more than {max} items", f.name)));
+        w.line(&format!(
+            "if ({n} > {max}) throw new {exc}({:?});",
+            format!("{type_name}.{}: has more than {max} items", f.name)
+        ));
     }
 }
 
 /// A record with a repeated member (`[primary, * extension, payload]`), in
 /// CBOR: the member's items go inline, and the array's length says how many
 /// there are (dgtlrift/cddlc#134).
-fn emit_record_cbor_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, type_name: &str, opts: &CodegenOptions) {
+fn emit_record_cbor_repeated(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    ri: usize,
+    type_name: &str,
+    opts: &CodegenOptions,
+) {
     let rf = &s.fields[ri];
     let rp = to_pascal_case(&rf.name);
     let fixed = s.fields.len() - 1;
     w.line("public void Encode(CborWriter writer)");
     w.line("{");
     w.indent();
-    emit_cs_repeat_check(w, type_name, rf, &format!("this.{rp}.Count"), "InvalidOperationException");
+    emit_cs_repeat_check(
+        w,
+        type_name,
+        rf,
+        &format!("this.{rp}.Count"),
+        "InvalidOperationException",
+    );
     if let Some(tag) = s.tagged {
         w.line(&format!("writer.WriteTag((CborTag){});", tag.0));
     }
-    w.line(&format!("writer.WriteStartArray({fixed} + this.{rp}.Count);"));
+    w.line(&format!(
+        "writer.WriteStartArray({fixed} + this.{rp}.Count);"
+    ));
     for f in &s.fields {
         let expr = format!("this.{}", to_pascal_case(&f.name));
         if f.occurrence.is_repeated() {
@@ -451,17 +575,22 @@ fn emit_record_cbor_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, typ
     w.line("}");
     w.blank();
 
-    w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+    w.line(&format!(
+        "public static {type_name} Decode(CborReader reader)"
+    ));
     w.line("{");
     w.indent();
     if let Some(tag) = s.tagged {
         w.line("var tag = reader.ReadTag();");
-        w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+        w.line(&format!(
+            "if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");",
+            tag.0
+        ));
     }
     for f in &s.fields {
-        let ty    = cs_field_type(&f.ty, &f.occurrence, opts);
+        let ty = cs_field_type(&f.ty, &f.occurrence, opts);
         let local = to_snake_case(&f.name);
-        let def   = cs_default_value(&f.ty, &f.occurrence, opts);
+        let def = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
     // Count the items first, on a copy of the array's encoding.
@@ -471,16 +600,30 @@ fn emit_record_cbor_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, typ
     w.line("int count = 0;");
     w.line("while (probe.PeekState() != CborReaderState.EndArray) { probe.SkipValue(); count++; }");
     w.line("reader = new CborReader(encoded, reader.ConformanceMode);");
-    w.line(&format!("if (count < {fixed}) throw new CborContentException({:?});", format!("{type_name}: too few items")));
+    w.line(&format!(
+        "if (count < {fixed}) throw new CborContentException({:?});",
+        format!("{type_name}: too few items")
+    ));
     w.line(&format!("int reps = count - {fixed};"));
     emit_cs_repeat_check(w, type_name, rf, "reps", "CborContentException");
     w.line("reader.ReadStartArray();");
     for f in &s.fields {
         let local = to_snake_case(&f.name);
         if f.occurrence.is_repeated() {
-            w.line(&format!("for (int k = 0; k < reps; k++) {local}.Add({});", cs_decode_expr(&f.ty, opts)));
+            w.line(&format!(
+                "for (int k = 0; k < reps; k++) {local}.Add({});",
+                cs_decode_expr(&f.ty, opts)
+            ));
         } else {
-            emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &f.occurrence, opts);
+            emit_cs_decode_field(
+                w,
+                &f.ty,
+                &local,
+                &f.constraints,
+                &f.name,
+                &f.occurrence,
+                opts,
+            );
         }
     }
     w.line("reader.ReadEndArray();");
@@ -488,7 +631,11 @@ fn emit_record_cbor_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, typ
     w.line("{");
     w.indent();
     for f in &s.fields {
-        w.line(&format!("{} = {},", to_pascal_case(&f.name), to_snake_case(&f.name)));
+        w.line(&format!(
+            "{} = {},",
+            to_pascal_case(&f.name),
+            to_snake_case(&f.name)
+        ));
     }
     w.dedent();
     w.line("};");
@@ -498,10 +645,18 @@ fn emit_record_cbor_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, typ
 
 /// A record with a repeated member, in JSON: its items go inline, and the
 /// array's length says how many there are (dgtlrift/cddlc#134).
-fn emit_record_json_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, type_name: &str, opts: &CodegenOptions) {
+fn emit_record_json_repeated(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    ri: usize,
+    type_name: &str,
+    opts: &CodegenOptions,
+) {
     let rf = &s.fields[ri];
     let fixed = s.fields.len() - 1;
-    w.line(&format!("public sealed class {type_name}JsonConverter : JsonConverter<{type_name}>"));
+    w.line(&format!(
+        "public sealed class {type_name}JsonConverter : JsonConverter<{type_name}>"
+    ));
     w.line("{");
     w.indent();
     w.line(&format!(
@@ -511,13 +666,24 @@ fn emit_record_json_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, typ
     w.indent();
     w.line("using var doc = JsonDocument.ParseValue(ref reader);");
     w.line("var a = doc.RootElement;");
-    w.line(&format!("if (a.ValueKind != JsonValueKind.Array || a.GetArrayLength() < {fixed})"));
-    w.line(&format!("    throw new JsonException({:?});", format!("{type_name}: expected an array of at least {fixed} items")));
+    w.line(&format!(
+        "if (a.ValueKind != JsonValueKind.Array || a.GetArrayLength() < {fixed})"
+    ));
+    w.line(&format!(
+        "    throw new JsonException({:?});",
+        format!("{type_name}: expected an array of at least {fixed} items")
+    ));
     w.line(&format!("int reps = a.GetArrayLength() - {fixed};"));
     emit_cs_repeat_check(w, type_name, rf, "reps", "JsonException");
     let local = to_snake_case(&rf.name);
-    w.line(&format!("var {local} = {};", cs_default_value(&rf.ty, &rf.occurrence, opts).trim()));
-    w.line(&format!("for (int k = 0; k < reps; k++) {local}.Add({});", cs_json_from_element(&rf.ty, &format!("a[{ri} + k]"), opts)));
+    w.line(&format!(
+        "var {local} = {};",
+        cs_default_value(&rf.ty, &rf.occurrence, opts).trim()
+    ));
+    w.line(&format!(
+        "for (int k = 0; k < reps; k++) {local}.Add({});",
+        cs_json_from_element(&rf.ty, &format!("a[{ri} + k]"), opts)
+    ));
     w.line(&format!("return new {type_name}"));
     w.line("{");
     w.indent();
@@ -526,8 +692,15 @@ fn emit_record_json_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, typ
         if i == ri {
             w.line(&format!("{pname} = {local},"));
         } else {
-            let el = if i < ri { format!("a[{i}]") } else { format!("a[{} + reps]", i - 1) };
-            w.line(&format!("{pname} = {},", cs_json_from_element(&f.ty, &el, opts)));
+            let el = if i < ri {
+                format!("a[{i}]")
+            } else {
+                format!("a[{} + reps]", i - 1)
+            };
+            w.line(&format!(
+                "{pname} = {},",
+                cs_json_from_element(&f.ty, &el, opts)
+            ));
         }
     }
     w.dedent();
@@ -540,12 +713,21 @@ fn emit_record_json_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, typ
     ));
     w.line("{");
     w.indent();
-    emit_cs_repeat_check(w, type_name, rf, &format!("value.{}.Count", to_pascal_case(&rf.name)), "JsonException");
+    emit_cs_repeat_check(
+        w,
+        type_name,
+        rf,
+        &format!("value.{}.Count", to_pascal_case(&rf.name)),
+        "JsonException",
+    );
     w.line("writer.WriteStartArray();");
     for f in &s.fields {
         let expr = format!("value.{}", to_pascal_case(&f.name));
         if f.occurrence.is_repeated() {
-            w.line(&format!("foreach (var item in {expr}) {}", cs_json_write_stmt(&f.ty, "item", opts)));
+            w.line(&format!(
+                "foreach (var item in {expr}) {}",
+                cs_json_write_stmt(&f.ty, "item", opts)
+            ));
         } else {
             w.line(&cs_json_write_stmt(&f.ty, &expr, opts));
         }
@@ -560,15 +742,26 @@ fn emit_record_json_repeated(w: &mut IndentWriter, s: &StructDef, ri: usize, typ
 /// System.Text.Json writes a class as an object, so a record gets a converter:
 /// a JSON array of its members' values, in order, optional ones at the end
 /// left off when absent.
-fn emit_record_json_converter(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: &CodegenOptions) {
+fn emit_record_json_converter(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    type_name: &str,
+    opts: &CodegenOptions,
+) {
     if let Some(ri) = cddlc_codegen::record_repeated(s) {
         emit_record_json_repeated(w, s, ri, type_name, opts);
         return;
     }
-    let optional: Vec<_> = s.fields.iter().filter(|f| matches!(f.occurrence, Occurrence::Optional)).collect();
+    let optional: Vec<_> = s
+        .fields
+        .iter()
+        .filter(|f| matches!(f.occurrence, Occurrence::Optional))
+        .collect();
     let required = s.fields.len() - optional.len();
     let total = s.fields.len();
-    w.line(&format!("public sealed class {type_name}JsonConverter : JsonConverter<{type_name}>"));
+    w.line(&format!(
+        "public sealed class {type_name}JsonConverter : JsonConverter<{type_name}>"
+    ));
     w.line("{");
     w.indent();
     w.line(&format!(
@@ -581,7 +774,10 @@ fn emit_record_json_converter(w: &mut IndentWriter, s: &StructDef, type_name: &s
     w.line(&format!(
         "if (a.ValueKind != JsonValueKind.Array || a.GetArrayLength() < {required} || a.GetArrayLength() > {total})"
     ));
-    w.line(&format!("    throw new JsonException({:?});", format!("{type_name}: expected an array of {required} to {total} items")));
+    w.line(&format!(
+        "    throw new JsonException({:?});",
+        format!("{type_name}: expected an array of {required} to {total} items")
+    ));
     w.line("int n = a.GetArrayLength();");
     w.line(&format!("return new {type_name}"));
     w.line("{");
@@ -594,15 +790,25 @@ fn emit_record_json_converter(w: &mut IndentWriter, s: &StructDef, type_name: &s
         let ty = cs_field_type(&f.ty, &f.occurrence, opts);
         let pname = to_pascal_case(&f.name);
         let el = match &before {
-            Some(b) if b[i] > 0 => { let x = required + b[i]; format!("a[n >= {x} ? {i} : {i} - ({x} - n)]") }
+            Some(b) if b[i] > 0 => {
+                let x = required + b[i];
+                format!("a[n >= {x} ? {i} : {i} - ({x} - n)]")
+            }
             _ => format!("a[{i}]"),
         };
-        let present = match &before { Some(b) => format!("n > {}", required + b[i]), None => format!("n > {i}") };
+        let present = match &before {
+            Some(b) => format!("n > {}", required + b[i]),
+            None => format!("n > {i}"),
+        };
         match f.occurrence {
-            Occurrence::Optional =>
-                w.line(&format!("{pname} = {present} ? ({ty}){} : null,", cs_json_from_element(&f.ty, &el, opts))),
-            Occurrence::Required =>
-                w.line(&format!("{pname} = {},", cs_json_from_element(&f.ty, &el, opts))),
+            Occurrence::Optional => w.line(&format!(
+                "{pname} = {present} ? ({ty}){} : null,",
+                cs_json_from_element(&f.ty, &el, opts)
+            )),
+            Occurrence::Required => w.line(&format!(
+                "{pname} = {},",
+                cs_json_from_element(&f.ty, &el, opts)
+            )),
             _ => w.line(&format!("{pname} = {el}.Deserialize<{ty}>(options)!,")),
         }
     }
@@ -619,8 +825,12 @@ fn emit_record_json_converter(w: &mut IndentWriter, s: &StructDef, type_name: &s
     for pair in optional.windows(2) {
         w.line(&format!(
             "if (value.{} is not null && value.{} is null) throw new JsonException({:?});",
-            to_pascal_case(&pair[1].name), to_pascal_case(&pair[0].name),
-            format!("{type_name}.{}: set, but an optional member before it isn't", pair[1].name)
+            to_pascal_case(&pair[1].name),
+            to_pascal_case(&pair[0].name),
+            format!(
+                "{type_name}.{}: set, but an optional member before it isn't",
+                pair[1].name
+            )
         ));
     }
     w.line("writer.WriteStartArray();");
@@ -629,10 +839,13 @@ fn emit_record_json_converter(w: &mut IndentWriter, s: &StructDef, type_name: &s
         let expr = format!("value.{pname}");
         match f.occurrence {
             Occurrence::Optional => w.line(&format!(
-                "if ({expr} is not null) {}", cs_json_write_stmt(&f.ty, &cs_present_expr(&f.ty, &expr, opts), opts)
+                "if ({expr} is not null) {}",
+                cs_json_write_stmt(&f.ty, &cs_present_expr(&f.ty, &expr, opts), opts)
             )),
             Occurrence::Required => w.line(&cs_json_write_stmt(&f.ty, &expr, opts)),
-            _ => w.line(&format!("JsonSerializer.Serialize(writer, {expr}, options);")),
+            _ => w.line(&format!(
+                "JsonSerializer.Serialize(writer, {expr}, options);"
+            )),
         }
     }
     w.line("writer.WriteEndArray();");
@@ -651,8 +864,14 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         return;
     }
 
-    let required = s.fields.iter().filter(|f| !matches!(f.occurrence, Occurrence::Optional)).count();
-    let present: String = s.fields.iter()
+    let required = s
+        .fields
+        .iter()
+        .filter(|f| !matches!(f.occurrence, Occurrence::Optional))
+        .count();
+    let present: String = s
+        .fields
+        .iter()
         .filter(|f| matches!(f.occurrence, Occurrence::Optional))
         .map(|f| format!(" + (this.{} is not null ? 1 : 0)", to_pascal_case(&f.name)))
         .collect();
@@ -675,10 +894,14 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         s.fields.iter().collect()
     };
 
-    let rest_count = s.rest.as_ref()
+    let rest_count = s
+        .rest
+        .as_ref()
         .map(|r| format!(" + this.{}.Count", to_pascal_case(&r.name)))
         .unwrap_or_default();
-    w.line(&format!("writer.WriteStartMap({required}{present}{rest_count});"));
+    w.line(&format!(
+        "writer.WriteStartMap({required}{present}{rest_count});"
+    ));
     for f in &fields {
         let expr = format!("this.{}", to_pascal_case(&f.name));
         // An absent optional member is left out of the map.
@@ -696,10 +919,18 @@ fn emit_struct_encode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         }
     }
     if let Some(r) = &s.rest {
-        let named: Vec<String> = s.fields.iter()
-            .filter_map(|f| match &f.key { cddlc_ir::FieldKey::Text(t) => Some(format!("{:?}", t.as_str())), _ => None })
+        let named: Vec<String> = s
+            .fields
+            .iter()
+            .filter_map(|f| match &f.key {
+                cddlc_ir::FieldKey::Text(t) => Some(format!("{:?}", t.as_str())),
+                _ => None,
+            })
             .collect();
-        w.line(&format!("foreach (var kv in this.{})", to_pascal_case(&r.name)));
+        w.line(&format!(
+            "foreach (var kv in this.{})",
+            to_pascal_case(&r.name)
+        ));
         w.line("{");
         w.indent();
         if !named.is_empty() && text_rest(r) {
@@ -729,25 +960,39 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     if opts.is_json() {
         // A member pinned to a literal (`type: "javascript"`) must hold it, so
         // a choice of maps tells its alternatives apart (dgtlrift/cddlc#157).
-        let pinned: Vec<(String, String)> = s.fields.iter()
+        let pinned: Vec<(String, String)> = s
+            .fields
+            .iter()
             .filter(|f| matches!(f.occurrence, Occurrence::Required))
-            .filter_map(|f| f.constraints.iter().find_map(|c| match c {
-                Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => Some((to_pascal_case(&f.name), format!("{:?}", t.as_str()))),
-                Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => Some((to_pascal_case(&f.name), format!("{n}UL"))),
-                Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => Some((to_pascal_case(&f.name), format!("{n}L"))),
-                _ => None,
-            }))
+            .filter_map(|f| {
+                f.constraints.iter().find_map(|c| match c {
+                    Constraint::Eq(cddlc_ir::LiteralValue::Text(t)) => {
+                        Some((to_pascal_case(&f.name), format!("{:?}", t.as_str())))
+                    }
+                    Constraint::Eq(cddlc_ir::LiteralValue::Uint(n)) => {
+                        Some((to_pascal_case(&f.name), format!("{n}UL")))
+                    }
+                    Constraint::Eq(cddlc_ir::LiteralValue::Int(n)) => {
+                        Some((to_pascal_case(&f.name), format!("{n}L")))
+                    }
+                    _ => None,
+                })
+            })
             .collect();
         w.line(&format!("public static {type_name} FromJson(byte[] data)"));
         if pinned.is_empty() {
             w.indent();
-            w.line(&format!("=> JsonSerializer.Deserialize<{type_name}>(data)!;"));
+            w.line(&format!(
+                "=> JsonSerializer.Deserialize<{type_name}>(data)!;"
+            ));
             w.dedent();
             return;
         }
         w.line("{");
         w.indent();
-        w.line(&format!("var v = JsonSerializer.Deserialize<{type_name}>(data)!;"));
+        w.line(&format!(
+            "var v = JsonSerializer.Deserialize<{type_name}>(data)!;"
+        ));
         for (prop, lit) in pinned {
             w.line(&format!(
                 "if (!Equals(v.{prop}, {lit})) throw new JsonException({:?});",
@@ -760,25 +1005,34 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
         return;
     }
 
-    w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+    w.line(&format!(
+        "public static {type_name} Decode(CborReader reader)"
+    ));
     w.line("{");
     w.indent();
 
     // Tag verification
     if let Some(tag) = s.tagged {
         w.line(&format!("var tag = reader.ReadTag();"));
-        w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+        w.line(&format!(
+            "if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");",
+            tag.0
+        ));
     }
 
     // Declare locals
     for f in &s.fields {
-        let ty    = cs_field_type(&f.ty, &f.occurrence, opts);
+        let ty = cs_field_type(&f.ty, &f.occurrence, opts);
         let local = to_snake_case(&f.name);
-        let def   = cs_default_value(&f.ty, &f.occurrence, opts);
+        let def = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
     if let Some(r) = &s.rest {
-        w.line(&format!("var rest = new Dictionary<{}, {}>();", rest_key_cs(r, opts), cs_typeref(&r.val_ty, opts)));
+        w.line(&format!(
+            "var rest = new Dictionary<{}, {}>();",
+            rest_key_cs(r, opts),
+            cs_typeref(&r.val_ty, opts)
+        ));
     }
     w.blank();
 
@@ -809,14 +1063,22 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.indent();
 
     for f in &s.fields {
-        let local  = to_snake_case(&f.name);
+        let local = to_snake_case(&f.name);
         match &f.key {
             cddlc_ir::FieldKey::Text(t) => w.line(&format!("case {:?}:", t.as_str())),
             cddlc_ir::FieldKey::Int(n) => w.line(&format!("case {n}L:")),
             cddlc_ir::FieldKey::Uint(n) => w.line(&format!("case {}L:", (*n).min(i64::MAX as u64))),
         }
         w.indent();
-        emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &f.occurrence, opts);
+        emit_cs_decode_field(
+            w,
+            &f.ty,
+            &local,
+            &f.constraints,
+            &f.name,
+            &f.occurrence,
+            opts,
+        );
         w.line("break;");
         w.dedent();
     }
@@ -879,10 +1141,14 @@ fn enum_literal(v: &cddlc_ir::EnumVariant) -> Option<String> {
     if matches!(v.ty, TypeRef::Primitive(Primitive::Null)) {
         return Some("null".into());
     }
-    let TypeRef::Primitive(p) = &v.ty else { return None };
+    let TypeRef::Primitive(p) = &v.ty else {
+        return None;
+    };
     v.constraints.iter().find_map(|c| match c {
         Constraint::Eq(LiteralValue::Bytes(_)) => None,
-        Constraint::Eq(LiteralValue::Uint(n)) if matches!(p, Primitive::Int) => Some(format!("{n}L")),
+        Constraint::Eq(LiteralValue::Uint(n)) if matches!(p, Primitive::Int) => {
+            Some(format!("{n}L"))
+        }
         Constraint::Eq(l) => Some(cs_literal(l)),
         _ => None,
     })
@@ -894,7 +1160,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
         return;
     }
     emit_doc_comment(w, e.doc.as_deref());
-    if e.deprecated { w.line("[Obsolete]"); }
+    if e.deprecated {
+        w.line("[Obsolete]");
+    }
 
     let type_name = to_pascal_case(&e.name);
 
@@ -912,8 +1180,13 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
         match enum_literal(v) {
             Some(lit) => {
                 w.line(&format!("public static readonly {vname} Instance = new();"));
-                let TypeRef::Primitive(p) = &v.ty else { unreachable!() };
-                w.line(&format!("public override void Encode(CborWriter writer) => {};", cs_encode_call(p, &lit, opts)));
+                let TypeRef::Primitive(p) = &v.ty else {
+                    unreachable!()
+                };
+                w.line(&format!(
+                    "public override void Encode(CborWriter writer) => {};",
+                    cs_encode_call(p, &lit, opts)
+                ));
             }
             None => {
                 let ct = qualified(cs_typeref(&v.ty, opts), &v.ty, ns);
@@ -932,19 +1205,27 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
         w.blank();
     }
 
-    w.line(&format!("public static {type_name} Default => {};", enum_variant_default(e, ns, opts)));
+    w.line(&format!(
+        "public static {type_name} Default => {};",
+        enum_variant_default(e, ns, opts)
+    ));
     w.blank();
 
     w.line("public abstract void Encode(CborWriter writer);");
     w.blank();
 
     // Decode: the first variant, in the CDDL's order, that the item matches.
-    w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+    w.line(&format!(
+        "public static {type_name} Decode(CborReader reader)"
+    ));
     w.line("{");
     w.indent();
     if let Some(tag) = e.tagged {
         w.line("var tag = reader.ReadTag();");
-        w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+        w.line(&format!(
+            "if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");",
+            tag.0
+        ));
     }
     w.line(&format!("return ({type_name})Cddl_.Choice(reader,"));
     w.indent();
@@ -977,7 +1258,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
 /// qualified by its namespace: inside an enum, a variant class shares the
 /// type's name (`Shape.Circle` holds a `Circle`) and hides it (dgtlrift/cddlc#102).
 fn qualified(expr: String, ty: &TypeRef, ns: &str) -> String {
-    let TypeRef::Named(n) = cs_base(ty) else { return expr };
+    let TypeRef::Named(n) = cs_base(ty) else {
+        return expr;
+    };
     let t = to_pascal_case(n);
     if expr == t || expr == format!("{t}?") {
         return format!("global::{ns}.{expr}");
@@ -994,21 +1277,30 @@ fn qualified(expr: String, ty: &TypeRef, ns: &str) -> String {
 /// An enum's first variant, as a value.
 fn enum_variant_default(e: &EnumDef, ns: &str, opts: &CodegenOptions) -> String {
     let type_name = to_pascal_case(&e.name);
-    let Some(v) = e.variants.first() else { return "null!".into() };
+    let Some(v) = e.variants.first() else {
+        return "null!".into();
+    };
     let vname = to_pascal_case(&v.name);
     match enum_literal(v) {
         Some(_) => format!("{type_name}.{vname}.Instance"),
-        None => format!("new {type_name}.{vname}({})", qualified(cs_type_default(&v.ty, opts), &v.ty, ns)),
+        None => format!(
+            "new {type_name}.{vname}({})",
+            qualified(cs_type_default(&v.ty, opts), &v.ty, ns)
+        ),
     }
 }
 
 fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions) {
     emit_doc_comment(w, e.doc.as_deref());
-    if e.deprecated { w.line("[Obsolete]"); }
+    if e.deprecated {
+        w.line("[Obsolete]");
+    }
 
     let type_name = to_pascal_case(&e.name);
 
-    w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]"));
+    w.line(&format!(
+        "[JsonConverter(typeof({type_name}JsonConverter))]"
+    ));
     w.line(&format!("public abstract class {type_name}"));
     w.line("{");
     w.indent();
@@ -1028,7 +1320,10 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOpt
                 let ct = qualified(cs_typeref(&v.ty, opts), &v.ty, ns);
                 w.line(&format!("public {ct} Value {{ get; }}"));
                 w.line(&format!("public {vname}({ct} value) => Value = value;"));
-                w.line(&format!("public override byte[] ToJson() => {};", cs_json_to_bytes(&v.ty, "Value", opts)));
+                w.line(&format!(
+                    "public override byte[] ToJson() => {};",
+                    cs_json_to_bytes(&v.ty, "Value", opts)
+                ));
             }
         }
         w.dedent();
@@ -1040,13 +1335,21 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOpt
     for v in &e.variants {
         let vname = to_pascal_case(&v.name);
         match enum_literal(v) {
-            Some(_) => w.line(&format!("public static {vname} Create{vname}() => {vname}.Instance;")),
-            None => w.line(&format!("public static {vname} Create{vname}({} value) => new(value);", qualified(cs_typeref(&v.ty, opts), &v.ty, ns))),
+            Some(_) => w.line(&format!(
+                "public static {vname} Create{vname}() => {vname}.Instance;"
+            )),
+            None => w.line(&format!(
+                "public static {vname} Create{vname}({} value) => new(value);",
+                qualified(cs_typeref(&v.ty, opts), &v.ty, ns)
+            )),
         }
     }
     w.blank();
 
-    w.line(&format!("public static {type_name} Default => {};", enum_variant_default(e, ns, opts)));
+    w.line(&format!(
+        "public static {type_name} Default => {};",
+        enum_variant_default(e, ns, opts)
+    ));
     w.blank();
 
     w.line("public abstract byte[] ToJson();");
@@ -1057,7 +1360,9 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOpt
     w.line("{");
     w.indent();
     w.line("using var doc = JsonDocument.Parse(data);");
-    w.line(&format!("return ({type_name})Cddl_.Choice(doc.RootElement,"));
+    w.line(&format!(
+        "return ({type_name})Cddl_.Choice(doc.RootElement,"
+    ));
     w.indent();
     let n = e.variants.len();
     for (i, v) in e.variants.iter().enumerate() {
@@ -1091,9 +1396,13 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOpt
 fn cs_json_to_bytes(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
     match cs_base(ty) {
         TypeRef::Named(_) => format!("{expr}.ToJson()"),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
-            format!("JsonSerializer.SerializeToUtf8Bytes(Base64Url.Encode({expr}))"),
-        _ => format!("JsonSerializer.SerializeToUtf8Bytes<{}>({expr})", cs_typeref(ty, opts)),
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+            format!("JsonSerializer.SerializeToUtf8Bytes(Base64Url.Encode({expr}))")
+        }
+        _ => format!(
+            "JsonSerializer.SerializeToUtf8Bytes<{}>({expr})",
+            cs_typeref(ty, opts)
+        ),
     }
 }
 
@@ -1173,7 +1482,9 @@ fn emit_json_helpers(w: &mut IndentWriter) {
 /// an alias, an array, a map): it goes through the type's ToJson / FromJson,
 /// so the type can be a member of a class.
 fn emit_delegating_json_converter(w: &mut IndentWriter, type_name: &str) {
-    w.line(&format!("public sealed class {type_name}JsonConverter : JsonConverter<{type_name}>"));
+    w.line(&format!(
+        "public sealed class {type_name}JsonConverter : JsonConverter<{type_name}>"
+    ));
     w.line("{");
     w.indent();
     w.line(&format!("public override {type_name} Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)"));
@@ -1195,24 +1506,40 @@ fn emit_delegating_json_converter(w: &mut IndentWriter, type_name: &str) {
 /// A statement writing `expr`, a value of type `ty`, to `writer`.
 fn cs_json_write_stmt(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
     match cs_base(ty) {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => format!("writer.WriteStringValue(Base64Url.Encode({expr}));"),
-        TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "writer.WriteNullValue();".into(),
+        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+            format!("writer.WriteStringValue(Base64Url.Encode({expr}));")
+        }
+        TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => {
+            "writer.WriteNullValue();".into()
+        }
         TypeRef::Named(_) => format!("writer.WriteRawValue({expr}.ToJson());"),
-        _ if cs_typeref(ty, opts) == "object" => format!("Cddl_.WriteChoice(writer, {expr}, options);"),
+        _ if cs_typeref(ty, opts) == "object" => {
+            format!("Cddl_.WriteChoice(writer, {expr}, options);")
+        }
         _ => format!("JsonSerializer.Serialize(writer, {expr}, options);"),
     }
 }
 
 /// A per-member converter for a member whose type is a choice of C# types.
-fn emit_choice_member_converter(w: &mut IndentWriter, name: &str, ty: &TypeRef, opts: &CodegenOptions) {
-    w.line(&format!("public sealed class {name} : JsonConverter<object>"));
+fn emit_choice_member_converter(
+    w: &mut IndentWriter,
+    name: &str,
+    ty: &TypeRef,
+    opts: &CodegenOptions,
+) {
+    w.line(&format!(
+        "public sealed class {name} : JsonConverter<object>"
+    ));
     w.line("{");
     w.indent();
     w.line("public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)");
     w.line("{");
     w.indent();
     w.line("using var doc = JsonDocument.ParseValue(ref reader);");
-    w.line(&format!("return {};", cs_json_from_element(ty, "doc.RootElement", opts)));
+    w.line(&format!(
+        "return {};",
+        cs_json_from_element(ty, "doc.RootElement", opts)
+    ));
     w.dedent();
     w.line("}");
     w.blank();
@@ -1243,13 +1570,19 @@ fn flat_record<'m>(a: &ArrayDef, module: &'m IrModule) -> Option<&'m StructDef> 
 /// (`[1, "x", 2, "y"]`).
 fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &CodegenOptions) {
     emit_doc_comment(w, a.doc.as_deref());
-    if a.deprecated { w.line("[Obsolete]"); }
+    if a.deprecated {
+        w.line("[Obsolete]");
+    }
 
     let type_name = to_pascal_case(&a.name);
-    let elem_ty   = cs_typeref(&a.element, opts);
-    let width     = rec.fields.len();
+    let elem_ty = cs_typeref(&a.element, opts);
+    let width = rec.fields.len();
 
-    if opts.is_json() { w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]")); }
+    if opts.is_json() {
+        w.line(&format!(
+            "[JsonConverter(typeof({type_name}JsonConverter))]"
+        ));
+    }
     w.line(&format!("public sealed class {type_name}"));
     w.line("{");
     w.indent();
@@ -1268,7 +1601,11 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &C
         w.line("{");
         w.indent();
         for f in &rec.fields {
-            w.line(&cs_json_write_stmt(&f.ty, &format!("item.{}", to_pascal_case(&f.name)), opts));
+            w.line(&cs_json_write_stmt(
+                &f.ty,
+                &format!("item.{}", to_pascal_case(&f.name)),
+                opts,
+            ));
         }
         w.dedent();
         w.line("}");
@@ -1285,14 +1622,20 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &C
             "if (a.ValueKind != JsonValueKind.Array || a.GetArrayLength() % {width} != 0) throw new JsonException(\"{type_name}: expected an array of groups of {width}\");"
         ));
         w.line(&format!("var result = new {type_name}();"));
-        w.line(&format!("for (int i = 0; i < a.GetArrayLength(); i += {width})"));
+        w.line(&format!(
+            "for (int i = 0; i < a.GetArrayLength(); i += {width})"
+        ));
         w.line("{");
         w.indent();
         w.line(&format!("result.Items.Add(new {elem_ty}"));
         w.line("{");
         w.indent();
         for (j, f) in rec.fields.iter().enumerate() {
-            w.line(&format!("{} = {},", to_pascal_case(&f.name), cs_json_from_element(&f.ty, &format!("a[i + {j}]"), opts)));
+            w.line(&format!(
+                "{} = {},",
+                to_pascal_case(&f.name),
+                cs_json_from_element(&f.ty, &format!("a[i + {j}]"), opts)
+            ));
         }
         w.dedent();
         w.line("});");
@@ -1313,7 +1656,13 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &C
         w.line("{");
         w.indent();
         for f in &rec.fields {
-            emit_cs_encode_value(w, &f.ty, &format!("item.{}", to_pascal_case(&f.name)), &Occurrence::Required, opts);
+            emit_cs_encode_value(
+                w,
+                &f.ty,
+                &format!("item.{}", to_pascal_case(&f.name)),
+                &Occurrence::Required,
+                opts,
+            );
         }
         w.dedent();
         w.line("}");
@@ -1322,12 +1671,17 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &C
         w.line("}");
         w.blank();
 
-        w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+        w.line(&format!(
+            "public static {type_name} Decode(CborReader reader)"
+        ));
         w.line("{");
         w.indent();
         if let Some(tag) = a.tagged {
             w.line("var tag = reader.ReadTag();");
-            w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+            w.line(&format!(
+                "if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");",
+                tag.0
+            ));
         }
         w.line(&format!("var result = new {type_name}();"));
         w.line("var length = reader.ReadStartArray();");
@@ -1340,17 +1694,29 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &C
         w.indent();
         w.line("if (length == null && reader.PeekState() == CborReaderState.EndArray) break;");
         for f in &rec.fields {
-            let ty    = cs_field_type(&f.ty, &Occurrence::Required, opts);
+            let ty = cs_field_type(&f.ty, &Occurrence::Required, opts);
             let local = format!("m_{}", to_snake_case(&f.name));
-            let def   = cs_default_value(&f.ty, &Occurrence::Required, opts);
+            let def = cs_default_value(&f.ty, &Occurrence::Required, opts);
             w.line(&format!("{ty} {local} = {def};"));
-            emit_cs_decode_field(w, &f.ty, &local, &f.constraints, &f.name, &Occurrence::Required, opts);
+            emit_cs_decode_field(
+                w,
+                &f.ty,
+                &local,
+                &f.constraints,
+                &f.name,
+                &Occurrence::Required,
+                opts,
+            );
         }
         w.line(&format!("result.Items.Add(new {elem_ty}"));
         w.line("{");
         w.indent();
         for f in &rec.fields {
-            w.line(&format!("{} = m_{},", to_pascal_case(&f.name), to_snake_case(&f.name)));
+            w.line(&format!(
+                "{} = m_{},",
+                to_pascal_case(&f.name),
+                to_snake_case(&f.name)
+            ));
         }
         w.dedent();
         w.line("});");
@@ -1372,12 +1738,18 @@ fn emit_flat_array(w: &mut IndentWriter, a: &ArrayDef, rec: &StructDef, opts: &C
 
 fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     emit_doc_comment(w, a.doc.as_deref());
-    if a.deprecated { w.line("[Obsolete]"); }
+    if a.deprecated {
+        w.line("[Obsolete]");
+    }
 
     let type_name = to_pascal_case(&a.name);
-    let elem_ty   = cs_typeref(&a.element, opts);
+    let elem_ty = cs_typeref(&a.element, opts);
 
-    if opts.is_json() { w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]")); }
+    if opts.is_json() {
+        w.line(&format!(
+            "[JsonConverter(typeof({type_name}JsonConverter))]"
+        ));
+    }
     w.line(&format!("public sealed class {type_name}"));
     w.line("{");
     w.indent();
@@ -1393,7 +1765,10 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
         w.indent();
         w.line("var options = JsonSerializerOptions.Default;");
         w.line("writer.WriteStartArray();");
-        w.line(&format!("foreach (var item in Items) {}", cs_json_write_stmt(&a.element, "item", opts)));
+        w.line(&format!(
+            "foreach (var item in Items) {}",
+            cs_json_write_stmt(&a.element, "item", opts)
+        ));
         w.line("writer.WriteEndArray();");
         w.dedent();
         w.line("});");
@@ -1432,12 +1807,17 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
         w.blank();
 
         // Decode
-        w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+        w.line(&format!(
+            "public static {type_name} Decode(CborReader reader)"
+        ));
         w.line("{");
         w.indent();
         if let Some(tag) = a.tagged {
             w.line("var tag = reader.ReadTag();");
-            w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+            w.line(&format!(
+                "if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");",
+                tag.0
+            ));
         }
         w.line(&format!("var result = new {type_name}();"));
         w.line("var length = reader.ReadStartArray();");
@@ -1469,18 +1849,26 @@ fn emit_array(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
 /// A table (`{ * tstr => uint }`): a class holding a `Dictionary` (dgtlrift/cddlc#82).
 fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     emit_doc_comment(w, m.doc.as_deref());
-    if m.deprecated { w.line("[Obsolete]"); }
+    if m.deprecated {
+        w.line("[Obsolete]");
+    }
 
     let type_name = to_pascal_case(&m.name);
-    let key_ty    = cs_typeref(&m.key_ty, opts);
-    let val_ty    = cs_typeref(&m.val_ty, opts);
+    let key_ty = cs_typeref(&m.key_ty, opts);
+    let val_ty = cs_typeref(&m.val_ty, opts);
 
-    if opts.is_json() { w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]")); }
+    if opts.is_json() {
+        w.line(&format!(
+            "[JsonConverter(typeof({type_name}JsonConverter))]"
+        ));
+    }
     w.line(&format!("public sealed class {type_name}"));
     w.line("{");
     w.indent();
 
-    w.line(&format!("public Dictionary<{key_ty}, {val_ty}> Entries {{ get; }} = new();"));
+    w.line(&format!(
+        "public Dictionary<{key_ty}, {val_ty}> Entries {{ get; }} = new();"
+    ));
     w.blank();
     w.line(&format!("public static {type_name} Default => new();"));
     w.blank();
@@ -1545,12 +1933,17 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
         w.line("}");
         w.blank();
 
-        w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+        w.line(&format!(
+            "public static {type_name} Decode(CborReader reader)"
+        ));
         w.line("{");
         w.indent();
         if let Some(tag) = m.tagged {
             w.line("var tag = reader.ReadTag();");
-            w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+            w.line(&format!(
+                "if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");",
+                tag.0
+            ));
         }
         w.line(&format!("var result = new {type_name}();"));
         w.line("reader.ReadStartMap();");
@@ -1580,29 +1973,48 @@ fn emit_map(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
 
 fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     emit_doc_comment(w, a.doc.as_deref());
-    if a.deprecated { w.line("[Obsolete]"); }
+    if a.deprecated {
+        w.line("[Obsolete]");
+    }
 
     let type_name = to_pascal_case(&a.name);
-    let inner     = cs_typeref(&a.ty, opts);
-    let exc_name  = if opts.is_json() { "JsonValidationException" } else { "CborValidationException" };
+    let inner = cs_typeref(&a.ty, opts);
+    let exc_name = if opts.is_json() {
+        "JsonValidationException"
+    } else {
+        "CborValidationException"
+    };
 
-    if opts.is_json() { w.line(&format!("[JsonConverter(typeof({type_name}JsonConverter))]")); }
+    if opts.is_json() {
+        w.line(&format!(
+            "[JsonConverter(typeof({type_name}JsonConverter))]"
+        ));
+    }
     if a.constraints.is_empty() && a.tagged.is_none() {
         w.line(&format!("public sealed class {type_name}"));
         w.line("{");
         w.indent();
-        w.line(&format!("public {inner} Value {{ get; set; }} = {};", cs_type_default(&a.ty, opts)));
+        w.line(&format!(
+            "public {inner} Value {{ get; set; }} = {};",
+            cs_type_default(&a.ty, opts)
+        ));
         w.blank();
         w.line(&format!("public static {type_name} Default => new();"));
         w.blank();
         if opts.is_json() {
-            w.line(&format!("public byte[] ToJson() => {};", cs_json_to_bytes(&a.ty, "Value", opts)));
+            w.line(&format!(
+                "public byte[] ToJson() => {};",
+                cs_json_to_bytes(&a.ty, "Value", opts)
+            ));
             w.blank();
             w.line(&format!("public static {type_name} FromJson(byte[] data)"));
             w.line("{");
             w.indent();
             w.line("using var doc = JsonDocument.Parse(data);");
-            w.line(&format!("return new {type_name} {{ Value = {} }};", cs_json_from_element(&a.ty, "doc.RootElement", opts)));
+            w.line(&format!(
+                "return new {type_name} {{ Value = {} }};",
+                cs_json_from_element(&a.ty, "doc.RootElement", opts)
+            ));
             w.dedent();
             w.line("}");
         } else {
@@ -1613,11 +2025,15 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
             w.dedent();
             w.line("}");
             w.blank();
-            w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+            w.line(&format!(
+                "public static {type_name} Decode(CborReader reader)"
+            ));
             w.line("{");
             w.indent();
             let decode_expr = cs_decode_expr(&a.ty, opts);
-            w.line(&format!("return new {type_name} {{ Value = {decode_expr} }};"));
+            w.line(&format!(
+                "return new {type_name} {{ Value = {decode_expr} }};"
+            ));
             w.dedent();
             w.line("}");
         }
@@ -1654,7 +2070,9 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
             let msg = constraint_description(c);
             w.line(&format!("if (!({check}))"));
             w.indent();
-            w.line(&format!("throw new {exc_name}(nameof({type_name}), {msg:?});"));
+            w.line(&format!(
+                "throw new {exc_name}(nameof({type_name}), {msg:?});"
+            ));
             w.dedent();
         }
     }
@@ -1664,13 +2082,19 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     w.blank();
 
     if opts.is_json() {
-        w.line(&format!("public byte[] ToJson() => {};", cs_json_to_bytes(&a.ty, "_value", opts)));
+        w.line(&format!(
+            "public byte[] ToJson() => {};",
+            cs_json_to_bytes(&a.ty, "_value", opts)
+        ));
         w.blank();
         w.line(&format!("public static {type_name} FromJson(byte[] data)"));
         w.line("{");
         w.indent();
         w.line("using var doc = JsonDocument.Parse(data);");
-        w.line(&format!("return new {type_name}({});", cs_json_from_element(&a.ty, "doc.RootElement", opts)));
+        w.line(&format!(
+            "return new {type_name}({});",
+            cs_json_from_element(&a.ty, "doc.RootElement", opts)
+        ));
         w.dedent();
         w.line("}");
     } else {
@@ -1685,12 +2109,17 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
         w.line("}");
         w.blank();
 
-        w.line(&format!("public static {type_name} Decode(CborReader reader)"));
+        w.line(&format!(
+            "public static {type_name} Decode(CborReader reader)"
+        ));
         w.line("{");
         w.indent();
         if let Some(tag) = a.tagged {
             w.line("var tag = reader.ReadTag();");
-            w.line(&format!("if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");", tag.0));
+            w.line(&format!(
+                "if ((ulong)tag != {}) throw new CborContentException(\"Unexpected CBOR tag\");",
+                tag.0
+            ));
         }
         let decode_expr = cs_decode_expr(&a.ty, opts);
         w.line(&format!("var raw = {decode_expr};"));
@@ -1711,19 +2140,26 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
 
 /// Is this C# type a value type (so `T?` is `Nullable<T>`, read through `.Value`)?
 fn cs_is_value_type(ty: &TypeRef, opts: &CodegenOptions) -> bool {
-    matches!(cs_typeref(ty, opts).as_str(), "bool" | "ulong" | "long" | "float" | "double")
+    matches!(
+        cs_typeref(ty, opts).as_str(),
+        "bool" | "ulong" | "long" | "float" | "double"
+    )
 }
 
 /// The expression for a present optional member's value.
 fn cs_present_expr(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
-    if cs_is_value_type(ty, opts) { format!("{expr}.Value") } else { expr.to_owned() }
+    if cs_is_value_type(ty, opts) {
+        format!("{expr}.Value")
+    } else {
+        expr.to_owned()
+    }
 }
 
 fn emit_cs_encode_value(
-    w:    &mut IndentWriter,
-    ty:   &TypeRef,
+    w: &mut IndentWriter,
+    ty: &TypeRef,
     expr: &str,
-    occ:  &Occurrence,
+    occ: &Occurrence,
     opts: &CodegenOptions,
 ) {
     match occ {
@@ -1735,7 +2171,8 @@ fn emit_cs_encode_value(
             w.dedent();
             w.line("} else { writer.WriteNull(); }");
         }
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => {
             w.line(&format!("writer.WriteStartArray({expr}.Count);"));
             w.line(&format!("foreach (var item in {expr})"));
@@ -1775,14 +2212,21 @@ fn emit_cs_encode_typeref(w: &mut IndentWriter, ty: &TypeRef, expr: &str, opts: 
             }
             // Write the alternative the value holds.
             // Named after the expression, so a nested switch gets its own.
-            let var: String = format!("alt_{}", expr.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>());
+            let var: String = format!(
+                "alt_{}",
+                expr.chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .collect::<String>()
+            );
             let mut seen = Vec::new();
             w.line(&format!("switch ({expr})"));
             w.line("{");
             w.indent();
             for alt in alts {
                 let alt_ty = cs_typeref(alt, opts);
-                if seen.contains(&alt_ty) { continue; }
+                if seen.contains(&alt_ty) {
+                    continue;
+                }
                 seen.push(alt_ty.clone());
                 if matches!(cs_base(alt), TypeRef::Primitive(Primitive::Null)) {
                     w.line("case null:");
@@ -1820,16 +2264,18 @@ fn cs_base(ty: &TypeRef) -> &TypeRef {
 fn cs_encode_call(p: &Primitive, expr: &str, opts: &CodegenOptions) -> String {
     match p {
         Primitive::Float32 if !opts.dcbor => format!("Cddl_.WriteFloat32(writer, {expr})"),
-        Primitive::Float64 | Primitive::Float if !opts.dcbor => format!("Cddl_.WriteFloat64(writer, {expr})"),
-        Primitive::Bool      => format!("writer.WriteBoolean({expr})"),
-        Primitive::Null      => "writer.WriteNull()".into(),
+        Primitive::Float64 | Primitive::Float if !opts.dcbor => {
+            format!("Cddl_.WriteFloat64(writer, {expr})")
+        }
+        Primitive::Bool => format!("writer.WriteBoolean({expr})"),
+        Primitive::Null => "writer.WriteNull()".into(),
         Primitive::Undefined => "writer.WriteSimpleValue(CborSimpleValue.Undefined)".into(),
-        Primitive::Uint      => format!("writer.WriteUInt64({expr})"),
-        Primitive::Int       => format!("writer.WriteInt64({expr})"),
-        Primitive::Float16   => format!("writer.WriteHalf((Half){expr})"),
-        Primitive::Float32   => format!("writer.WriteSingle({expr})"),
+        Primitive::Uint => format!("writer.WriteUInt64({expr})"),
+        Primitive::Int => format!("writer.WriteInt64({expr})"),
+        Primitive::Float16 => format!("writer.WriteHalf((Half){expr})"),
+        Primitive::Float32 => format!("writer.WriteSingle({expr})"),
         Primitive::Float64 | Primitive::Float => format!("writer.WriteDouble({expr})"),
-        Primitive::Tstr      => format!("writer.WriteTextString({expr})"),
+        Primitive::Tstr => format!("writer.WriteTextString({expr})"),
         Primitive::Bstr | Primitive::Any => format!("writer.WriteByteString({expr})"),
     }
 }
@@ -1898,13 +2344,13 @@ fn emit_cbor_helpers(w: &mut IndentWriter) {
 // ── Decode helpers ────────────────────────────────────────────────────────────
 
 fn emit_cs_decode_field(
-    w:           &mut IndentWriter,
-    ty:          &TypeRef,
-    local:       &str,
+    w: &mut IndentWriter,
+    ty: &TypeRef,
+    local: &str,
     constraints: &[Constraint],
-    field_name:  &str,
-    occ:         &Occurrence,
-    opts:        &CodegenOptions,
+    field_name: &str,
+    occ: &Occurrence,
+    opts: &CodegenOptions,
 ) {
     match occ {
         Occurrence::Optional => {
@@ -1914,11 +2360,19 @@ fn emit_cs_decode_field(
             w.indent();
             let inner_expr = cs_decode_expr(ty, opts);
             w.line(&format!("{local} = {inner_expr};"));
-            emit_cs_validation(w, constraints, &cs_present_expr(ty, local, opts), field_name, ty, opts);
+            emit_cs_validation(
+                w,
+                constraints,
+                &cs_present_expr(ty, local, opts),
+                field_name,
+                ty,
+                opts,
+            );
             w.dedent();
             w.line("}");
         }
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => {
             w.line(&format!("{local} = new List<{}>();", cs_typeref(ty, opts)));
             w.line("{");
@@ -1941,14 +2395,18 @@ fn emit_cs_decode_field(
 }
 
 fn emit_cs_validation(
-    w:           &mut IndentWriter,
+    w: &mut IndentWriter,
     constraints: &[Constraint],
-    expr:        &str,
-    field_name:  &str,
-    ty:          &TypeRef,
-    opts:        &CodegenOptions,
+    expr: &str,
+    field_name: &str,
+    ty: &TypeRef,
+    opts: &CodegenOptions,
 ) {
-    let exc_name = if opts.is_json() { "JsonValidationException" } else { "CborValidationException" };
+    let exc_name = if opts.is_json() {
+        "JsonValidationException"
+    } else {
+        "CborValidationException"
+    };
     for c in constraints {
         if let Some(check) = cs_constraint_check(c, expr, ty) {
             let msg = constraint_description(c);
@@ -1968,14 +2426,19 @@ fn cs_decode_expr(ty: &TypeRef, opts: &CodegenOptions) -> String {
 fn cs_decode_expr_from(ty: &TypeRef, reader: &str, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(p) => cs_decode_call(p, reader),
-        TypeRef::Named(n)     => format!("{}.Decode({reader})", to_pascal_case(n)),
+        TypeRef::Named(n) => format!("{}.Decode({reader})", to_pascal_case(n)),
         TypeRef::Tagged(tag, inner) => {
             let r = format!("{reader}1");
-            format!("Cddl_.Tagged({reader}, {}UL, {r} => {})", tag.0, cs_decode_expr_from(inner, &r, opts))
+            format!(
+                "Cddl_.Tagged({reader}, {}UL, {r} => {})",
+                tag.0,
+                cs_decode_expr_from(inner, &r, opts)
+            )
         }
         TypeRef::Choice(alts) => {
             let r = format!("{reader}1");
-            let tries: Vec<String> = alts.iter()
+            let tries: Vec<String> = alts
+                .iter()
                 .map(|a| format!("{r} => (object?){}", cs_decode_expr_from(a, &r, opts)))
                 .collect();
             let call = format!("Cddl_.Choice({reader}, {})", tries.join(", "));
@@ -1989,15 +2452,15 @@ fn cs_decode_expr_from(ty: &TypeRef, reader: &str, opts: &CodegenOptions) -> Str
 
 fn cs_decode_call(p: &Primitive, reader: &str) -> String {
     match p {
-        Primitive::Bool      => format!("{reader}.ReadBoolean()"),
-        Primitive::Null      => format!("Cddl_.ReadNull({reader})"),
+        Primitive::Bool => format!("{reader}.ReadBoolean()"),
+        Primitive::Null => format!("Cddl_.ReadNull({reader})"),
         Primitive::Undefined => format!("Cddl_.ReadUndefined({reader})"),
-        Primitive::Uint      => format!("{reader}.ReadUInt64()"),
-        Primitive::Int       => format!("{reader}.ReadInt64()"),
-        Primitive::Float16   => format!("(float){reader}.ReadHalf()"),
-        Primitive::Float32   => format!("{reader}.ReadSingle()"),
+        Primitive::Uint => format!("{reader}.ReadUInt64()"),
+        Primitive::Int => format!("{reader}.ReadInt64()"),
+        Primitive::Float16 => format!("(float){reader}.ReadHalf()"),
+        Primitive::Float32 => format!("{reader}.ReadSingle()"),
         Primitive::Float64 | Primitive::Float => format!("{reader}.ReadDouble()"),
-        Primitive::Tstr      => format!("{reader}.ReadTextString()"),
+        Primitive::Tstr => format!("{reader}.ReadTextString()"),
         Primitive::Bstr | Primitive::Any => format!("{reader}.ReadByteString()"),
     }
 }
@@ -2007,34 +2470,62 @@ fn cs_decode_call(p: &Primitive, reader: &str) -> String {
 /// A C# boolean expression checking `c` on `expr`, a value of type `ty`.
 /// The lower bound is always inclusive; `inclusive` is the upper bound's.
 fn cs_constraint_check(c: &Constraint, expr: &str, ty: &TypeRef) -> Option<String> {
-    let p = match cs_base(ty) { TypeRef::Primitive(p) => Some(p.clone()), _ => None };
-    let is_uint  = matches!(p, Some(Primitive::Uint));
-    let is_int   = matches!(p, Some(Primitive::Int));
-    let is_float = matches!(p, Some(Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float));
-    let numeric  = is_uint || is_int || is_float;
+    let p = match cs_base(ty) {
+        TypeRef::Primitive(p) => Some(p.clone()),
+        _ => None,
+    };
+    let is_uint = matches!(p, Some(Primitive::Uint));
+    let is_int = matches!(p, Some(Primitive::Int));
+    let is_float = matches!(
+        p,
+        Some(Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float)
+    );
+    let numeric = is_uint || is_int || is_float;
     let len = match p {
         Some(Primitive::Tstr) => Some(format!("System.Text.Encoding.UTF8.GetByteCount({expr})")),
         Some(Primitive::Bstr) => Some(format!("{expr}.Length")),
         _ => None,
     };
-    let join = |parts: Vec<String>| if parts.is_empty() { None } else { Some(parts.join(" && ")) };
+    let join = |parts: Vec<String>| {
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" && "))
+        }
+    };
     // A bound written as a literal of the value's own type.
     let lit = |n: i128| -> String {
-        if is_uint { format!("{n}UL") } else if is_int { format!("{n}L") } else { format!("{n}.0") }
+        if is_uint {
+            format!("{n}UL")
+        } else if is_int {
+            format!("{n}L")
+        } else {
+            format!("{n}.0")
+        }
     };
     match c {
         Constraint::SizeExact(n) => len.map(|l| format!("{l} == {n}")),
         Constraint::SizeRange { min, max } => {
             let l = len?;
             let mut parts = Vec::new();
-            if let Some(lo) = min { parts.push(format!("{l} >= {lo}")); }
-            if let Some(hi) = max { parts.push(format!("{l} <= {hi}")); }
+            if let Some(lo) = min {
+                parts.push(format!("{l} >= {lo}"));
+            }
+            if let Some(hi) = max {
+                parts.push(format!("{l} <= {hi}"));
+            }
             join(parts)
         }
-        Constraint::ValueRangeInt { min, max, inclusive } if numeric => {
+        Constraint::ValueRangeInt {
+            min,
+            max,
+            inclusive,
+        } if numeric => {
             let le = if *inclusive { "<=" } else { "<" };
             let mut parts = Vec::new();
-            if let Some(lo) = min.filter(|lo| !(is_uint && *lo <= 0)) { parts.push(format!("{expr} >= {}", lit(lo as i128))); }
+            if let Some(lo) = min.filter(|lo| !(is_uint && *lo <= 0)) {
+                parts.push(format!("{expr} >= {}", lit(lo as i128)));
+            }
             match max {
                 Some(hi) if is_uint && *hi < 0 => return Some("false".into()),
                 Some(hi) => parts.push(format!("{expr} {le} {}", lit(*hi as i128))),
@@ -2042,21 +2533,37 @@ fn cs_constraint_check(c: &Constraint, expr: &str, ty: &TypeRef) -> Option<Strin
             }
             join(parts)
         }
-        Constraint::ValueRangeUint { min, max, inclusive } if numeric => {
+        Constraint::ValueRangeUint {
+            min,
+            max,
+            inclusive,
+        } if numeric => {
             let le = if *inclusive { "<=" } else { "<" };
             let mut parts = Vec::new();
-            if min.is_some_and(|lo| is_int && lo > i64::MAX as u64) { return Some("false".into()); }
-            if let Some(lo) = min.filter(|lo| *lo > 0) { parts.push(format!("{expr} >= {}", lit(lo as i128))); }
+            if min.is_some_and(|lo| is_int && lo > i64::MAX as u64) {
+                return Some("false".into());
+            }
+            if let Some(lo) = min.filter(|lo| *lo > 0) {
+                parts.push(format!("{expr} >= {}", lit(lo as i128)));
+            }
             if let Some(hi) = max.filter(|hi| !is_int || *hi <= i64::MAX as u64) {
                 parts.push(format!("{expr} {le} {}", lit(hi as i128)));
             }
             join(parts)
         }
-        Constraint::ValueRangeF64 { min, max, inclusive } if is_float => {
+        Constraint::ValueRangeF64 {
+            min,
+            max,
+            inclusive,
+        } if is_float => {
             let le = if *inclusive { "<=" } else { "<" };
             let mut parts = Vec::new();
-            if let Some(lo) = min { parts.push(format!("{expr} >= {lo:?}")); }
-            if let Some(hi) = max { parts.push(format!("{expr} {le} {hi:?}")); }
+            if let Some(lo) = min {
+                parts.push(format!("{expr} >= {lo:?}"));
+            }
+            if let Some(hi) = max {
+                parts.push(format!("{expr} {le} {hi:?}"));
+            }
             join(parts)
         }
         Constraint::Eq(v) | Constraint::Ne(v) => {
@@ -2068,17 +2575,26 @@ fn cs_constraint_check(c: &Constraint, expr: &str, ty: &TypeRef) -> Option<Strin
                 (LiteralValue::Float(f), _) if is_float => format!("{f:?}"),
                 _ => return None,
             };
-            let op = if matches!(c, Constraint::Eq(_)) { "==" } else { "!=" };
+            let op = if matches!(c, Constraint::Eq(_)) {
+                "=="
+            } else {
+                "!="
+            };
             Some(format!("{expr} {op} {l}"))
         }
         Constraint::Regexp { hook: Some(h), .. } => Some(format!("{h}({expr})")),
         // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
         Constraint::Bits(bits) if is_uint => Some(format!(
-            "({expr} & ~{:#x}UL) == 0", cddlc_codegen::bits_mask_u64(bits)
+            "({expr} & ~{:#x}UL) == 0",
+            cddlc_codegen::bits_mask_u64(bits)
         )),
         Constraint::Bits(bits) if matches!(p, Some(Primitive::Bstr)) => {
             let m = cddlc_codegen::bits_mask_bytes(bits);
-            let bytes = m.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+            let bytes = m
+                .iter()
+                .map(|b| format!("{b:#04x}"))
+                .collect::<Vec<_>>()
+                .join(", ");
             Some(format!(
                 "System.Linq.Enumerable.All(System.Linq.Enumerable.Select({expr}, (b, i) => (b & ~(i < {n} ? new byte[] {{ {bytes} }}[i] : 0)) == 0), ok => ok)",
                 n = m.len(),
@@ -2090,25 +2606,29 @@ fn cs_constraint_check(c: &Constraint, expr: &str, ty: &TypeRef) -> Option<Strin
 
 fn constraint_description(c: &Constraint) -> String {
     match c {
-        Constraint::SizeExact(n)    => format!("length must be {n}"),
+        Constraint::SizeExact(n) => format!("length must be {n}"),
         Constraint::SizeRange { min, max } => format!("length out of range ({min:?}..{max:?})"),
-        Constraint::ValueRangeInt { min, max, .. } => format!("value out of range ({min:?}..{max:?})"),
-        Constraint::ValueRangeUint { min, max, .. } => format!("value out of range ({min:?}..{max:?})"),
-        Constraint::Eq(v)  => format!("must equal {}", cs_literal(v)),
-        Constraint::Ne(v)  => format!("must not equal {}", cs_literal(v)),
+        Constraint::ValueRangeInt { min, max, .. } => {
+            format!("value out of range ({min:?}..{max:?})")
+        }
+        Constraint::ValueRangeUint { min, max, .. } => {
+            format!("value out of range ({min:?}..{max:?})")
+        }
+        Constraint::Eq(v) => format!("must equal {}", cs_literal(v)),
+        Constraint::Ne(v) => format!("must not equal {}", cs_literal(v)),
         Constraint::Bits(b) => format!("only bits {b:?} may be set"),
-        _                  => "constraint violated".into(),
+        _ => "constraint violated".into(),
     }
 }
 
 fn cs_literal(v: &LiteralValue) -> String {
     match v {
-        LiteralValue::Bool(b)  => b.to_string().to_lowercase(),
-        LiteralValue::Null     => "null".into(),
-        LiteralValue::Uint(n)  => format!("{n}UL"),
-        LiteralValue::Int(n)   => format!("{n}L"),
+        LiteralValue::Bool(b) => b.to_string().to_lowercase(),
+        LiteralValue::Null => "null".into(),
+        LiteralValue::Uint(n) => format!("{n}UL"),
+        LiteralValue::Int(n) => format!("{n}L"),
         LiteralValue::Float(f) => format!("{f:?}"),
-        LiteralValue::Text(s)  => format!("{s:?}"),
+        LiteralValue::Text(s) => format!("{s:?}"),
         LiteralValue::Bytes(_) => "null /* bytes */".into(),
     }
 }
@@ -2119,7 +2639,8 @@ fn cs_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Strin
     let base = cs_typeref(ty, opts);
     match occ {
         Occurrence::Optional => format!("{base}?"),
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => format!("List<{base}>"),
         Occurrence::Required => base,
     }
@@ -2128,7 +2649,8 @@ fn cs_field_type(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> Strin
 fn cs_default_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     match occ {
         Occurrence::Optional => "null".into(),
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
         | Occurrence::Bounded { .. } => format!("new List<{}>() ", cs_typeref(ty, opts)),
         Occurrence::Required => cs_type_default(ty, opts),
     }
@@ -2137,18 +2659,19 @@ fn cs_default_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> St
 fn cs_type_default(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(p) => match p {
-            Primitive::Bool    => "false".into(),
-            Primitive::Uint    => "0UL".into(),
-            Primitive::Int     => "0L".into(),
+            Primitive::Bool => "false".into(),
+            Primitive::Uint => "0UL".into(),
+            Primitive::Int => "0L".into(),
             Primitive::Float16 | Primitive::Float32 => "0.0f".into(),
-            Primitive::Float64 | Primitive::Float   => "0.0".into(),
-            Primitive::Tstr    => "string.Empty".into(),
+            Primitive::Float64 | Primitive::Float => "0.0".into(),
+            Primitive::Tstr => "string.Empty".into(),
             Primitive::Bstr | Primitive::Any => "Array.Empty<byte>()".into(),
             Primitive::Null | Primitive::Undefined => "null!".into(),
         },
-        TypeRef::Named(n)         => format!("{}.Default", to_pascal_case(n)),
+        TypeRef::Named(n) => format!("{}.Default", to_pascal_case(n)),
         TypeRef::Tagged(_, inner) => cs_type_default(inner, opts),
-        TypeRef::Choice(cs) => cs.first()
+        TypeRef::Choice(cs) => cs
+            .first()
             .map(|c| cs_type_default(c, opts))
             .unwrap_or_else(|| "null!".into()),
     }
@@ -2156,28 +2679,32 @@ fn cs_type_default(ty: &TypeRef, opts: &CodegenOptions) -> String {
 
 fn cs_typeref(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(p)     => cs_primitive(p).to_owned(),
-        TypeRef::Named(n)         => to_pascal_case(n),
+        TypeRef::Primitive(p) => cs_primitive(p).to_owned(),
+        TypeRef::Named(n) => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => cs_typeref(inner, opts),
         // One C# type if every alternative has it, otherwise `object`.
         TypeRef::Choice(cs) => {
             let mut tys: Vec<String> = cs.iter().map(|c| cs_typeref(c, opts)).collect();
             tys.dedup();
-            if tys.len() == 1 { tys.remove(0) } else { "object".into() }
+            if tys.len() == 1 {
+                tys.remove(0)
+            } else {
+                "object".into()
+            }
         }
     }
 }
 
 fn cs_primitive(p: &Primitive) -> &'static str {
     match p {
-        Primitive::Bool      => "bool",
+        Primitive::Bool => "bool",
         Primitive::Null | Primitive::Undefined => "object",
-        Primitive::Uint      => "ulong",
-        Primitive::Int       => "long",
-        Primitive::Float16   => "float",
-        Primitive::Float32   => "float",
+        Primitive::Uint => "ulong",
+        Primitive::Int => "long",
+        Primitive::Float16 => "float",
+        Primitive::Float32 => "float",
         Primitive::Float64 | Primitive::Float => "double",
-        Primitive::Tstr      => "string",
+        Primitive::Tstr => "string",
         Primitive::Bstr | Primitive::Any => "byte[]",
     }
 }
@@ -2185,8 +2712,8 @@ fn cs_primitive(p: &Primitive) -> &'static str {
 // ── Test file ─────────────────────────────────────────────────────────────────
 
 fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
-    let name  = module.name.as_str();
-    let ns    = to_pascal_case(name);
+    let name = module.name.as_str();
+    let ns = to_pascal_case(name);
     let mut w = IndentWriter::new(4);
 
     for l in cddlc_codegen::header_comment(opts, cddlc_codegen::CommentStyle::Slash) {
@@ -2222,16 +2749,16 @@ fn emit_tests(module: &IrModule, opts: &CodegenOptions) -> String {
 fn emit_type_tests(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: &CodegenOptions) {
     match def {
         TypeDef::Struct(s) => emit_struct_tests(w, s, opts),
-        TypeDef::Enum(e)   => emit_enum_tests(w, e, module, opts),
-        TypeDef::Alias(a)  => emit_alias_tests(w, a, opts),
-        TypeDef::Array(a)  => emit_array_tests(w, a, opts),
-        TypeDef::Map(m)    => emit_map_tests(w, m, opts),
+        TypeDef::Enum(e) => emit_enum_tests(w, e, module, opts),
+        TypeDef::Alias(a) => emit_alias_tests(w, a, opts),
+        TypeDef::Array(a) => emit_array_tests(w, a, opts),
+        TypeDef::Map(m) => emit_map_tests(w, m, opts),
     }
 }
 
 fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     let type_name = to_pascal_case(&s.name);
-    let test_pfx  = to_pascal_case(&s.name);
+    let test_pfx = to_pascal_case(&s.name);
 
     // Tier 1: default roundtrip
     w.line("[Fact]");
@@ -2245,7 +2772,9 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
         let pname = to_pascal_case(&f.name);
         let val = match &f.occurrence {
             Occurrence::Optional => "null".into(),
-            Occurrence::Required if !f.constraints.is_empty() => cs_valid_constrained_value(&f.constraints, &f.ty, opts),
+            Occurrence::Required if !f.constraints.is_empty() => {
+                cs_valid_constrained_value(&f.constraints, &f.ty, opts)
+            }
             occ if cddlc_codegen::repeat_bounds(occ).0 > 0 => cs_needed_items(f, opts),
             occ => cs_default_value(&f.ty, occ, opts).trim().to_owned(),
         };
@@ -2253,7 +2782,11 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
     }
     w.dedent();
     w.line("};");
-    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    if opts.is_json() {
+        emit_roundtrip_assert_json(w, &type_name);
+    } else {
+        emit_roundtrip_assert(w, &type_name);
+    }
     w.dedent();
     w.line("}");
     w.blank();
@@ -2269,7 +2802,9 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
     for f in &s.fields {
         let pname = to_pascal_case(&f.name);
         let val = match &f.occurrence {
-            Occurrence::Required if !f.constraints.is_empty() => cs_valid_constrained_value(&f.constraints, &f.ty, opts),
+            Occurrence::Required if !f.constraints.is_empty() => {
+                cs_valid_constrained_value(&f.constraints, &f.ty, opts)
+            }
             occ if cddlc_codegen::repeat_bounds(occ).0 > 0 => cs_needed_items(f, opts),
             occ => cs_explicit_value(&f.ty, occ, opts),
         };
@@ -2277,7 +2812,11 @@ fn emit_struct_tests(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions)
     }
     w.dedent();
     w.line("};");
-    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    if opts.is_json() {
+        emit_roundtrip_assert_json(w, &type_name);
+    } else {
+        emit_roundtrip_assert(w, &type_name);
+    }
     w.dedent();
     w.line("}");
 
@@ -2311,17 +2850,26 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
         w.indent();
         let value = cs_explicit_value(&v.ty, &Occurrence::Required, opts);
         let construct = match (enum_literal(v).is_some(), opts.is_json()) {
-            (true, false)  => format!("{type_name}.{vname}.Instance"),
-            (true, true)   => format!("{type_name}.Create{vname}()"),
+            (true, false) => format!("{type_name}.{vname}.Instance"),
+            (true, true) => format!("{type_name}.Create{vname}()"),
             (false, false) => format!("new {type_name}.{vname}({value})"),
-            (false, true)  => format!("{type_name}.Create{vname}({value})"),
+            (false, true) => format!("{type_name}.Create{vname}({value})"),
         };
         w.line(&format!("{type_name} original = {construct};"));
-        if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+        if opts.is_json() {
+            emit_roundtrip_assert_json(w, &type_name);
+        } else {
+            emit_roundtrip_assert(w, &type_name);
+        }
         // A map variant with the same members as an earlier one decodes as
         // that one; the encodings, compared above, are the same
         // (dgtlrift/cddlc#192).
-        if !e.variants.iter().take_while(|x| x.name != v.name).any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module)) {
+        if !e
+            .variants
+            .iter()
+            .take_while(|x| x.name != v.name)
+            .any(|x| cddlc_codegen::same_map_shape(&x.ty, &v.ty, module))
+        {
             w.line("Assert.IsType(original.GetType(), decoded);");
         }
         w.dedent();
@@ -2346,11 +2894,17 @@ fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     };
 
     if a.constraints.is_empty() && a.tagged.is_none() {
-        w.line(&format!("var original = new {type_name} {{ Value = {val} }};"));
+        w.line(&format!(
+            "var original = new {type_name} {{ Value = {val} }};"
+        ));
     } else {
         w.line(&format!("var original = new {type_name}({val});"));
     }
-    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    if opts.is_json() {
+        emit_roundtrip_assert_json(w, &type_name);
+    } else {
+        emit_roundtrip_assert(w, &type_name);
+    }
     w.dedent();
     w.line("}");
 
@@ -2358,10 +2912,16 @@ fn emit_alias_tests(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
     if let Some(bad) = cs_invalid_constrained_value(&a.constraints, &a.ty, opts) {
         w.blank();
         w.line("[Fact]");
-        w.line(&format!("public void {type_name}_Invalid_ThrowsValidation()"));
+        w.line(&format!(
+            "public void {type_name}_Invalid_ThrowsValidation()"
+        ));
         w.line("{");
         w.indent();
-        let exc_name = if opts.is_json() { "JsonValidationException" } else { "CborValidationException" };
+        let exc_name = if opts.is_json() {
+            "JsonValidationException"
+        } else {
+            "CborValidationException"
+        };
         w.line(&format!(
             "Assert.Throws<{exc_name}>(() => new {type_name}({bad}));"
         ));
@@ -2378,7 +2938,11 @@ fn emit_array_tests(w: &mut IndentWriter, a: &ArrayDef, opts: &CodegenOptions) {
     w.line("{");
     w.indent();
     w.line(&format!("var original = new {type_name}();"));
-    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    if opts.is_json() {
+        emit_roundtrip_assert_json(w, &type_name);
+    } else {
+        emit_roundtrip_assert(w, &type_name);
+    }
     w.dedent();
     w.line("}");
 }
@@ -2391,7 +2955,11 @@ fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
     w.line("{");
     w.indent();
     w.line(&format!("var original = new {type_name}();"));
-    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    if opts.is_json() {
+        emit_roundtrip_assert_json(w, &type_name);
+    } else {
+        emit_roundtrip_assert(w, &type_name);
+    }
     w.line("Assert.Empty(decoded.Entries);");
     w.dedent();
     w.line("}");
@@ -2407,7 +2975,11 @@ fn emit_map_tests(w: &mut IndentWriter, m: &MapDef, opts: &CodegenOptions) {
         cs_type_default(&m.key_ty, opts),
         cs_type_default(&m.val_ty, opts)
     ));
-    if opts.is_json() { emit_roundtrip_assert_json(w, &type_name); } else { emit_roundtrip_assert(w, &type_name); }
+    if opts.is_json() {
+        emit_roundtrip_assert_json(w, &type_name);
+    } else {
+        emit_roundtrip_assert(w, &type_name);
+    }
     w.line("Assert.Single(decoded.Entries);");
     w.dedent();
     w.line("}");
@@ -2440,24 +3012,29 @@ fn cs_needed_items(f: &cddlc_ir::FieldDef, opts: &CodegenOptions) -> String {
     let min = cddlc_codegen::repeat_bounds(&f.occurrence).0;
     let item = cs_explicit_value(&f.ty, &Occurrence::Required, opts);
     let items: Vec<String> = (0..min).map(|_| item.clone()).collect();
-    format!("new List<{}> {{ {} }}", cs_typeref(&f.ty, opts), items.join(", "))
+    format!(
+        "new List<{}> {{ {} }}",
+        cs_typeref(&f.ty, opts),
+        items.join(", ")
+    )
 }
 
 fn cs_explicit_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> String {
     match occ {
         Occurrence::Optional => "null".into(),
-        Occurrence::ZeroOrMore { .. } | Occurrence::OneOrMore { .. }
-        | Occurrence::Bounded { .. } =>
-            format!("new List<{}>() ", cs_typeref(ty, opts)),
+        Occurrence::ZeroOrMore { .. }
+        | Occurrence::OneOrMore { .. }
+        | Occurrence::Bounded { .. } => format!("new List<{}>() ", cs_typeref(ty, opts)),
         Occurrence::Required => match ty {
-            TypeRef::Primitive(Primitive::Uint)  => "42UL".into(),
-            TypeRef::Primitive(Primitive::Int)   => "-1L".into(),
+            TypeRef::Primitive(Primitive::Uint) => "42UL".into(),
+            TypeRef::Primitive(Primitive::Int) => "-1L".into(),
             TypeRef::Primitive(Primitive::Float32 | Primitive::Float16) => "3.14f".into(),
-            TypeRef::Primitive(Primitive::Float64 | Primitive::Float)   => "3.14".into(),
-            TypeRef::Primitive(Primitive::Bool)  => "true".into(),
-            TypeRef::Primitive(Primitive::Tstr)  => "\"hello\"".into(),
-            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) =>
-                "new byte[] { 0x01, 0x02 }".into(),
+            TypeRef::Primitive(Primitive::Float64 | Primitive::Float) => "3.14".into(),
+            TypeRef::Primitive(Primitive::Bool) => "true".into(),
+            TypeRef::Primitive(Primitive::Tstr) => "\"hello\"".into(),
+            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+                "new byte[] { 0x01, 0x02 }".into()
+            }
             TypeRef::Tagged(_, inner) => cs_explicit_value(inner, occ, opts),
             TypeRef::Choice(cs) if !cs.is_empty() => cs_explicit_value(&cs[0], occ, opts),
             _ => cs_type_default(ty, opts),
@@ -2468,13 +3045,18 @@ fn cs_explicit_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> S
 /// A value of `ty` that satisfies `constraints` (literal, size and range).
 fn cs_valid_constrained_value(
     constraints: &[Constraint],
-    ty:          &TypeRef,
-    opts:        &CodegenOptions,
+    ty: &TypeRef,
+    opts: &CodegenOptions,
 ) -> String {
-    let p = match cs_base(ty) { TypeRef::Primitive(p) => p.clone(), _ => return cs_type_default(ty, opts) };
+    let p = match cs_base(ty) {
+        TypeRef::Primitive(p) => p.clone(),
+        _ => return cs_type_default(ty, opts),
+    };
     if let Some(lit) = constraints.iter().find_map(|c| match c {
         Constraint::Eq(LiteralValue::Bytes(_)) => None,
-        Constraint::Eq(LiteralValue::Uint(n)) if matches!(p, Primitive::Int) => Some(format!("{n}L")),
+        Constraint::Eq(LiteralValue::Uint(n)) if matches!(p, Primitive::Int) => {
+            Some(format!("{n}L"))
+        }
         Constraint::Eq(l) => Some(cs_literal(l)),
         _ => None,
     }) {
@@ -2494,21 +3076,35 @@ fn cs_valid_constrained_value(
     // Ranges: the lower bound, or 0 when it's allowed, or the upper bound.
     for c in constraints {
         let (min, max, inclusive): (Option<i128>, Option<i128>, bool) = match c {
-            Constraint::ValueRangeInt { min, max, inclusive } => (min.map(i128::from), max.map(i128::from), *inclusive),
-            Constraint::ValueRangeUint { min, max, inclusive } => (min.map(i128::from), max.map(i128::from), *inclusive),
+            Constraint::ValueRangeInt {
+                min,
+                max,
+                inclusive,
+            } => (min.map(i128::from), max.map(i128::from), *inclusive),
+            Constraint::ValueRangeUint {
+                min,
+                max,
+                inclusive,
+            } => (min.map(i128::from), max.map(i128::from), *inclusive),
             _ => continue,
         };
         let v = match (min, max) {
             (Some(lo), _) => lo,
             (None, Some(hi)) if hi > 0 || (hi == 0 && inclusive) => 0,
-            (None, Some(hi)) => if inclusive { hi } else { hi - 1 },
+            (None, Some(hi)) => {
+                if inclusive {
+                    hi
+                } else {
+                    hi - 1
+                }
+            }
             (None, None) => 0,
         };
         return match p {
             Primitive::Uint => format!("{}UL", v.max(0)),
-            Primitive::Int  => format!("{v}L"),
+            Primitive::Int => format!("{v}L"),
             Primitive::Float32 | Primitive::Float16 => format!("{v}.0f"),
-            Primitive::Float64 | Primitive::Float   => format!("{v}.0"),
+            Primitive::Float64 | Primitive::Float => format!("{v}.0"),
             _ => cs_type_default(ty, opts),
         };
     }
@@ -2518,14 +3114,18 @@ fn cs_valid_constrained_value(
 /// A value of `ty` that breaks one of `constraints`, if there's one to build.
 fn cs_invalid_constrained_value(
     constraints: &[Constraint],
-    ty:          &TypeRef,
-    _opts:       &CodegenOptions,
+    ty: &TypeRef,
+    _opts: &CodegenOptions,
 ) -> Option<String> {
-    let TypeRef::Primitive(p) = cs_base(ty) else { return None };
+    let TypeRef::Primitive(p) = cs_base(ty) else {
+        return None;
+    };
     let num = |v: i128| -> Option<String> {
         match p {
             Primitive::Uint if v >= 0 && v <= u64::MAX as i128 => Some(format!("{v}UL")),
-            Primitive::Int if v >= i64::MIN as i128 && v <= i64::MAX as i128 => Some(format!("{v}L")),
+            Primitive::Int if v >= i64::MIN as i128 && v <= i64::MAX as i128 => {
+                Some(format!("{v}L"))
+            }
             _ => None,
         }
     };
@@ -2538,14 +3138,23 @@ fn cs_invalid_constrained_value(
     };
     constraints.iter().find_map(|c| match c {
         Constraint::SizeExact(n) => sized(n + 1),
-        Constraint::SizeRange { min, max } => max.and_then(|hi| sized(hi + 1))
+        Constraint::SizeRange { min, max } => max
+            .and_then(|hi| sized(hi + 1))
             .or_else(|| min.filter(|lo| *lo > 0).and_then(|lo| sized(lo - 1))),
-        Constraint::ValueRangeInt { min, max, inclusive } => {
+        Constraint::ValueRangeInt {
+            min,
+            max,
+            inclusive,
+        } => {
             let (min, max) = (min.map(i128::from), max.map(i128::from));
             max.and_then(|hi| num(if *inclusive { hi + 1 } else { hi }))
                 .or_else(|| min.and_then(|lo| num(lo - 1)))
         }
-        Constraint::ValueRangeUint { min, max, inclusive } => {
+        Constraint::ValueRangeUint {
+            min,
+            max,
+            inclusive,
+        } => {
             let (min, max) = (min.map(i128::from), max.map(i128::from));
             max.and_then(|hi| num(if *inclusive { hi + 1 } else { hi }))
                 .or_else(|| min.and_then(|lo| num(lo - 1)))

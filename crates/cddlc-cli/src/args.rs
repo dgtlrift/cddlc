@@ -224,16 +224,16 @@ pub enum Alloc {
 impl From<Lang> for cddlc_codegen::Language {
     fn from(l: Lang) -> Self {
         match l {
-            Lang::Rust   => cddlc_codegen::Language::Rust,
-            Lang::C      => cddlc_codegen::Language::C,
-            Lang::Cpp    => cddlc_codegen::Language::Cpp,
+            Lang::Rust => cddlc_codegen::Language::Rust,
+            Lang::C => cddlc_codegen::Language::C,
+            Lang::Cpp => cddlc_codegen::Language::Cpp,
             Lang::Csharp => cddlc_codegen::Language::CSharp,
             Lang::Nodejs => cddlc_codegen::Language::Python, // reuses Python slot
             Lang::Python => cddlc_codegen::Language::Python,
-            Lang::Dart   => cddlc_codegen::Language::Dart,
-            Lang::Go     => cddlc_codegen::Language::Go,
-            Lang::Java   => cddlc_codegen::Language::Java,
-            Lang::Lua    => cddlc_codegen::Language::Lua,
+            Lang::Dart => cddlc_codegen::Language::Dart,
+            Lang::Go => cddlc_codegen::Language::Go,
+            Lang::Java => cddlc_codegen::Language::Java,
+            Lang::Lua => cddlc_codegen::Language::Lua,
         }
     }
 }
@@ -243,7 +243,7 @@ impl From<Alloc> for cddlc_codegen::AllocStrategy {
         match a {
             Alloc::Stack => cddlc_codegen::AllocStrategy::Stack,
             Alloc::Arena => cddlc_codegen::AllocStrategy::Arena,
-            Alloc::Heap  => cddlc_codegen::AllocStrategy::Heap,
+            Alloc::Heap => cddlc_codegen::AllocStrategy::Heap,
         }
     }
 }

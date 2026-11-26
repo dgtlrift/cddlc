@@ -11,7 +11,6 @@
 /// Pragma comments are parsed inline: whenever a `;` comment is encountered
 /// the pragma module attempts to interpret it, and any resulting pragmas are
 /// accumulated and attached to the next rule or member entry.
-
 use winnow::{
     ascii::{digit1, hex_digit1, multispace0},
     combinator::{alt, cut_err, peek, separated},
@@ -23,9 +22,9 @@ use winnow::{
 use std::path::PathBuf;
 
 use crate::ast::{
-    CddlModule, CtlOp, GroupChoice, GroupEntry, Ident, MemberEntry, MemberKey,
-    MemberKind, Occurrence, Pragma, PragmaValue, Rule, RuleKind, SourceLine, Span, Spanned,
-    Type, Type1, Type2, TypeOp, Value,
+    CddlModule, CtlOp, GroupChoice, GroupEntry, Ident, MemberEntry, MemberKey, MemberKind,
+    Occurrence, Pragma, PragmaValue, Rule, RuleKind, SourceLine, Span, Spanned, Type, Type1, Type2,
+    TypeOp, Value,
 };
 use crate::error::{ParseError, ParseResult, ParseWarning, WarningKind};
 use crate::pragma::parse_pragma;
@@ -33,10 +32,7 @@ use crate::pragma::parse_pragma;
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Parse a complete CDDL source file.
-pub fn parse_cddl(
-    src:  &str,
-    path: PathBuf,
-) -> Result<ParseResult<CddlModule>, ParseError> {
+pub fn parse_cddl(src: &str, path: PathBuf) -> Result<ParseResult<CddlModule>, ParseError> {
     let mut state = ParseState::new(src, path.clone());
     state.parse_module(src)
 }
@@ -52,10 +48,7 @@ pub fn parse_cddl(
 ///   - Remaining unparsed input excerpt
 ///   - Accumulated pending pragmas at the point of failure
 ///   - Token context from winnow
-pub fn parse_cddl_debug(
-    src:  &str,
-    path: PathBuf,
-) -> Result<ParseResult<CddlModule>, ParseError> {
+pub fn parse_cddl_debug(src: &str, path: PathBuf) -> Result<ParseResult<CddlModule>, ParseError> {
     let mut state = ParseState::new(src, path.clone());
     match state.parse_module(src) {
         Ok(result) => {
@@ -81,7 +74,13 @@ pub fn format_parse_diagnostic(src: &str, path: &PathBuf, error: &ParseError) ->
     out.push_str("━━━ cddlc parse error ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     match error {
-        ParseError::Syntax { line, col, message, span, .. } => {
+        ParseError::Syntax {
+            line,
+            col,
+            message,
+            span,
+            ..
+        } => {
             out.push_str(&format!("  File : {}\n", path.display()));
             out.push_str(&format!("  Line : {line}, Col: {col}\n"));
             out.push_str(&format!("  Span : {}..{}\n", span.start, span.end));
@@ -92,7 +91,10 @@ pub fn format_parse_diagnostic(src: &str, path: &PathBuf, error: &ParseError) ->
             let line_idx = line.saturating_sub(1); // 0-based
             let start_line = line_idx.saturating_sub(3);
             out.push_str("  Source context:\n");
-            for (i, l) in lines[start_line..=line_idx.min(lines.len().saturating_sub(1))].iter().enumerate() {
+            for (i, l) in lines[start_line..=line_idx.min(lines.len().saturating_sub(1))]
+                .iter()
+                .enumerate()
+            {
                 let ln = start_line + i + 1;
                 if ln == *line {
                     out.push_str(&format!("  {:>4} │ {}\n", ln, l));
@@ -129,13 +131,17 @@ pub fn format_parse_diagnostic(src: &str, path: &PathBuf, error: &ParseError) ->
             out.push('\n');
             out.push_str("  Hints:\n");
             if message.contains("parse_ident") || message.contains("ident") {
-                out.push_str("  • Expected an identifier — check for reserved words or invalid characters\n");
+                out.push_str(
+                    "  • Expected an identifier — check for reserved words or invalid characters\n",
+                );
             }
             if message.contains("assignop") || message.contains("\"=\"") {
                 out.push_str("  • Expected assignment operator = / /= / //=\n");
             }
             if message.contains("comment") || src[..offset.min(src.len())].contains(';') {
-                out.push_str("  • Comments use `;` to end-of-line; pragmas use `; @keyword value`\n");
+                out.push_str(
+                    "  • Comments use `;` to end-of-line; pragmas use `; @keyword value`\n",
+                );
             }
             if message.contains("map") || message.contains("group") {
                 out.push_str("  • Map/group entries use `key: type` or `key => type`\n");
@@ -166,7 +172,7 @@ pub fn parse_type_str(src: &str) -> Result<Type, String> {
 // ── Parser state ──────────────────────────────────────────────────────────────
 
 struct ParseState {
-    path:     PathBuf,
+    path: PathBuf,
     warnings: Vec<ParseWarning>,
     /// Pending pragmas accumulated from comment lines, to be attached to the
     /// next rule or group member.
@@ -203,10 +209,7 @@ impl ParseState {
 
     // ── Top-level parse ───────────────────────────────────────────────────────
 
-    fn parse_module(
-        &mut self,
-        src: &str,
-    ) -> Result<ParseResult<CddlModule>, ParseError> {
+    fn parse_module(&mut self, src: &str) -> Result<ParseResult<CddlModule>, ParseError> {
         let trace = std::env::var("CDDLC_TRACE").is_ok();
         let mut input = src;
         let mut rules: Vec<Spanned<Rule>> = Vec::new();
@@ -231,21 +234,28 @@ impl ParseState {
             let pending = self.take_pragmas();
             for p in pending {
                 if p.keyword == "import" {
-                    if trace { eprintln!("[cddlc-trace] file pragma: @import {:?}", p.value); }
+                    if trace {
+                        eprintln!("[cddlc-trace] file pragma: @import {:?}", p.value);
+                    }
                     file_pragmas.push(p);
                 } else {
-                    if trace { eprintln!("[cddlc-trace] rule pragma pending: @{}", p.keyword); }
+                    if trace {
+                        eprintln!("[cddlc-trace] rule pragma pending: @{}", p.keyword);
+                    }
                     self.pending_pragmas.push(p);
                 }
             }
 
             let start = byte_offset(src, input);
-            let line  = line_of(src, start);
-            let col   = col_of(src, start);
+            let line = line_of(src, start);
+            let col = col_of(src, start);
             if trace {
                 let preview: String = input.chars().take(40).collect();
                 let preview = preview.replace('\n', "↵");
-                eprintln!("[cddlc-trace] rule[{rule_index}] at {line}:{col} — {:?}", preview);
+                eprintln!(
+                    "[cddlc-trace] rule[{rule_index}] at {line}:{col} — {:?}",
+                    preview
+                );
             }
 
             let rule = match self.parse_rule(&mut input, src) {
@@ -254,17 +264,20 @@ impl ParseState {
                 Err(e) => {
                     let at = byte_offset(src, input);
                     return Err(ParseError::Syntax {
-                        path:    self.path.clone(),
-                        line:    line_of(src, at),
-                        col:     col_of(src, at),
+                        path: self.path.clone(),
+                        line: line_of(src, at),
+                        col: col_of(src, at),
                         message: syntax_message(&e),
-                        span:    Span::new(at, at),
+                        span: Span::new(at, at),
                     });
                 }
             };
 
             if trace {
-                eprintln!("[cddlc-trace] rule[{rule_index}] parsed: {:?}", rule.name.node.as_str());
+                eprintln!(
+                    "[cddlc-trace] rule[{rule_index}] parsed: {:?}",
+                    rule.name.node.as_str()
+                );
             }
             rule_index += 1;
 
@@ -287,8 +300,12 @@ impl ParseState {
         }
 
         if trace {
-            eprintln!("[cddlc-trace] parse complete: {} rules, {} file_pragmas, {} warnings",
-                rules.len(), file_pragmas.len(), self.warnings.len());
+            eprintln!(
+                "[cddlc-trace] parse complete: {} rules, {} file_pragmas, {} warnings",
+                rules.len(),
+                file_pragmas.len(),
+                self.warnings.len()
+            );
         }
 
         let module = CddlModule {
@@ -297,7 +314,10 @@ impl ParseState {
             rules,
         };
 
-        Ok(ParseResult::with_warnings(module, std::mem::take(&mut self.warnings)))
+        Ok(ParseResult::with_warnings(
+            module,
+            std::mem::take(&mut self.warnings),
+        ))
     }
 
     // ── Whitespace + comment handling ─────────────────────────────────────────
@@ -321,7 +341,7 @@ impl ParseState {
 
             if input.starts_with(';') {
                 let line_no = line_of(src, byte_offset(src, input));
-                let start   = byte_offset(src, input);
+                let start = byte_offset(src, input);
 
                 // Consume `;` and rest of line
                 let _ = one_of::<_, _, ()>(';').parse_next(input);
@@ -345,7 +365,10 @@ impl ParseState {
                         if breaks == 0 {
                             // On the line the previous rule ended on.
                             match &mut self.trailing_doc {
-                                Some(t) => { t.push('\n'); t.push_str(&text); }
+                                Some(t) => {
+                                    t.push('\n');
+                                    t.push_str(&text);
+                                }
                                 None => self.trailing_doc = Some(text),
                             }
                         } else {
@@ -354,14 +377,17 @@ impl ParseState {
                     }
                     Some(Ok(pragma)) => {
                         if trace {
-                            eprintln!("[cddlc-trace]   → pragma @{} = {:?}", pragma.keyword, pragma.value);
+                            eprintln!(
+                                "[cddlc-trace]   → pragma @{} = {:?}",
+                                pragma.keyword, pragma.value
+                            );
                         }
                         // Emit warning for Unknown pragmas
                         if let PragmaValue::Unknown(_) = &pragma.value {
                             self.add_warning(ParseWarning {
-                                path:    self.path.clone(),
-                                line:    line_no,
-                                col:     0,
+                                path: self.path.clone(),
+                                line: line_no,
+                                col: 0,
                                 message: format!(
                                     "unknown pragma '@{}' — preserved for custom backends",
                                     pragma.keyword
@@ -386,22 +412,15 @@ impl ParseState {
 
     // ── Rule parsing ──────────────────────────────────────────────────────────
 
-    fn parse_rule(
-        &mut self,
-        input: &mut &str,
-        src:   &str,
-    ) -> ModalResult<Rule> {
+    fn parse_rule(&mut self, input: &mut &str, src: &str) -> ModalResult<Rule> {
         let pragmas = self.take_pragmas();
         let doc = join_doc(&std::mem::take(&mut self.pending_doc));
 
         // name [generic-params] assignop type-or-group
         let name_start = byte_offset(src, input);
-        let name_str   = parse_ident(input)?;
-        let name_end   = byte_offset(src, input);
-        let name = Spanned::new(
-            Ident::new(name_str),
-            Span::new(name_start, name_end),
-        );
+        let name_str = parse_ident(input)?;
+        let name_end = byte_offset(src, input);
+        let name = Spanned::new(Ident::new(name_str), Span::new(name_start, name_end));
 
         // Optional generic parameters: `<T, U>`
         let generic_params = parse_generic_params(input, src)?;
@@ -417,9 +436,9 @@ impl ParseState {
         let kind = if !extend_group && peek_group_rule(input) {
             let gs = byte_offset(src, input);
             let group = parse_group_entry(input, src)?;
-            let ge    = byte_offset(src, input);
+            let ge = byte_offset(src, input);
             RuleKind::Group {
-                group:  Spanned::new(group, Span::new(gs, ge)),
+                group: Spanned::new(group, Span::new(gs, ge)),
                 extend: false,
             }
         } else {
@@ -427,21 +446,25 @@ impl ParseState {
             let ty = parse_type(input)?;
             let te = byte_offset(src, input);
             RuleKind::Type {
-                ty:     Spanned::new(ty, Span::new(ts, te)),
+                ty: Spanned::new(ty, Span::new(ts, te)),
                 extend: extend_type || extend_group,
             }
         };
 
-        Ok(Rule { pragmas, doc, source: None, name, generic_params, kind })
+        Ok(Rule {
+            pragmas,
+            doc,
+            source: None,
+            name,
+            generic_params,
+            kind,
+        })
     }
 }
 
 // ── Generic parameter list ────────────────────────────────────────────────────
 
-fn parse_generic_params(
-    input: &mut &str,
-    src:   &str,
-) -> ModalResult<Vec<Spanned<Ident>>> {
+fn parse_generic_params(input: &mut &str, src: &str) -> ModalResult<Vec<Spanned<Ident>>> {
     if !input.starts_with('<') {
         return Ok(vec![]);
     }
@@ -462,7 +485,9 @@ fn parse_generic_params(
     .parse_next(input)?;
     ws0(input);
     cut_err(literal(">"))
-        .context(StrContext::Expected(StrContextValue::Description("closing '>' for generic params")))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "closing '>' for generic params",
+        )))
         .parse_next(input)?;
     Ok(params)
 }
@@ -476,7 +501,9 @@ fn parse_assignop(input: &mut &str) -> ModalResult<(bool, bool)> {
         literal("/=").map(|_| (true, false)),
         literal("=").map(|_| (false, false)),
     ))
-    .context(StrContext::Expected(StrContextValue::Description("'=', '/=', or '//='")))
+    .context(StrContext::Expected(StrContextValue::Description(
+        "'=', '/=', or '//='",
+    )))
     .parse_next(input)
 }
 
@@ -523,13 +550,19 @@ fn parse_type1(input: &mut &str) -> ModalResult<Spanned<Type1>> {
             let _ = literal::<_, _, ContextError>("...").parse_next(input)?;
             ws0(input);
             let upper = parse_type2_spanned(input)?;
-            ops.push(TypeOp::Range { upper, inclusive: false });
+            ops.push(TypeOp::Range {
+                upper,
+                inclusive: false,
+            });
             break; // range must be last / only operator
         } else if input.starts_with("..") {
             let _ = literal::<_, _, ContextError>("..").parse_next(input)?;
             ws0(input);
             let upper = parse_type2_spanned(input)?;
-            ops.push(TypeOp::Range { upper, inclusive: true });
+            ops.push(TypeOp::Range {
+                upper,
+                inclusive: true,
+            });
             break; // range must be last / only operator
         } else if input.starts_with('.') {
             // Control operator: `.keyword operand`
@@ -540,7 +573,7 @@ fn parse_type1(input: &mut &str) -> ModalResult<Spanned<Type1>> {
             ws0(input);
             let operand = parse_type2_spanned(input)?;
             ops.push(TypeOp::Control {
-                op:      Spanned::new(op, Span::new(0, 0)),
+                op: Spanned::new(op, Span::new(0, 0)),
                 operand,
             });
             // Loop — another control op may follow (e.g. `.ge -40 .le 85`)
@@ -584,7 +617,9 @@ fn parse_type2(input: &mut &str) -> ModalResult<Type2> {
         // Typename (possibly with generic args)
         parse_typename,
     ))
-    .context(StrContext::Expected(StrContextValue::Description("type expression")))
+    .context(StrContext::Expected(StrContextValue::Description(
+        "type expression",
+    )))
     .parse_next(input)
 }
 
@@ -593,16 +628,20 @@ fn parse_tagged(input: &mut &str) -> ModalResult<Type2> {
     let tag_num: u64 = parse_uint_literal(input)?;
     ws0(input);
     let _ = cut_err(literal("("))
-        .context(StrContext::Expected(StrContextValue::Description("'(' after tag number")))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "'(' after tag number",
+        )))
         .parse_next(input)?;
     ws0(input);
     let inner = parse_type(input)?;
     ws0(input);
     cut_err(literal(")"))
-        .context(StrContext::Expected(StrContextValue::Description("')' to close tagged type")))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "')' to close tagged type",
+        )))
         .parse_next(input)?;
     Ok(Type2::Tagged {
-        tag:   tag_num,
+        tag: tag_num,
         inner: Box::new(Spanned::new(inner, Span::new(0, 0))),
     })
 }
@@ -610,7 +649,7 @@ fn parse_tagged(input: &mut &str) -> ModalResult<Type2> {
 /// `#mt` or `#mt.ai` (RFC 8610 §3.6); a bare `#` is any data item.
 fn parse_major_type(input: &mut &str) -> ModalResult<Type2> {
     literal("#").parse_next(input)?;
-    if let Ok(d) = one_of::<_, _, ()>(['0','1','2','3','4','5','6','7']).parse_next(input) {
+    if let Ok(d) = one_of::<_, _, ()>(['0', '1', '2', '3', '4', '5', '6', '7']).parse_next(input) {
         let mut info = None;
         if input.starts_with('.') && input[1..].starts_with(|c: char| c.is_ascii_digit()) {
             *input = &input[1..];
@@ -626,7 +665,10 @@ fn parse_unwrap(input: &mut &str) -> ModalResult<Type2> {
     literal("~").parse_next(input)?;
     ws0(input);
     let name = parse_ident(input)?;
-    Ok(Type2::Unwrap(Spanned::new(Ident::new(name), Span::new(0, 0))))
+    Ok(Type2::Unwrap(Spanned::new(
+        Ident::new(name),
+        Span::new(0, 0),
+    )))
 }
 
 /// Parse an enumeration expression: `&(group)` or `&typename` (RFC 8610 §3.9).
@@ -640,27 +682,40 @@ fn parse_enum_ref(input: &mut &str) -> ModalResult<Type2> {
         let group = parse_group_entry_inner(input, ')')?;
         ws0(input);
         cut_err(literal(")"))
-            .context(StrContext::Expected(StrContextValue::Description("')' to close enum group")))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "')' to close enum group",
+            )))
             .parse_next(input)?;
         Ok(Type2::EnumGroup(Spanned::new(group, Span::new(0, 0))))
     } else {
         // &typename [genericargs]
         let name = cut_err(parse_ident)
-            .context(StrContext::Expected(StrContextValue::Description("identifier after '&'")))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "identifier after '&'",
+            )))
             .parse_next(input)?;
         ws0(input);
         let args: Vec<Spanned<Type>> = if input.starts_with('<') {
             let _ = literal::<_, _, ContextError>("<").parse_next(input)?;
             let args: Vec<Type> = separated(
                 1..,
-                |i: &mut &str| { ws0(i); let t = parse_type(i)?; ws0(i); Ok(t) },
+                |i: &mut &str| {
+                    ws0(i);
+                    let t = parse_type(i)?;
+                    ws0(i);
+                    Ok(t)
+                },
                 (ws0_fn, literal(","), ws0_fn),
             )
             .parse_next(input)?;
             cut_err(literal(">"))
-                .context(StrContext::Expected(StrContextValue::Description("'>' to close generic args")))
+                .context(StrContext::Expected(StrContextValue::Description(
+                    "'>' to close generic args",
+                )))
                 .parse_next(input)?;
-            args.into_iter().map(|t| Spanned::new(t, Span::new(0, 0))).collect()
+            args.into_iter()
+                .map(|t| Spanned::new(t, Span::new(0, 0)))
+                .collect()
         } else {
             vec![]
         };
@@ -677,7 +732,9 @@ fn parse_map_type(input: &mut &str) -> ModalResult<Type2> {
     let group = parse_group_entry_inner(input, '}')?;
     ws0(input);
     cut_err(literal("}"))
-        .context(StrContext::Expected(StrContextValue::Description("'}' to close map")))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "'}' to close map",
+        )))
         .parse_next(input)?;
     Ok(Type2::Map(Spanned::new(group, Span::new(0, 0))))
 }
@@ -688,7 +745,9 @@ fn parse_array_type(input: &mut &str) -> ModalResult<Type2> {
     let group = parse_group_entry_inner(input, ']')?;
     ws0(input);
     cut_err(literal("]"))
-        .context(StrContext::Expected(StrContextValue::Description("']' to close array")))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "']' to close array",
+        )))
         .parse_next(input)?;
     Ok(Type2::Array(Spanned::new(group, Span::new(0, 0))))
 }
@@ -699,7 +758,9 @@ fn parse_paren_group(input: &mut &str) -> ModalResult<Type2> {
     let group = parse_group_entry_inner(input, ')')?;
     ws0(input);
     cut_err(literal(")"))
-        .context(StrContext::Expected(StrContextValue::Description("')' to close group")))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "')' to close group",
+        )))
         .parse_next(input)?;
     Ok(Type2::Group(Spanned::new(group, Span::new(0, 0))))
 }
@@ -717,12 +778,19 @@ fn parse_typename(input: &mut &str) -> ModalResult<Type2> {
         let _ = literal::<_, _, ContextError>("<").parse_next(input)?;
         let args: Vec<Type> = separated(
             1..,
-            |i: &mut &str| { ws0(i); let t = parse_type(i)?; ws0(i); Ok(t) },
+            |i: &mut &str| {
+                ws0(i);
+                let t = parse_type(i)?;
+                ws0(i);
+                Ok(t)
+            },
             (ws0_fn, literal(","), ws0_fn),
         )
         .parse_next(input)?;
         cut_err(literal(">"))
-            .context(StrContext::Expected(StrContextValue::Description("'>' to close generic args")))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "'>' to close generic args",
+            )))
             .parse_next(input)?;
         args.into_iter()
             .map(|t| Spanned::new(t, Span::new(0, 0)))
@@ -739,19 +807,13 @@ fn parse_typename(input: &mut &str) -> ModalResult<Type2> {
 
 // ── Group parsing ─────────────────────────────────────────────────────────────
 
-pub(crate) fn parse_group_entry(
-    input: &mut &str,
-    _src:  &str,
-) -> ModalResult<GroupEntry> {
+pub(crate) fn parse_group_entry(input: &mut &str, _src: &str) -> ModalResult<GroupEntry> {
     parse_group_entry_inner(input, '\0')
 }
 
 /// Parse the interior of a group (between `{}`/`[]`/`()`), producing a
 /// `GroupEntry` (a list of group choices separated by `//`).
-fn parse_group_entry_inner(
-    input:    &mut &str,
-    close_ch: char,
-) -> ModalResult<GroupEntry> {
+fn parse_group_entry_inner(input: &mut &str, close_ch: char) -> ModalResult<GroupEntry> {
     let choices = separated(
         0..,
         |i: &mut &str| parse_group_choice(i, close_ch),
@@ -768,10 +830,7 @@ fn parse_group_entry_inner(
 /// Comments between entries document them (dgtlrift/cddlc#8): the lines directly above
 /// an entry (no blank line in between), an `@doc` pragma among them, and a comment on
 /// the line an entry ends on, before or after its comma.
-fn parse_group_choice(
-    input:    &mut &str,
-    close_ch: char,
-) -> ModalResult<GroupChoice> {
+fn parse_group_choice(input: &mut &str, close_ch: char) -> ModalResult<GroupChoice> {
     let mut entries: Vec<Spanned<MemberEntry>> = Vec::new();
     let mut above = wsc_collect(input);
 
@@ -796,11 +855,11 @@ fn parse_group_choice(
         let end = here(input);
         entry.doc = above.leading(entries.is_empty());
 
-        let mut after = wsc_collect(input);  // after value, before comma
+        let mut after = wsc_collect(input); // after value, before comma
         let comma = input.starts_with(',');
         if comma {
             let _ = literal::<_, _, ContextError>(",").parse_next(input)?;
-            after.extend(wsc_collect(input));  // `value, ; comment\n`
+            after.extend(wsc_collect(input)); // `value, ; comment\n`
         }
         if let Some(t) = after.trailing() {
             push_doc(&mut entry.doc, &t);
@@ -821,7 +880,7 @@ fn parse_group_choice(
 
 /// Parse a single member entry (occurrence? key: value  or  occurrence? type).
 fn parse_member_entry(input: &mut &str) -> ModalResult<MemberEntry> {
-    wsc0(input);  // handle inline comment before entry
+    wsc0(input); // handle inline comment before entry
 
     // Occurrence indicator
     let occurrence = parse_occurrence(input)?;
@@ -839,7 +898,7 @@ fn parse_member_entry(input: &mut &str) -> ModalResult<MemberEntry> {
     Ok(MemberEntry {
         occurrence: occurrence.map(|o| Spanned::new(o, Span::new(0, 0))),
         kind,
-        pragmas: vec![],  // member-level pragmas handled at rule level
+        pragmas: vec![], // member-level pragmas handled at rule level
         doc: None,
         source: None,
     })
@@ -912,13 +971,13 @@ fn parse_member_arrow(input: &mut &str, colon: bool) -> ModalResult<Option<bool>
 
 fn finish_key_value(
     input: &mut &str,
-    key:   MemberKey,
-    cut:   bool,
+    key: MemberKey,
+    cut: bool,
 ) -> ModalResult<Option<MemberKind>> {
     ws0(input);
     let value = parse_type(input)?;
     Ok(Some(MemberKind::KeyValue {
-        key:   Spanned::new(key, Span::new(0, 0)),
+        key: Spanned::new(key, Span::new(0, 0)),
         value: Spanned::new(value, Span::new(0, 0)),
         cut,
     }))
@@ -990,12 +1049,7 @@ fn parse_count_occurrence(input: &mut &str) -> ModalResult<Occurrence> {
 // ── Value literals ────────────────────────────────────────────────────────────
 
 fn parse_value(input: &mut &str) -> ModalResult<Value> {
-    alt((
-        parse_bytes_value,
-        parse_text_value,
-        parse_number_value,
-    ))
-    .parse_next(input)
+    alt((parse_bytes_value, parse_text_value, parse_number_value)).parse_next(input)
 }
 
 fn parse_number_value(input: &mut &str) -> ModalResult<Value> {
@@ -1011,8 +1065,8 @@ fn parse_number_value(input: &mut &str) -> ModalResult<Value> {
     if input.starts_with("0x") || input.starts_with("0X") {
         let _ = literal::<_, _, ContextError>("0x").parse_next(input)?;
         let hex = hex_digit1::<_, ContextError>.parse_next(input)?;
-        let n = u64::from_str_radix(hex, 16)
-            .map_err(|_| ErrMode::Backtrack(ContextError::new()))?;
+        let n =
+            u64::from_str_radix(hex, 16).map_err(|_| ErrMode::Backtrack(ContextError::new()))?;
         return Ok(if negative {
             Value::Int(-(n as i64))
         } else {
@@ -1024,9 +1078,14 @@ fn parse_number_value(input: &mut &str) -> ModalResult<Value> {
 
     // Float check — but NOT if the next char is another '.' (range operator ..)
     if (input.starts_with('.') && !input.starts_with(".."))
-        || input.starts_with('e') || input.starts_with('E')
+        || input.starts_with('e')
+        || input.starts_with('E')
     {
-        let mut num_str = if negative { format!("-{digits}") } else { digits.to_owned() };
+        let mut num_str = if negative {
+            format!("-{digits}")
+        } else {
+            digits.to_owned()
+        };
         if input.starts_with('.') {
             let _ = literal::<_, _, ContextError>(".").parse_next(input)?;
             let frac = digit1::<_, ContextError>.parse_next(input)?;
@@ -1034,21 +1093,23 @@ fn parse_number_value(input: &mut &str) -> ModalResult<Value> {
             num_str.push_str(frac);
         }
         if input.starts_with('e') || input.starts_with('E') {
-            let e = one_of::<_, _, ContextError>(['e','E']).parse_next(input)?;
+            let e = one_of::<_, _, ContextError>(['e', 'E']).parse_next(input)?;
             num_str.push(e);
             if input.starts_with('+') || input.starts_with('-') {
-                let s = one_of::<_, _, ContextError>(['+','-']).parse_next(input)?;
+                let s = one_of::<_, _, ContextError>(['+', '-']).parse_next(input)?;
                 num_str.push(s);
             }
             let exp = digit1::<_, ContextError>.parse_next(input)?;
             num_str.push_str(exp);
         }
-        let f: f64 = num_str.parse()
+        let f: f64 = num_str
+            .parse()
             .map_err(|_| ErrMode::Backtrack(ContextError::new()))?;
         return Ok(Value::Float(f));
     }
 
-    let n: u64 = digits.parse()
+    let n: u64 = digits
+        .parse()
         .map_err(|_| ErrMode::Backtrack(ContextError::new()))?;
 
     Ok(if negative {
@@ -1063,16 +1124,19 @@ fn parse_text_value(input: &mut &str) -> ModalResult<Value> {
     let mut s = String::new();
     loop {
         match any::<_, ContextError>.parse_next(input)? {
-            '"'  => break,
+            '"' => break,
             '\\' => {
                 let esc = any::<_, ContextError>.parse_next(input)?;
                 match esc {
-                    '"'  => s.push('"'),
+                    '"' => s.push('"'),
                     '\\' => s.push('\\'),
-                    'n'  => s.push('\n'),
-                    'r'  => s.push('\r'),
-                    't'  => s.push('\t'),
-                    other => { s.push('\\'); s.push(other); }
+                    'n' => s.push('\n'),
+                    'r' => s.push('\r'),
+                    't' => s.push('\t'),
+                    other => {
+                        s.push('\\');
+                        s.push(other);
+                    }
                 }
             }
             c => s.push(c),
@@ -1085,13 +1149,12 @@ fn parse_bytes_value(input: &mut &str) -> ModalResult<Value> {
     // h'...' hex bytes
     if input.starts_with("h'") {
         let _ = literal::<_, _, ContextError>("h'").parse_next(input)?;
-        let hex = take_till::<_, _, ContextError>(0.., |c| c == '\'')
-            .parse_next(input)?;
+        let hex = take_till::<_, _, ContextError>(0.., |c| c == '\'').parse_next(input)?;
         let _ = literal::<_, _, ContextError>("'").parse_next(input)?;
         let hex_clean: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
         let bytes = (0..hex_clean.len())
             .step_by(2)
-            .map(|i| u8::from_str_radix(&hex_clean[i..i+2], 16))
+            .map(|i| u8::from_str_radix(&hex_clean[i..i + 2], 16))
             .collect::<Result<Vec<u8>, _>>()
             .map_err(|_| ErrMode::Backtrack(ContextError::new()))?;
         return Ok(Value::Bytes(bytes));
@@ -1100,8 +1163,7 @@ fn parse_bytes_value(input: &mut &str) -> ModalResult<Value> {
     // b64'...' base64 bytes
     if input.starts_with("b64'") {
         let _ = literal::<_, _, ContextError>("b64'").parse_next(input)?;
-        let b64 = take_till::<_, _, ContextError>(0.., |c| c == '\'')
-            .parse_next(input)?;
+        let b64 = take_till::<_, _, ContextError>(0.., |c| c == '\'').parse_next(input)?;
         let _ = literal::<_, _, ContextError>("'").parse_next(input)?;
         // Minimal base64 decode (stdlib has none; produce raw for now)
         // In a real build, use the `base64` crate.
@@ -1111,8 +1173,7 @@ fn parse_bytes_value(input: &mut &str) -> ModalResult<Value> {
     // '...' UTF-8 bytes
     if input.starts_with('\'') {
         let _ = one_of::<_, _, ContextError>('\'').parse_next(input)?;
-        let content = take_till::<_, _, ContextError>(0.., |c| c == '\'')
-            .parse_next(input)?;
+        let content = take_till::<_, _, ContextError>(0.., |c| c == '\'').parse_next(input)?;
         let _ = one_of::<_, _, ContextError>('\'').parse_next(input)?;
         return Ok(Value::Bytes(content.as_bytes().to_vec()));
     }
@@ -1146,7 +1207,8 @@ pub(crate) fn parse_ident<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
 
 fn parse_uint_literal(input: &mut &str) -> ModalResult<u64> {
     let s = digit1::<_, ContextError>.parse_next(input)?;
-    s.parse().map_err(|_| ErrMode::Backtrack(ContextError::new()))
+    s.parse()
+        .map_err(|_| ErrMode::Backtrack(ContextError::new()))
 }
 
 // ── Whitespace helpers ────────────────────────────────────────────────────────
@@ -1221,7 +1283,9 @@ thread_local! {
 
 /// The byte offset of `input` in the source being parsed.
 fn here(input: &str) -> usize {
-    SRC_LEN.with(std::cell::Cell::get).saturating_sub(input.len())
+    SRC_LEN
+        .with(std::cell::Cell::get)
+        .saturating_sub(input.len())
 }
 
 /// A comment's text: after the `;`, with one leading space and trailing blanks removed.
@@ -1239,7 +1303,10 @@ fn join_doc(lines: &[String]) -> Option<String> {
 /// Appends `text` to a documentation string, on its own line.
 fn push_doc(doc: &mut Option<String>, text: &str) {
     match doc {
-        Some(d) => { d.push('\n'); d.push_str(text); }
+        Some(d) => {
+            d.push('\n');
+            d.push_str(text);
+        }
         None => *doc = Some(text.to_owned()),
     }
 }
@@ -1249,19 +1316,22 @@ fn push_doc(doc: &mut Option<String>, text: &str) {
 #[derive(Default)]
 struct Stretch {
     comments: Vec<(usize, String)>,
-    breaks:   usize,
+    breaks: usize,
 }
 
 impl Stretch {
     fn extend(&mut self, other: Stretch) {
         let base = self.breaks;
-        self.comments.extend(other.comments.into_iter().map(|(b, t)| (base + b, t)));
+        self.comments
+            .extend(other.comments.into_iter().map(|(b, t)| (base + b, t)));
         self.breaks += other.breaks;
     }
 
     /// The comments on the line the stretch starts on: they end the previous entry.
     fn trailing(&self) -> Option<String> {
-        let lines: Vec<String> = self.comments.iter()
+        let lines: Vec<String> = self
+            .comments
+            .iter()
             .filter(|(b, _)| *b == 0)
             .map(|(_, t)| t.clone())
             .collect();
@@ -1275,7 +1345,7 @@ impl Stretch {
     /// another (dgtlrift/cddlc#121).
     fn leading(&self, first: bool) -> Option<String> {
         let mut block: Vec<String> = Vec::new();
-        let mut next = self.breaks;  // the line the entry is on
+        let mut next = self.breaks; // the line the entry is on
         for (b, t) in self.comments.iter().rev() {
             if (*b == 0 && !first) || *b + 1 != next {
                 break;
@@ -1299,10 +1369,15 @@ fn wsc_collect(input: &mut &str) -> Stretch {
             break;
         }
         let _ = one_of::<_, _, ()>(';').parse_next(input);
-        let body = take_till::<_, _, ()>(0.., |c| c == '\n').parse_next(input).unwrap_or("");
+        let body = take_till::<_, _, ()>(0.., |c| c == '\n')
+            .parse_next(input)
+            .unwrap_or("");
         let text = match parse_pragma(body, Span::new(0, 0), &PathBuf::new(), 0) {
             None => Some(comment_text(body)),
-            Some(Ok(Pragma { value: PragmaValue::Doc(d), .. })) => Some(d),
+            Some(Ok(Pragma {
+                value: PragmaValue::Doc(d),
+                ..
+            })) => Some(d),
             Some(_) => None,
         };
         if let Some(t) = text {
@@ -1406,7 +1481,10 @@ mod tests {
     #[test]
     fn test_parse_text() {
         let mut s = r#""hello world""#;
-        assert_eq!(parse_value(&mut s).unwrap(), Value::Text("hello world".into()));
+        assert_eq!(
+            parse_value(&mut s).unwrap(),
+            Value::Text("hello world".into())
+        );
     }
 
     #[test]
@@ -1437,7 +1515,13 @@ mod tests {
         let ty = parse_type_str("0..255").unwrap();
         assert_eq!(ty.choices.len(), 1);
         let op = ty.choices[0].node.ops.first().unwrap();
-        assert!(matches!(op, TypeOp::Range { inclusive: true, .. }));
+        assert!(matches!(
+            op,
+            TypeOp::Range {
+                inclusive: true,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1486,7 +1570,13 @@ mod tests {
     fn test_occurrence_bounded() {
         let mut s = "2*5";
         let occ = parse_occurrence(&mut s).unwrap();
-        assert_eq!(occ, Some(Occurrence::Bounded { min: Some(2), max: Some(5) }));
+        assert_eq!(
+            occ,
+            Some(Occurrence::Bounded {
+                min: Some(2),
+                max: Some(5)
+            })
+        );
     }
 
     #[test]

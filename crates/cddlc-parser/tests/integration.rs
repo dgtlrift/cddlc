@@ -1,14 +1,13 @@
+use cddlc_parser::{parse_cddl, PragmaValue, RuleKind, Type2};
 /// Integration tests for cddlc-parser.
 ///
 /// These tests exercise complete CDDL snippets representative of real-world
 /// usage patterns: IoT device descriptions, CoAP payloads, sensor networks.
-
 use std::path::PathBuf;
-use cddlc_parser::{
-    parse_cddl, PragmaValue, RuleKind, Type2,
-};
 
-fn path() -> PathBuf { PathBuf::from("test.cddl") }
+fn path() -> PathBuf {
+    PathBuf::from("test.cddl")
+}
 
 fn parse(src: &str) -> cddlc_parser::CddlModule {
     parse_cddl(src, path()).expect("parse failed").value
@@ -27,13 +26,15 @@ fn test_primitive_alias() {
 
 #[test]
 fn test_struct_with_fields() {
-    let m = parse(r#"
+    let m = parse(
+        r#"
         sensor = {
             id:    uint,
             label: tstr,
             value: float64,
         }
-    "#);
+    "#,
+    );
     assert_eq!(m.rules.len(), 1);
     let rule = &m.rules[0].node;
     assert!(matches!(rule.kind, RuleKind::Type { .. }));
@@ -70,7 +71,7 @@ fn test_extend_type_rule() {
 fn test_extend_group_rule() {
     let m = parse("$$my-group //= ( extra: bool )");
     let extend = match &m.rules[0].node.kind {
-        RuleKind::Type  { extend, .. } => *extend,
+        RuleKind::Type { extend, .. } => *extend,
         RuleKind::Group { extend, .. } => *extend,
     };
     assert!(extend);
@@ -110,10 +111,12 @@ fn test_generic_two_params() {
 
 #[test]
 fn test_generic_usage() {
-    let m = parse(r#"
+    let m = parse(
+        r#"
         labeled<T> = { label: tstr, value: T }
         temp-reading = labeled<float32>
-    "#);
+    "#,
+    );
     assert_eq!(m.rules.len(), 2);
 }
 
@@ -177,10 +180,12 @@ fn test_default_control() {
 
 #[test]
 fn test_import_pragma() {
-    let m = parse(r#"
+    let m = parse(
+        r#"
 ; @import "common/types.cddl"
 device-id = uint
-"#);
+"#,
+    );
     assert_eq!(m.file_pragmas.len(), 1);
     assert!(matches!(
         &m.file_pragmas[0].value,
@@ -190,10 +195,12 @@ device-id = uint
 
 #[test]
 fn test_capacity_pragma() {
-    let m = parse(r#"
+    let m = parse(
+        r#"
 ; @capacity 32
 readings = [* float32]
-"#);
+"#,
+    );
     let rule = &m.rules[0].node;
     assert_eq!(rule.pragmas.len(), 1);
     assert!(matches!(rule.pragmas[0].value, PragmaValue::Capacity(32)));
@@ -201,31 +208,40 @@ readings = [* float32]
 
 #[test]
 fn test_multiple_pragmas_on_rule() {
-    let m = parse(r#"
+    let m = parse(
+        r#"
 ; @capacity 16
 ; @str-capacity 128
 ; @doc "Log entry list"
 log-entries = [* log-entry]
-"#);
+"#,
+    );
     let rule = &m.rules[0].node;
     assert_eq!(rule.pragmas.len(), 3);
 }
 
 #[test]
 fn test_deprecated_pragma() {
-    let m = parse(r#"
+    let m = parse(
+        r#"
 ; @deprecated
 old-format = { x: uint }
-"#);
-    assert!(matches!(m.rules[0].node.pragmas[0].value, PragmaValue::Deprecated));
+"#,
+    );
+    assert!(matches!(
+        m.rules[0].node.pragmas[0].value,
+        PragmaValue::Deprecated
+    ));
 }
 
 #[test]
 fn test_regex_hook_pragma() {
-    let m = parse(r#"
+    let m = parse(
+        r#"
 ; @regex-hook validate_device_serial
 serial = tstr .regexp "[A-Z]{3}-[0-9]+"
-"#);
+"#,
+    );
     assert!(matches!(
         &m.rules[0].node.pragmas[0].value,
         PragmaValue::RegexHook(name) if name == "validate_device_serial"
@@ -278,7 +294,7 @@ sensor-type = "temperature" / "humidity" / "pressure" / "co2"
 "#;
     let result = parse_cddl(src, path()).unwrap();
     let m = result.value;
-    assert_eq!(m.file_pragmas.len(), 1);  // @import
+    assert_eq!(m.file_pragmas.len(), 1); // @import
     assert_eq!(m.rules.len(), 5);
 }
 
@@ -429,14 +445,16 @@ fn test_inline_comment_only_comment_no_fields_after() {
 #[test]
 fn test_enum_ref_named() {
     // &typename as a standalone type alias (RFC 8610 §3.9)
-    let m = parse(r#"
+    let m = parse(
+        r#"
         terminal-type = (
             garden-controller: 1,
             battery-powered:   2,
             solar-powered:     3,
         )
         device-kind = &terminal-type
-    "#);
+    "#,
+    );
     assert_eq!(m.rules.len(), 2);
     let rule = &m.rules[1].node;
     assert_eq!(rule.name.node.as_str(), "device-kind");
@@ -454,13 +472,15 @@ fn test_enum_ref_named() {
 #[test]
 fn test_enum_ref_inline_group() {
     // &(group) inline enumeration as a type (RFC 8610 §3.9)
-    let m = parse(r#"
+    let m = parse(
+        r#"
         priority = &(
             low:    1,
             medium: 2,
             high:   3,
         )
-    "#);
+    "#,
+    );
     assert_eq!(m.rules.len(), 1);
     let rule = &m.rules[0].node;
     assert_eq!(rule.name.node.as_str(), "priority");
@@ -477,7 +497,8 @@ fn test_enum_ref_inline_group() {
 #[test]
 fn test_enum_ref_in_struct_field() {
     // &typename used as the value type of a struct field (RFC 8610 §3.9)
-    let m = parse(r#"
+    let m = parse(
+        r#"
         terminal-type = (
             garden-controller: 1,
             battery-powered:   2,
@@ -487,19 +508,22 @@ fn test_enum_ref_in_struct_field() {
             id:   uint,
             kind: &terminal-type,
         }
-    "#);
+    "#,
+    );
     assert_eq!(m.rules.len(), 2);
 }
 
 #[test]
 fn test_enum_ref_inline_in_struct_field() {
     // &(group) inline enumeration used directly as a struct field type
-    let m = parse(r#"
+    let m = parse(
+        r#"
         message = {
             priority: &(low: 1, medium: 2, high: 3),
             payload:  bstr,
         }
-    "#);
+    "#,
+    );
     assert_eq!(m.rules.len(), 1);
 }
 
@@ -530,13 +554,23 @@ n = uint
 ";
 
     fn module() -> CddlModule {
-        parse_cddl(SRC, PathBuf::from("schema/r.cddl")).unwrap().value
+        parse_cddl(SRC, PathBuf::from("schema/r.cddl"))
+            .unwrap()
+            .value
     }
 
     fn members(m: &CddlModule) -> Vec<MemberEntry> {
-        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!("type rule") };
-        let Type2::Map(g) = &ty.node.choices[0].node.base.node else { panic!("map") };
-        g.node.choices[0].entries.iter().map(|e| e.node.clone()).collect()
+        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else {
+            panic!("type rule")
+        };
+        let Type2::Map(g) = &ty.node.choices[0].node.base.node else {
+            panic!("map")
+        };
+        g.node.choices[0]
+            .entries
+            .iter()
+            .map(|e| e.node.clone())
+            .collect()
     }
 
     #[test]
@@ -569,14 +603,29 @@ n = uint
     #[test]
     fn rules_and_members_know_their_source_lines() {
         let m = module();
-        let rules: Vec<(usize, String)> = m.rules.iter()
-            .map(|r| { let s = r.node.source.as_ref().unwrap(); (s.line, s.text.clone()) })
+        let rules: Vec<(usize, String)> = m
+            .rules
+            .iter()
+            .map(|r| {
+                let s = r.node.source.as_ref().unwrap();
+                (s.line, s.text.clone())
+            })
             .collect();
         assert_eq!(rules[0], (5, "reading = {".to_owned()));
-        assert_eq!(rules[1], (16, "unit-kind = \"c\" / \"f\"   ; Celsius or Fahrenheit".to_owned()));
+        assert_eq!(
+            rules[1],
+            (
+                16,
+                "unit-kind = \"c\" / \"f\"   ; Celsius or Fahrenheit".to_owned()
+            )
+        );
         assert_eq!(rules[2].0, 18);
-        let lines: Vec<(usize, String)> = members(&m).iter()
-            .map(|e| { let s = e.source.as_ref().unwrap(); (s.line, s.text.clone()) })
+        let lines: Vec<(usize, String)> = members(&m)
+            .iter()
+            .map(|e| {
+                let s = e.source.as_ref().unwrap();
+                (s.line, s.text.clone())
+            })
             .collect();
         assert_eq!(
             lines,
@@ -586,8 +635,14 @@ n = uint
                 (13, "unit: unit-kind,".to_owned()),
             ]
         );
-        assert_eq!(m.rules[0].node.source.as_ref().unwrap().path, PathBuf::from("schema/r.cddl"));
-        let keys: Vec<bool> = members(&m).iter().map(|e| matches!(e.kind, MemberKind::KeyValue { .. })).collect();
+        assert_eq!(
+            m.rules[0].node.source.as_ref().unwrap().path,
+            PathBuf::from("schema/r.cddl")
+        );
+        let keys: Vec<bool> = members(&m)
+            .iter()
+            .map(|e| matches!(e.kind, MemberKind::KeyValue { .. }))
+            .collect();
         assert_eq!(keys, [true, true, true]);
     }
 }
@@ -596,10 +651,15 @@ n = uint
 
 #[test]
 fn major_types_with_additional_information() {
-
-    for (src, want) in [("r = #7.25\n", (7, Some(25))), ("r = #7.16\n", (7, Some(16))), ("r = #0\n", (0, None))] {
+    for (src, want) in [
+        ("r = #7.25\n", (7, Some(25))),
+        ("r = #7.16\n", (7, Some(16))),
+        ("r = #0\n", (0, None)),
+    ] {
         let m = parse(src);
-        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!("{src}") };
+        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else {
+            panic!("{src}")
+        };
         match &ty.node.choices[0].node.base.node {
             Type2::MajorType(mt, ai) => assert_eq!((*mt, *ai), want, "{src}"),
             other => panic!("{src}: {other:?}"),
@@ -618,12 +678,20 @@ fn map_cut_before_arrow() {
 /// The key of each member of the map rule `r`.
 fn member_keys(src: &str) -> Vec<cddlc_parser::MemberKey> {
     let m = parse(src);
-    let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!("{src}") };
-    let Type2::Map(group) = &ty.node.choices[0].node.base.node else { panic!("{src}") };
-    group.node.choices[0].entries.iter().map(|e| match &e.node.kind {
-        cddlc_parser::MemberKind::KeyValue { key, .. } => key.node.clone(),
-        other => panic!("{src}: {other:?}"),
-    }).collect()
+    let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else {
+        panic!("{src}")
+    };
+    let Type2::Map(group) = &ty.node.choices[0].node.base.node else {
+        panic!("{src}")
+    };
+    group.node.choices[0]
+        .entries
+        .iter()
+        .map(|e| match &e.node.kind {
+            cddlc_parser::MemberKind::KeyValue { key, .. } => key.node.clone(),
+            other => panic!("{src}: {other:?}"),
+        })
+        .collect()
 }
 
 #[test]
@@ -631,7 +699,10 @@ fn member_keys_label_value_or_type() {
     use cddlc_parser::MemberKey;
     // `name:` and `"name" =>` are text keys; `1 =>` a value key.
     let keys = member_keys("r = { a: uint, \"b\" => uint, 1 => uint }\n");
-    assert!(matches!(&keys[0], MemberKey::Bareword(id) if id.0 == "a"), "{keys:?}");
+    assert!(
+        matches!(&keys[0], MemberKey::Bareword(id) if id.0 == "a"),
+        "{keys:?}"
+    );
     assert!(matches!(&keys[1], MemberKey::Value(_)), "{keys:?}");
     assert!(matches!(&keys[2], MemberKey::Value(_)), "{keys:?}");
 
@@ -653,9 +724,15 @@ fn member_keys_label_value_or_type() {
 /// The documentation of each member of each alternative of the map or array `r`.
 fn member_docs(src: &str) -> Vec<Vec<Option<String>>> {
     let m = parse(src);
-    let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!("{src}") };
-    let (Type2::Map(g) | Type2::Array(g)) = &ty.node.choices[0].node.base.node else { panic!("{src}") };
-    g.node.choices.iter()
+    let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else {
+        panic!("{src}")
+    };
+    let (Type2::Map(g) | Type2::Array(g)) = &ty.node.choices[0].node.base.node else {
+        panic!("{src}")
+    };
+    g.node
+        .choices
+        .iter()
         .map(|c| c.entries.iter().map(|e| e.node.doc.clone()).collect())
         .collect()
 }
@@ -667,14 +744,20 @@ fn a_comment_above_the_first_member_documents_it() {
         member_docs("r = {\n  ; The id.\n  id: uint,\n  ; The name.\n  name: tstr,\n}\n"),
         [vec![d("The id."), d("The name.")]],
     );
-    assert_eq!(member_docs("r = [\n  ; The count.\n  uint,\n]\n"), [vec![d("The count.")]]);
+    assert_eq!(
+        member_docs("r = [\n  ; The count.\n  uint,\n]\n"),
+        [vec![d("The count.")]]
+    );
     // The first member of each alternative.
     assert_eq!(
         member_docs("r = {\n  ; A.\n  a: 1 //\n  ; B.\n  b: 2\n}\n"),
         [vec![d("A.")], vec![d("B.")]],
     );
     // A blank line still cuts it off.
-    assert_eq!(member_docs("r = {\n  ; Header.\n\n  id: uint,\n}\n"), [vec![None]]);
+    assert_eq!(
+        member_docs("r = {\n  ; Header.\n\n  id: uint,\n}\n"),
+        [vec![None]]
+    );
 }
 
 // ── Names (dgtlrift/cddlc#123) ───────────────────────────────────────────────
@@ -682,9 +765,13 @@ fn a_comment_above_the_first_member_documents_it() {
 #[test]
 fn names_can_hold_at_and_dollar_signs_and_dots() {
     // RFC 8610: `EALPHA = ALPHA / "@" / "_" / "$"`.
-    let m = parse("@owner = tstr\n$val /= uint\n$$ext //= ( a: 1 )\nsession.status = 1\na$b@c = 2\n");
+    let m =
+        parse("@owner = tstr\n$val /= uint\n$$ext //= ( a: 1 )\nsession.status = 1\na$b@c = 2\n");
     let names: Vec<&str> = m.rules.iter().map(|r| r.node.name.node.as_str()).collect();
-    assert_eq!(names, ["@owner", "$val", "$$ext", "session.status", "a$b@c"]);
+    assert_eq!(
+        names,
+        ["@owner", "$val", "$$ext", "session.status", "a$b@c"]
+    );
 }
 
 // ── Optional commas and error positions (dgtlrift/cddlc#108) ─────────────────
@@ -715,10 +802,16 @@ fn group_entries_need_no_comma() {
     assert_eq!(entry_counts("r = { x: uint\n      y: tstr }\n"), [2]);
     assert_eq!(entry_counts("r = { x: uint y: tstr, z: bool }\n"), [3]);
     assert_eq!(entry_counts("r = [ uint\n  tstr ]\n"), [2]);
-    assert_eq!(entry_counts("r = ( a: \"x\"\n  ext )\next = ( * tstr => any )\n"), [2]);
+    assert_eq!(
+        entry_counts("r = ( a: \"x\"\n  ext )\next = ( * tstr => any )\n"),
+        [2]
+    );
     assert_eq!(entry_counts("r = { a: 1 b: 2 // c: 3\n  d: 4 }\n"), [2, 2]);
     // A choice of types can still span lines.
-    assert_eq!(entry_counts("r = { x: uint\n    / tstr\n  y: bool }\n"), [2]);
+    assert_eq!(
+        entry_counts("r = { x: uint\n    / tstr\n  y: bool }\n"),
+        [2]
+    );
 }
 
 #[test]
@@ -726,12 +819,22 @@ fn comma_less_entries_keep_their_comments() {
     // As they would with commas.
     let docs = |src: &str| -> Vec<Option<String>> {
         let m = parse(src);
-        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else { panic!() };
-        let Type2::Map(g) = &ty.node.choices[0].node.base.node else { panic!() };
-        g.node.choices[0].entries.iter().map(|e| e.node.doc.clone()).collect()
+        let RuleKind::Type { ty, .. } = &m.rules[0].node.kind else {
+            panic!()
+        };
+        let Type2::Map(g) = &ty.node.choices[0].node.base.node else {
+            panic!()
+        };
+        g.node.choices[0]
+            .entries
+            .iter()
+            .map(|e| e.node.doc.clone())
+            .collect()
     };
-    let without = docs("r = {\n  ; The id.\n  id: uint     ; trailing\n  ; The name.\n  name: tstr\n}\n");
-    let with = docs("r = {\n  ; The id.\n  id: uint,    ; trailing\n  ; The name.\n  name: tstr\n}\n");
+    let without =
+        docs("r = {\n  ; The id.\n  id: uint     ; trailing\n  ; The name.\n  name: tstr\n}\n");
+    let with =
+        docs("r = {\n  ; The id.\n  id: uint,    ; trailing\n  ; The name.\n  name: tstr\n}\n");
     assert_eq!(without, with);
     assert_eq!(without[1].as_deref(), Some("The name."));
 }
@@ -739,7 +842,9 @@ fn comma_less_entries_keep_their_comments() {
 /// The line, column and message of the syntax error in `src`.
 fn syntax_error(src: &str) -> (usize, usize, String) {
     match parse_cddl(src, path()) {
-        Err(cddlc_parser::ParseError::Syntax { line, col, message, .. }) => (line, col, message),
+        Err(cddlc_parser::ParseError::Syntax {
+            line, col, message, ..
+        }) => (line, col, message),
         Err(e) => panic!("{src}: {e}"),
         Ok(_) => panic!("{src}: parsed"),
     }
@@ -747,7 +852,16 @@ fn syntax_error(src: &str) -> (usize, usize, String) {
 
 #[test]
 fn syntax_errors_point_where_the_parse_stopped() {
-    assert_eq!(syntax_error("ok = uint\nr = { x: uint  y:: tstr }\n"), (2, 17, "expected type expression".into()));
-    assert_eq!(syntax_error("r = { x: uint, y: tstr\n"), (2, 1, "expected '}' to close map".into()));
-    assert_eq!(syntax_error("r = [ uint,\n"), (2, 1, "expected ']' to close array".into()));
+    assert_eq!(
+        syntax_error("ok = uint\nr = { x: uint  y:: tstr }\n"),
+        (2, 17, "expected type expression".into())
+    );
+    assert_eq!(
+        syntax_error("r = { x: uint, y: tstr\n"),
+        (2, 1, "expected '}' to close map".into())
+    );
+    assert_eq!(
+        syntax_error("r = [ uint,\n"),
+        (2, 1, "expected ']' to close array".into())
+    );
 }

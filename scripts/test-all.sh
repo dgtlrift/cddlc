@@ -124,11 +124,12 @@ cddlc="$root/target/debug/cddlc"
 
 # ── Groups ────────────────────────────────────────────────────────────────────
 
-# The steps of a group: `build <test>` or `interop <lang>` or `workspace`.
+# The steps of a group: `build <test>`, `interop <lang>`, `fmt` (rustfmt's
+# check: cddlc's sources are formatted; dgtlrift/cddlc#231) or `workspace`.
 steps_of() {
     local i=$interop
     case "$1" in
-        workspace) echo "workspace" ;;
+        workspace) echo "fmt"; echo "workspace" ;;
         rust)    echo "build rust"; echo "build rust_json"; echo "build rust_no_std"; (( i )) && echo "interop rust" ;;
         c)       echo "build c"; echo "build c_json"; (( i )) && echo "interop c" ;;
         cpp)     echo "build cpp"; echo "build cpp_json"; (( i )) && echo "interop cpp" ;;
@@ -154,6 +155,7 @@ run_group() {
         log="$dir/$name.log"
         start=$(date +%s)
         case "$kind" in
+            fmt)       cargo fmt --all --check >"$log" 2>&1 ;;
             workspace) TMPDIR="$tmp" cargo test -q --workspace --no-fail-fast >"$log" 2>&1 ;;
             build)     (cd crates/backend-buildtest && TMPDIR="$tmp" "$buildtests" --ignored --exact "test_build_$arg") >"$log" 2>&1 ;;
             interop)   TMPDIR="$tmp" scripts/interop.sh "$arg" "$cddlc" >"$log" 2>&1 ;;

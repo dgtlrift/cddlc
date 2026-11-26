@@ -17,7 +17,10 @@ fn before(src: &str, rule: &str) -> Option<Vec<usize>> {
 
 #[test]
 fn optional_members_before_each_member() {
-    assert_eq!(before("r = [a: uint, ? b: uint, c: uint, d: uint, ? e: uint]", "r"), Some(vec![0, 0, 1, 1, 1]));
+    assert_eq!(
+        before("r = [a: uint, ? b: uint, c: uint, d: uint, ? e: uint]", "r"),
+        Some(vec![0, 0, 1, 1, 1])
+    );
     // Optional members only at the end: read in order until the array ends.
     assert_eq!(before("r = [a: uint, b: uint, ? c: uint]", "r"), None);
     assert_eq!(before("r = [a: uint, b: uint]", "r"), None);

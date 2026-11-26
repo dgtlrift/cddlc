@@ -35,16 +35,16 @@ fn parse_interop_langs(s: &str) -> backend_interop::InteropLangs {
     let mut langs = backend_interop::InteropLangs::default();
     for part in s.split(',') {
         match part.trim() {
-            "rust"   => langs.rust   = true,
-            "c"      => langs.c      = true,
-            "cpp"    => langs.cpp    = true,
+            "rust" => langs.rust = true,
+            "c" => langs.c = true,
+            "cpp" => langs.cpp = true,
             "csharp" => langs.csharp = true,
             "nodejs" => langs.nodejs = true,
             "python" => langs.python = true,
-            "go"     => langs.go     = true,
-            "java"   => langs.java   = true,
-            "lua"    => langs.lua    = true,
-            _        => {}
+            "go" => langs.go = true,
+            "java" => langs.java = true,
+            "lua" => langs.lua = true,
+            _ => {}
         }
     }
     langs
@@ -54,35 +54,37 @@ fn parse_interop_langs(s: &str) -> backend_interop::InteropLangs {
 /// `@import`s), merge them into a single module, and lower to IR. Shared by
 /// both `generate` and `validate`.
 fn load_and_lower(
-    inputs:               &[PathBuf],
-    include_dirs:         &[PathBuf],
-    verbose:              bool,
-    debug_parse:          bool,
-    default_capacity:     usize,
+    inputs: &[PathBuf],
+    include_dirs: &[PathBuf],
+    verbose: bool,
+    debug_parse: bool,
+    default_capacity: usize,
     default_str_capacity: usize,
 ) -> Result<cddlc_ir::LowerResult, Box<dyn std::error::Error>> {
     if verbose {
         eprintln!("cddlc: loading {} input file(s)...", inputs.len());
     }
 
-    let mut merged_rules   = Vec::new();
+    let mut merged_rules = Vec::new();
     let mut merged_pragmas = Vec::new();
-    let mut all_warnings   = Vec::new();
-    let mut primary_path   = PathBuf::from("module.cddl");
+    let mut all_warnings = Vec::new();
+    let mut primary_path = PathBuf::from("module.cddl");
 
     for (i, input) in inputs.iter().enumerate() {
-        let loaded = load(input, include_dirs, verbose, debug_parse)
-            .map_err(|e| e.to_string())?;
+        let loaded = load(input, include_dirs, verbose, debug_parse).map_err(|e| e.to_string())?;
 
         all_warnings.extend(loaded.warnings);
 
         if i == 0 {
-            primary_path   = loaded.module.source_path.clone();
+            primary_path = loaded.module.source_path.clone();
             merged_pragmas = loaded.module.file_pragmas;
         } else {
             merged_pragmas.extend(
-                loaded.module.file_pragmas.into_iter()
-                    .filter(|p| p.keyword == "import")
+                loaded
+                    .module
+                    .file_pragmas
+                    .into_iter()
+                    .filter(|p| p.keyword == "import"),
             );
         }
 
@@ -94,24 +96,27 @@ fn load_and_lower(
     }
 
     let merged_module = cddlc_parser::CddlModule {
-        source_path:  primary_path,
+        source_path: primary_path,
         file_pragmas: merged_pragmas,
-        rules:        merged_rules,
+        rules: merged_rules,
     };
 
     if verbose {
         eprintln!("cddlc: running semantic analysis...");
     }
 
-    let lower_result = lower(&merged_module, default_capacity, default_str_capacity)
-        .map_err(|e| e.to_string())?;
+    let lower_result =
+        lower(&merged_module, default_capacity, default_str_capacity).map_err(|e| e.to_string())?;
 
     for w in &lower_result.warnings {
         eprintln!("warning: {w}");
     }
 
     if verbose {
-        eprintln!("cddlc: {} type(s) resolved:", lower_result.module.types.len());
+        eprintln!(
+            "cddlc: {} type(s) resolved:",
+            lower_result.module.types.len()
+        );
         for (name, def) in &lower_result.module.types {
             eprintln!("  {} {:?}", name, std::mem::discriminant(def));
         }
@@ -131,8 +136,12 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
     }
 
     let lower_result = load_and_lower(
-        &args.inputs, &args.include_dir, args.verbose, args.debug_parse,
-        args.max_array, args.max_str,
+        &args.inputs,
+        &args.include_dir,
+        args.verbose,
+        args.debug_parse,
+        args.max_array,
+        args.max_str,
     )?;
     let ir = &lower_result.module;
 
@@ -142,20 +151,20 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
     }
 
     let opts = CodegenOptions {
-        lang:        args.lang.into(),
-        format:      match args.format {
+        lang: args.lang.into(),
+        format: match args.format {
             args::Fmt::Cbor => cddlc_codegen::Format::Cbor,
             args::Fmt::Json => cddlc_codegen::Format::Json,
         },
-        runtime:     args.runtime.clone(),
-        alloc:       args.alloc.into(),
-        dcbor:       args.dcbor,
-        no_std:      args.no_std,
+        runtime: args.runtime.clone(),
+        alloc: args.alloc.into(),
+        dcbor: args.dcbor,
+        no_std: args.no_std,
         depth_limit: args.depth_limit,
-        namespace:   args.namespace.clone(),
-        max_array:   args.max_array,
-        max_str:     args.max_str,
-        provenance:  build_info::provenance(&args.inputs),
+        namespace: args.namespace.clone(),
+        max_array: args.max_array,
+        max_str: args.max_str,
+        provenance: build_info::provenance(&args.inputs),
         boilerplate: build_info::boilerplate(&args.inputs),
         java_flavor: match args.java_flavor {
             args::JavaFlavor::Se => cddlc_codegen::JavaFlavor::Se,
@@ -169,7 +178,9 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
     let ir = if args.no_source_comments {
         ir
     } else {
-        let base = std::env::current_dir().ok().and_then(|d| d.canonicalize().ok());
+        let base = std::env::current_dir()
+            .ok()
+            .and_then(|d| d.canonicalize().ok());
         annotated = cddlc_codegen::with_source_docs(ir, base.as_deref());
         &annotated
     };
@@ -251,8 +262,12 @@ fn run_generate(args: &GenerateArgs) -> Result<bool, Box<dyn std::error::Error>>
 /// caller maps this to a process exit code.
 fn run_validate(args: &ValidateArgs) -> Result<bool, Box<dyn std::error::Error>> {
     let lower_result = load_and_lower(
-        std::slice::from_ref(&args.cddl), &args.include_dir, args.verbose, args.debug_parse,
-        16, 64,
+        std::slice::from_ref(&args.cddl),
+        &args.include_dir,
+        args.verbose,
+        args.debug_parse,
+        16,
+        64,
     )?;
     let ir: &IrModule = &lower_result.module;
 
@@ -296,8 +311,12 @@ fn run_sample(args: &SampleArgs) -> Result<bool, Box<dyn std::error::Error>> {
     use std::io::Write as _;
 
     let lower_result = load_and_lower(
-        std::slice::from_ref(&args.cddl), &args.include_dir, args.verbose, args.debug_parse,
-        16, 64,
+        std::slice::from_ref(&args.cddl),
+        &args.include_dir,
+        args.verbose,
+        args.debug_parse,
+        16,
+        64,
     )?;
     let ir: &IrModule = &lower_result.module;
     let type_name = args.type_name.as_deref().unwrap_or(ir.root.as_str());
@@ -305,15 +324,21 @@ fn run_sample(args: &SampleArgs) -> Result<bool, Box<dyn std::error::Error>> {
         return Err("schema defines no rules".into());
     }
 
-    let opts = sample::SampleOptions { minimal: args.minimal };
+    let opts = sample::SampleOptions {
+        minimal: args.minimal,
+    };
     let value = sample::sample(ir, Some(type_name), opts)?;
 
     let (bytes, source) = match args.format {
-        SampleFormat::Json => {
-            (sample::to_json_text(&value).into_bytes(), cddlc_validate::Source::Json)
-        }
+        SampleFormat::Json => (
+            sample::to_json_text(&value).into_bytes(),
+            cddlc_validate::Source::Json,
+        ),
         SampleFormat::Cbor => (sample::to_cbor(&value), cddlc_validate::Source::Cbor),
-        SampleFormat::Diag => (format!("{}\n", sample::to_diag(&value)).into_bytes(), cddlc_validate::Source::Cbor),
+        SampleFormat::Diag => (
+            format!("{}\n", sample::to_diag(&value)).into_bytes(),
+            cddlc_validate::Source::Cbor,
+        ),
     };
     match &args.output {
         Some(path) => std::fs::write(path, &bytes)?,
@@ -322,13 +347,18 @@ fn run_sample(args: &SampleArgs) -> Result<bool, Box<dyn std::error::Error>> {
 
     // What a reader of this format gets back must validate.
     let check = match args.format {
-        SampleFormat::Json => cddlc_validate::Value::from(serde_json::from_slice::<serde_json::Value>(&bytes)?),
+        SampleFormat::Json => {
+            cddlc_validate::Value::from(serde_json::from_slice::<serde_json::Value>(&bytes)?)
+        }
         _ => value,
     };
     match cddlc_validate::validate_from(ir, Some(type_name), &check, source) {
         Ok(()) => Ok(true),
         Err(errors) => {
-            eprintln!("warning: the sample of '{type_name}' doesn't validate ({} error(s)):", errors.len());
+            eprintln!(
+                "warning: the sample of '{type_name}' doesn't validate ({} error(s)):",
+                errors.len()
+            );
             for e in &errors {
                 eprintln!("  {e}");
             }
@@ -338,11 +368,11 @@ fn run_sample(args: &SampleArgs) -> Result<bool, Box<dyn std::error::Error>> {
 }
 
 fn validate_one(
-    path:      &PathBuf,
+    path: &PathBuf,
     type_name: &str,
-    ir:        &IrModule,
-    source:    cddlc_validate::Source,
-    decode:    impl FnOnce(&[u8]) -> Result<cddlc_validate::Value, Box<dyn std::error::Error>>,
+    ir: &IrModule,
+    source: cddlc_validate::Source,
+    decode: impl FnOnce(&[u8]) -> Result<cddlc_validate::Value, Box<dyn std::error::Error>>,
 ) -> bool {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
@@ -366,7 +396,11 @@ fn validate_one(
             true
         }
         Err(errors) => {
-            println!("{}: FAIL ({type_name}, {} error(s))", path.display(), errors.len());
+            println!(
+                "{}: FAIL ({type_name}, {} error(s))",
+                path.display(),
+                errors.len()
+            );
             for e in &errors {
                 println!("  {e}");
             }

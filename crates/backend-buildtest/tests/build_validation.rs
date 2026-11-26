@@ -10,21 +10,21 @@
 ///
 /// Individual language:
 ///   cargo test -p backend-buildtest --test build_validation test_build_rust -- --ignored --nocapture
-
 use backend_buildtest::{
-    assert_all_ok, build_c, build_cpp, build_csharp, build_nodejs,
-    build_dart, build_go, build_java, build_lua, build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome, SCHEMAS,
+    assert_all_ok, build_c, build_cpp, build_csharp, build_dart, build_go, build_java, build_lua,
+    build_nodejs, build_python, build_rust, build_rust_no_std, run_build_tests, BuildOutcome,
+    SCHEMAS,
 };
-use backend_rust::RustBackend;
 use backend_c::CBackend;
 use backend_cpp::CppBackend;
 use backend_csharp::CSharpBackend;
-use backend_nodejs::NodeJsBackend;
-use backend_python::PythonBackend;
+use backend_dart::DartBackend;
 use backend_go::GoBackend;
 use backend_java::JavaBackend;
 use backend_lua::LuaBackend;
-use backend_dart::DartBackend;
+use backend_nodejs::NodeJsBackend;
+use backend_python::PythonBackend;
+use backend_rust::RustBackend;
 use cddlc_codegen::CodegenOptions;
 
 fn work_dir(lang: &str) -> tempfile::TempDir {
@@ -40,7 +40,9 @@ fn work_dir(lang: &str) -> tempfile::TempDir {
 fn test_all_schemas_generate_rust() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &RustBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &RustBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &RustBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 3, "schema '{name}': expected 3 files");
@@ -51,7 +53,9 @@ fn test_all_schemas_generate_rust() {
 fn test_all_schemas_generate_c() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &CBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &CBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &CBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 5, "schema '{name}': expected 5 files");
@@ -62,7 +66,9 @@ fn test_all_schemas_generate_c() {
 fn test_all_schemas_generate_cpp() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &CppBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 5, "schema '{name}': expected 5 files");
@@ -73,7 +79,9 @@ fn test_all_schemas_generate_cpp() {
 fn test_all_schemas_generate_csharp() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &CSharpBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &CSharpBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &CSharpBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 3, "schema '{name}': expected 3 files");
@@ -84,7 +92,9 @@ fn test_all_schemas_generate_csharp() {
 fn test_all_schemas_generate_nodejs() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &NodeJsBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &NodeJsBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &NodeJsBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 4, "schema '{name}': expected 4 files");
@@ -95,7 +105,9 @@ fn test_all_schemas_generate_nodejs() {
 fn test_all_schemas_generate_python() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &PythonBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &PythonBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &PythonBackend, &opts)
             .unwrap_or_else(|e| panic!("schema '{name}' failed: {e}"));
         assert_eq!(files.len(), 3, "schema '{name}': expected 3 files");
@@ -106,42 +118,102 @@ fn test_all_schemas_generate_python() {
 
 #[test]
 fn test_iot_sensor_rust_types() {
-    let src  = SCHEMAS.iter().find(|(n, _)| *n == "iot-sensor").unwrap().1;
-    let files = backend_buildtest::generate_schema("iot-sensor", src, &RustBackend, &CodegenOptions::default()).unwrap();
+    let src = SCHEMAS.iter().find(|(n, _)| *n == "iot-sensor").unwrap().1;
+    let files = backend_buildtest::generate_schema(
+        "iot-sensor",
+        src,
+        &RustBackend,
+        &CodegenOptions::default(),
+    )
+    .unwrap();
     let lib_rs = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
-    assert!(lib_rs.content.contains("pub struct SensorMessage"), "missing SensorMessage");
-    assert!(lib_rs.content.contains("pub struct SensorReading"),  "missing SensorReading");
-    assert!(lib_rs.content.contains("pub enum SensorType"),       "missing SensorType");
+    assert!(
+        lib_rs.content.contains("pub struct SensorMessage"),
+        "missing SensorMessage"
+    );
+    assert!(
+        lib_rs.content.contains("pub struct SensorReading"),
+        "missing SensorReading"
+    );
+    assert!(
+        lib_rs.content.contains("pub enum SensorType"),
+        "missing SensorType"
+    );
 }
 
 #[test]
 fn test_iot_sensor_python_types() {
-    let src  = SCHEMAS.iter().find(|(n, _)| *n == "iot-sensor").unwrap().1;
-    let files = backend_buildtest::generate_schema("iot-sensor", src, &PythonBackend, &CodegenOptions::default()).unwrap();
+    let src = SCHEMAS.iter().find(|(n, _)| *n == "iot-sensor").unwrap().1;
+    let files = backend_buildtest::generate_schema(
+        "iot-sensor",
+        src,
+        &PythonBackend,
+        &CodegenOptions::default(),
+    )
+    .unwrap();
     let py = files.iter().find(|f| f.path.ends_with(".py")).unwrap();
-    assert!(py.content.contains("class SensorMessage:"), "missing SensorMessage");
-    assert!(py.content.contains("class SensorReading:"),  "missing SensorReading");
-    assert!(py.content.contains("class SensorType:"),     "missing SensorType");
+    assert!(
+        py.content.contains("class SensorMessage:"),
+        "missing SensorMessage"
+    );
+    assert!(
+        py.content.contains("class SensorReading:"),
+        "missing SensorReading"
+    );
+    assert!(
+        py.content.contains("class SensorType:"),
+        "missing SensorType"
+    );
 }
 
 #[test]
 fn test_iot_sensor_csharp_types() {
-    let src  = SCHEMAS.iter().find(|(n, _)| *n == "iot-sensor").unwrap().1;
-    let files = backend_buildtest::generate_schema("iot-sensor", src, &CSharpBackend, &CodegenOptions::default()).unwrap();
+    let src = SCHEMAS.iter().find(|(n, _)| *n == "iot-sensor").unwrap().1;
+    let files = backend_buildtest::generate_schema(
+        "iot-sensor",
+        src,
+        &CSharpBackend,
+        &CodegenOptions::default(),
+    )
+    .unwrap();
     let cs = files.iter().find(|f| f.path.ends_with(".cs")).unwrap();
-    assert!(cs.content.contains("class SensorMessage"), "missing SensorMessage");
-    assert!(cs.content.contains("class SensorReading"),  "missing SensorReading");
-    assert!(cs.content.contains("class SensorType"),     "missing SensorType");
+    assert!(
+        cs.content.contains("class SensorMessage"),
+        "missing SensorMessage"
+    );
+    assert!(
+        cs.content.contains("class SensorReading"),
+        "missing SensorReading"
+    );
+    assert!(
+        cs.content.contains("class SensorType"),
+        "missing SensorType"
+    );
 }
 
 #[test]
 fn test_iot_sensor_nodejs_types() {
-    let src  = SCHEMAS.iter().find(|(n, _)| *n == "iot-sensor").unwrap().1;
-    let files = backend_buildtest::generate_schema("iot-sensor", src, &NodeJsBackend, &CodegenOptions::default()).unwrap();
-    let ts = files.iter().find(|f| f.path.ends_with(".ts") && f.path.contains("/src/")).unwrap();
-    assert!(ts.content.contains("SensorMessage"), "missing SensorMessage");
-    assert!(ts.content.contains("SensorReading"),  "missing SensorReading");
-    assert!(ts.content.contains("SensorType"),     "missing SensorType");
+    let src = SCHEMAS.iter().find(|(n, _)| *n == "iot-sensor").unwrap().1;
+    let files = backend_buildtest::generate_schema(
+        "iot-sensor",
+        src,
+        &NodeJsBackend,
+        &CodegenOptions::default(),
+    )
+    .unwrap();
+    let ts = files
+        .iter()
+        .find(|f| f.path.ends_with(".ts") && f.path.contains("/src/"))
+        .unwrap();
+    assert!(
+        ts.content.contains("SensorMessage"),
+        "missing SensorMessage"
+    );
+    assert!(
+        ts.content.contains("SensorReading"),
+        "missing SensorReading"
+    );
+    assert!(ts.content.contains("SensorType"), "missing SensorType");
 }
 
 #[test]
@@ -162,16 +234,40 @@ fn test_dcbor_generates_for_all_schemas() {
 fn test_cmake_uses_fetchcontent_make_available() {
     let opts = CodegenOptions::default();
     for backend in [
-        ("C",   backend_buildtest::generate_schema("structs", SCHEMAS.iter().find(|(n,_)| *n == "structs").unwrap().1, &CBackend, &opts).unwrap()),
-        ("C++", backend_buildtest::generate_schema("structs", SCHEMAS.iter().find(|(n,_)| *n == "structs").unwrap().1, &CppBackend, &opts).unwrap()),
+        (
+            "C",
+            backend_buildtest::generate_schema(
+                "structs",
+                SCHEMAS.iter().find(|(n, _)| *n == "structs").unwrap().1,
+                &CBackend,
+                &opts,
+            )
+            .unwrap(),
+        ),
+        (
+            "C++",
+            backend_buildtest::generate_schema(
+                "structs",
+                SCHEMAS.iter().find(|(n, _)| *n == "structs").unwrap().1,
+                &CppBackend,
+                &opts,
+            )
+            .unwrap(),
+        ),
     ] {
         let (lang, files) = backend;
-        let cmake = files.iter().find(|f| f.path.ends_with("CMakeLists.txt"))
+        let cmake = files
+            .iter()
+            .find(|f| f.path.ends_with("CMakeLists.txt"))
             .unwrap_or_else(|| panic!("{lang}: no CMakeLists.txt generated"));
-        assert!(cmake.content.contains("FetchContent_MakeAvailable"),
-            "{lang}: CMakeLists.txt must use FetchContent_MakeAvailable to fetch nanocbor");
-        assert!(!cmake.content.contains("FetchContent_Populate"),
-            "{lang}: CMakeLists.txt must not use the deprecated FetchContent_Populate");
+        assert!(
+            cmake.content.contains("FetchContent_MakeAvailable"),
+            "{lang}: CMakeLists.txt must use FetchContent_MakeAvailable to fetch nanocbor"
+        );
+        assert!(
+            !cmake.content.contains("FetchContent_Populate"),
+            "{lang}: CMakeLists.txt must not use the deprecated FetchContent_Populate"
+        );
     }
 }
 
@@ -181,16 +277,40 @@ fn test_cmake_uses_fetchcontent_make_available() {
 fn test_cmake_globs_nanocbor_sources() {
     let opts = CodegenOptions::default();
     for backend in [
-        ("C",   backend_buildtest::generate_schema("structs", SCHEMAS.iter().find(|(n,_)| *n == "structs").unwrap().1, &CBackend, &opts).unwrap()),
-        ("C++", backend_buildtest::generate_schema("structs", SCHEMAS.iter().find(|(n,_)| *n == "structs").unwrap().1, &CppBackend, &opts).unwrap()),
+        (
+            "C",
+            backend_buildtest::generate_schema(
+                "structs",
+                SCHEMAS.iter().find(|(n, _)| *n == "structs").unwrap().1,
+                &CBackend,
+                &opts,
+            )
+            .unwrap(),
+        ),
+        (
+            "C++",
+            backend_buildtest::generate_schema(
+                "structs",
+                SCHEMAS.iter().find(|(n, _)| *n == "structs").unwrap().1,
+                &CppBackend,
+                &opts,
+            )
+            .unwrap(),
+        ),
     ] {
         let (lang, files) = backend;
-        let cmake = files.iter().find(|f| f.path.ends_with("CMakeLists.txt"))
+        let cmake = files
+            .iter()
+            .find(|f| f.path.ends_with("CMakeLists.txt"))
             .unwrap_or_else(|| panic!("{lang}: no CMakeLists.txt generated"));
-        assert!(cmake.content.contains("file(GLOB"),
-            "{lang}: CMakeLists.txt must use file(GLOB) to collect nanocbor sources");
-        assert!(!cmake.content.contains("nanocbor.c"),
-            "{lang}: CMakeLists.txt must not reference nanocbor.c by name");
+        assert!(
+            cmake.content.contains("file(GLOB"),
+            "{lang}: CMakeLists.txt must use file(GLOB) to collect nanocbor sources"
+        );
+        assert!(
+            !cmake.content.contains("nanocbor.c"),
+            "{lang}: CMakeLists.txt must not reference nanocbor.c by name"
+        );
     }
 }
 
@@ -200,11 +320,31 @@ fn test_cmake_globs_nanocbor_sources() {
 fn test_cmake_includes_nanocbor_headers() {
     let opts = CodegenOptions::default();
     for backend in [
-        ("C",   backend_buildtest::generate_schema("structs", SCHEMAS.iter().find(|(n,_)| *n == "structs").unwrap().1, &CBackend, &opts).unwrap()),
-        ("C++", backend_buildtest::generate_schema("structs", SCHEMAS.iter().find(|(n,_)| *n == "structs").unwrap().1, &CppBackend, &opts).unwrap()),
+        (
+            "C",
+            backend_buildtest::generate_schema(
+                "structs",
+                SCHEMAS.iter().find(|(n, _)| *n == "structs").unwrap().1,
+                &CBackend,
+                &opts,
+            )
+            .unwrap(),
+        ),
+        (
+            "C++",
+            backend_buildtest::generate_schema(
+                "structs",
+                SCHEMAS.iter().find(|(n, _)| *n == "structs").unwrap().1,
+                &CppBackend,
+                &opts,
+            )
+            .unwrap(),
+        ),
     ] {
         let (lang, files) = backend;
-        let cmake = files.iter().find(|f| f.path.ends_with("CMakeLists.txt"))
+        let cmake = files
+            .iter()
+            .find(|f| f.path.ends_with("CMakeLists.txt"))
             .unwrap_or_else(|| panic!("{lang}: no CMakeLists.txt generated"));
         assert!(cmake.content.contains("nanocbor_SOURCE_DIR}/include"),
             "{lang}: CMakeLists.txt must add ${{nanocbor_SOURCE_DIR}}/include to target_include_directories");
@@ -217,9 +357,14 @@ fn test_cmake_includes_nanocbor_headers() {
 fn test_cpp_uses_nanocbor_put_tstrn() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &CppBackend, &opts).unwrap();
-        let cpp = files.iter().find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/")).unwrap();
+        let cpp = files
+            .iter()
+            .find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/"))
+            .unwrap();
         assert!(!cpp.content.contains("nanocbor_put_tstr_len"),
             "schema '{name}': .cpp must not use removed nanocbor_put_tstr_len (use nanocbor_put_tstrn)");
     }
@@ -231,9 +376,14 @@ fn test_cpp_uses_nanocbor_put_tstrn() {
 fn test_c_uses_nanocbor_put_tstrn() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &CBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &CBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &CBackend, &opts).unwrap();
-        let c_src = files.iter().find(|f| f.path.ends_with(".c") && f.path.contains("/src/")).unwrap();
+        let c_src = files
+            .iter()
+            .find(|f| f.path.ends_with(".c") && f.path.contains("/src/"))
+            .unwrap();
         assert!(!c_src.content.contains("nanocbor_put_tstr_len"),
             "schema '{name}': .c must not use removed nanocbor_put_tstr_len (use nanocbor_put_tstrn)");
     }
@@ -247,11 +397,21 @@ fn test_cpp_enum_tstr_decode_sets_kind() {
     let opts = CodegenOptions::default();
     let src = SCHEMAS.iter().find(|(n, _)| *n == "enums").unwrap().1;
     let files = backend_buildtest::generate_schema("enums", src, &CppBackend, &opts).unwrap();
-    let cpp = files.iter().find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/")).unwrap();
-    assert!(cpp.content.contains("if (sv == std::string_view(\"ok\")) { out = Status::make_Ok(); return NANOCBOR_OK; }"),
-        "enums .cpp: \"ok\" must decode to Status::make_Ok()");
-    assert!(cpp.content.contains("case Status::Kind::Warn:\n        nanocbor_put_tstrn(enc, \"warn\", 4);"),
-        "enums .cpp: Status::Kind::Warn must encode as \"warn\"");
+    let cpp = files
+        .iter()
+        .find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/"))
+        .unwrap();
+    assert!(
+        cpp.content.contains(
+            "if (sv == std::string_view(\"ok\")) { out = Status::make_Ok(); return NANOCBOR_OK; }"
+        ),
+        "enums .cpp: \"ok\" must decode to Status::make_Ok()"
+    );
+    assert!(
+        cpp.content
+            .contains("case Status::Kind::Warn:\n        nanocbor_put_tstrn(enc, \"warn\", 4);"),
+        "enums .cpp: Status::Kind::Warn must encode as \"warn\""
+    );
 }
 
 /// Generated C++ source for structs with optional fields must compute the map
@@ -261,7 +421,10 @@ fn test_cpp_optional_fields_dynamic_map_length() {
     let opts = CodegenOptions::default();
     let src = SCHEMAS.iter().find(|(n, _)| *n == "structs").unwrap().1;
     let files = backend_buildtest::generate_schema("structs", src, &CppBackend, &opts).unwrap();
-    let cpp = files.iter().find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/")).unwrap();
+    let cpp = files
+        .iter()
+        .find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/"))
+        .unwrap();
     assert!(cpp.content.contains("has_value()"),
         "structs .cpp: optional fields must use has_value() for runtime map length and conditional emit");
 }
@@ -272,7 +435,9 @@ fn test_cpp_optional_fields_dynamic_map_length() {
 fn test_cpp_array_operator_eq_no_neq() {
     let opts = CodegenOptions::default();
     for (name, src) in SCHEMAS {
-        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) { continue; }
+        if !backend_buildtest::schema_applies(name, &CppBackend, &opts) {
+            continue;
+        }
         let files = backend_buildtest::generate_schema(name, src, &CppBackend, &opts).unwrap();
         let hpp = files.iter().find(|f| f.path.ends_with(".hpp")).unwrap();
         assert!(!hpp.content.contains("items[i] != o.items[i]"),
@@ -303,8 +468,15 @@ fn test_cpp_enum_tstr_has_valid_default() {
     let files = backend_buildtest::generate_schema("enums", src, &CppBackend, &opts).unwrap();
     let hpp = files.iter().find(|f| f.path.ends_with(".hpp")).unwrap();
     // status = "ok" / "warn" / "error"
-    assert!(hpp.content.contains("enum class Kind { Ok, Warn, Error };"), "{}", hpp.content);
-    assert!(hpp.content.contains("Kind kind{Kind::Ok};"), "enums .hpp: Status must default to Kind::Ok");
+    assert!(
+        hpp.content.contains("enum class Kind { Ok, Warn, Error };"),
+        "{}",
+        hpp.content
+    );
+    assert!(
+        hpp.content.contains("Kind kind{Kind::Ok};"),
+        "enums .hpp: Status must default to Kind::Ok"
+    );
 }
 
 /// Generated C++ decode functions must use the container cursor (&map / &arr)
@@ -315,11 +487,16 @@ fn test_cpp_decode_uses_container_cursor() {
     let opts = CodegenOptions::default();
     let src = SCHEMAS.iter().find(|(n, _)| *n == "structs").unwrap().1;
     let files = backend_buildtest::generate_schema("structs", src, &CppBackend, &opts).unwrap();
-    let cpp = files.iter().find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/")).unwrap();
+    let cpp = files
+        .iter()
+        .find(|f| f.path.ends_with(".cpp") && f.path.contains("/src/"))
+        .unwrap();
     // decode(dec, ...) inside a map would read from the outer cursor — wrong.
     // All field decodes inside a map must pass &map.
-    assert!(cpp.content.contains("decode(&map,"),
-        "structs .cpp: named-type field decode inside a map must pass &map, not dec");
+    assert!(
+        cpp.content.contains("decode(&map,"),
+        "structs .cpp: named-type field decode inside a map must pass &map, not dec"
+    );
 }
 
 // ── Actual build tests (ignored by default, require installed toolchain) ──────
@@ -330,10 +507,15 @@ fn test_cpp_decode_uses_container_cursor() {
 #[test]
 #[ignore]
 fn test_build_rust() {
-    let tmp  = work_dir("rust");
+    let tmp = work_dir("rust");
     let opts = CodegenOptions::default();
     eprintln!("\n=== Rust build test ===");
-    let outcomes = run_build_tests(&RustBackend, |d, f, n| build_rust(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &RustBackend,
+        |d, f, n| build_rust(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Rust", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -344,10 +526,18 @@ fn test_build_rust() {
 #[test]
 #[ignore]
 fn test_build_rust_no_std() {
-    let tmp  = work_dir("rust-no-std");
-    let opts = CodegenOptions { no_std: true, ..CodegenOptions::default() };
+    let tmp = work_dir("rust-no-std");
+    let opts = CodegenOptions {
+        no_std: true,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== Rust no-std build test ===");
-    let outcomes = run_build_tests(&RustBackend, |d, f, n| build_rust_no_std(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &RustBackend,
+        |d, f, n| build_rust_no_std(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Rust no-std", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -357,10 +547,18 @@ fn test_build_rust_no_std() {
 #[test]
 #[ignore]
 fn test_build_rust_json() {
-    let tmp  = work_dir("rust-json");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    let tmp = work_dir("rust-json");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== Rust JSON build test ===");
-    let outcomes = run_build_tests(&RustBackend, |d, f, n| build_rust(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &RustBackend,
+        |d, f, n| build_rust(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Rust JSON", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -371,7 +569,7 @@ fn test_build_rust_json() {
 #[test]
 #[ignore]
 fn test_build_c() {
-    let tmp  = work_dir("c");
+    let tmp = work_dir("c");
     let opts = CodegenOptions::default();
     eprintln!("\n=== C build test ===");
     let outcomes = run_build_tests(&CBackend, |d, f, n| build_c(d, f, n), &opts, tmp.path());
@@ -384,8 +582,11 @@ fn test_build_c() {
 #[test]
 #[ignore]
 fn test_build_c_json() {
-    let tmp  = work_dir("c-json");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    let tmp = work_dir("c-json");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== C JSON build test ===");
     let outcomes = run_build_tests(&CBackend, |d, f, n| build_c(d, f, n), &opts, tmp.path());
     print_summary("C JSON", &outcomes);
@@ -398,7 +599,7 @@ fn test_build_c_json() {
 #[test]
 #[ignore]
 fn test_build_cpp() {
-    let tmp  = work_dir("cpp");
+    let tmp = work_dir("cpp");
     let opts = CodegenOptions::default();
     eprintln!("\n=== C++ build test ===");
     let outcomes = run_build_tests(&CppBackend, |d, f, n| build_cpp(d, f, n), &opts, tmp.path());
@@ -413,8 +614,11 @@ fn test_build_cpp() {
 #[test]
 #[ignore]
 fn test_build_cpp_json() {
-    let tmp  = work_dir("cpp-json");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    let tmp = work_dir("cpp-json");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== C++ JSON build test ===");
     let outcomes = run_build_tests(&CppBackend, |d, f, n| build_cpp(d, f, n), &opts, tmp.path());
     print_summary("C++ JSON", &outcomes);
@@ -427,10 +631,15 @@ fn test_build_cpp_json() {
 #[test]
 #[ignore]
 fn test_build_csharp() {
-    let tmp  = work_dir("csharp");
+    let tmp = work_dir("csharp");
     let opts = CodegenOptions::default();
     eprintln!("\n=== C# build test ===");
-    let outcomes = run_build_tests(&CSharpBackend, |d, f, n| build_csharp(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &CSharpBackend,
+        |d, f, n| build_csharp(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("C#", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -441,10 +650,18 @@ fn test_build_csharp() {
 #[test]
 #[ignore]
 fn test_build_csharp_json() {
-    let tmp  = work_dir("csharp-json");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    let tmp = work_dir("csharp-json");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== C# JSON build test ===");
-    let outcomes = run_build_tests(&CSharpBackend, |d, f, n| build_csharp(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &CSharpBackend,
+        |d, f, n| build_csharp(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("C# JSON", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -455,10 +672,15 @@ fn test_build_csharp_json() {
 #[test]
 #[ignore]
 fn test_build_nodejs() {
-    let tmp  = work_dir("nodejs");
+    let tmp = work_dir("nodejs");
     let opts = CodegenOptions::default();
     eprintln!("\n=== Node.js build test ===");
-    let outcomes = run_build_tests(&NodeJsBackend, |d, f, n| build_nodejs(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &NodeJsBackend,
+        |d, f, n| build_nodejs(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Node.js", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -470,10 +692,15 @@ fn test_build_nodejs() {
 #[test]
 #[ignore]
 fn test_build_python() {
-    let tmp  = work_dir("python");
+    let tmp = work_dir("python");
     let opts = CodegenOptions::default();
     eprintln!("\n=== Python build test ===");
-    let outcomes = run_build_tests(&PythonBackend, |d, f, n| build_python(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &PythonBackend,
+        |d, f, n| build_python(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Python", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -484,10 +711,18 @@ fn test_build_python() {
 #[test]
 #[ignore]
 fn test_build_python_json() {
-    let tmp  = work_dir("python-json");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    let tmp = work_dir("python-json");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== Python JSON build test ===");
-    let outcomes = run_build_tests(&PythonBackend, |d, f, n| build_python(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &PythonBackend,
+        |d, f, n| build_python(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Python JSON", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -498,7 +733,7 @@ fn test_build_python_json() {
 #[test]
 #[ignore]
 fn test_build_go() {
-    let tmp  = work_dir("go");
+    let tmp = work_dir("go");
     let opts = CodegenOptions::default();
     eprintln!("\n=== Go build test ===");
     let outcomes = run_build_tests(&GoBackend, |d, f, n| build_go(d, f, n), &opts, tmp.path());
@@ -511,8 +746,11 @@ fn test_build_go() {
 #[test]
 #[ignore]
 fn test_build_go_json() {
-    let tmp  = work_dir("go-json");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    let tmp = work_dir("go-json");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== Go JSON build test ===");
     let outcomes = run_build_tests(&GoBackend, |d, f, n| build_go(d, f, n), &opts, tmp.path());
     print_summary("Go JSON", &outcomes);
@@ -525,14 +763,19 @@ fn test_build_go_json() {
 #[test]
 #[ignore]
 fn test_build_java() {
-    let tmp  = work_dir("java");
+    let tmp = work_dir("java");
     let opts = CodegenOptions {
-        format:      cddlc_codegen::Format::Cbor,
+        format: cddlc_codegen::Format::Cbor,
         java_flavor: cddlc_codegen::JavaFlavor::Se,
         ..CodegenOptions::default()
     };
     eprintln!("\n=== Java build test ===");
-    let outcomes = run_build_tests(&JavaBackend, |d, f, n| build_java(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &JavaBackend,
+        |d, f, n| build_java(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Java", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -543,14 +786,19 @@ fn test_build_java() {
 #[test]
 #[ignore]
 fn test_build_java_json() {
-    let tmp  = work_dir("java-json");
+    let tmp = work_dir("java-json");
     let opts = CodegenOptions {
-        format:      cddlc_codegen::Format::Json,
+        format: cddlc_codegen::Format::Json,
         java_flavor: cddlc_codegen::JavaFlavor::Se,
         ..CodegenOptions::default()
     };
     eprintln!("\n=== Java JSON build test ===");
-    let outcomes = run_build_tests(&JavaBackend, |d, f, n| build_java(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &JavaBackend,
+        |d, f, n| build_java(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Java JSON", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -561,14 +809,19 @@ fn test_build_java_json() {
 #[test]
 #[ignore]
 fn test_build_java_ee() {
-    let tmp  = work_dir("java-ee");
+    let tmp = work_dir("java-ee");
     let opts = CodegenOptions {
-        format:      cddlc_codegen::Format::Cbor,
+        format: cddlc_codegen::Format::Cbor,
         java_flavor: cddlc_codegen::JavaFlavor::Ee,
         ..CodegenOptions::default()
     };
     eprintln!("\n=== Java EE build test ===");
-    let outcomes = run_build_tests(&JavaBackend, |d, f, n| build_java(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &JavaBackend,
+        |d, f, n| build_java(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Java EE", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -579,14 +832,19 @@ fn test_build_java_ee() {
 #[test]
 #[ignore]
 fn test_build_java_ee_json() {
-    let tmp  = work_dir("java-ee-json");
+    let tmp = work_dir("java-ee-json");
     let opts = CodegenOptions {
-        format:      cddlc_codegen::Format::Json,
+        format: cddlc_codegen::Format::Json,
         java_flavor: cddlc_codegen::JavaFlavor::Ee,
         ..CodegenOptions::default()
     };
     eprintln!("\n=== Java EE JSON build test ===");
-    let outcomes = run_build_tests(&JavaBackend, |d, f, n| build_java(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &JavaBackend,
+        |d, f, n| build_java(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Java EE JSON", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -597,8 +855,11 @@ fn test_build_java_ee_json() {
 #[test]
 #[ignore]
 fn test_build_lua() {
-    let tmp  = work_dir("lua");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Cbor, ..CodegenOptions::default() };
+    let tmp = work_dir("lua");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Cbor,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== Lua build test ===");
     let outcomes = run_build_tests(&LuaBackend, |d, f, n| build_lua(d, f, n), &opts, tmp.path());
     print_summary("Lua", &outcomes);
@@ -611,8 +872,11 @@ fn test_build_lua() {
 #[test]
 #[ignore]
 fn test_build_lua_json() {
-    let tmp  = work_dir("lua-json");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    let tmp = work_dir("lua-json");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== Lua JSON build test ===");
     let outcomes = run_build_tests(&LuaBackend, |d, f, n| build_lua(d, f, n), &opts, tmp.path());
     print_summary("Lua JSON", &outcomes);
@@ -625,10 +889,18 @@ fn test_build_lua_json() {
 #[test]
 #[ignore]
 fn test_build_dart() {
-    let tmp  = work_dir("dart");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Cbor, ..CodegenOptions::default() };
+    let tmp = work_dir("dart");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Cbor,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== Dart build test ===");
-    let outcomes = run_build_tests(&DartBackend, |d, f, n| build_dart(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &DartBackend,
+        |d, f, n| build_dart(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Dart", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -639,10 +911,18 @@ fn test_build_dart() {
 #[test]
 #[ignore]
 fn test_build_dart_json() {
-    let tmp  = work_dir("dart-json");
-    let opts = CodegenOptions { format: cddlc_codegen::Format::Json, ..CodegenOptions::default() };
+    let tmp = work_dir("dart-json");
+    let opts = CodegenOptions {
+        format: cddlc_codegen::Format::Json,
+        ..CodegenOptions::default()
+    };
     eprintln!("\n=== Dart JSON build test ===");
-    let outcomes = run_build_tests(&DartBackend, |d, f, n| build_dart(d, f, n), &opts, tmp.path());
+    let outcomes = run_build_tests(
+        &DartBackend,
+        |d, f, n| build_dart(d, f, n),
+        &opts,
+        tmp.path(),
+    );
     print_summary("Dart JSON", &outcomes);
     assert_all_ok(&outcomes);
 }
@@ -670,22 +950,40 @@ fn test_build_all() {
         }};
     }
 
-    run_lang!("Rust",    RustBackend,   |d, f, n| build_rust(d, f, n),    "rust");
-    run_lang!("C",       CBackend,      |d, f, n| build_c(d, f, n),       "c");
-    run_lang!("C++",     CppBackend,    |d, f, n| build_cpp(d, f, n),     "cpp");
-    run_lang!("C#",      CSharpBackend, |d, f, n| build_csharp(d, f, n),  "csharp");
-    run_lang!("Node.js", NodeJsBackend, |d, f, n| build_nodejs(d, f, n),  "nodejs");
-    run_lang!("Python",  PythonBackend, |d, f, n| build_python(d, f, n),  "python");
-    run_lang!("Go",      GoBackend,     |d, f, n| build_go(d, f, n),      "go");
-    run_lang!("Java",    JavaBackend,   |d, f, n| build_java(d, f, n),    "java");
-    run_lang!("Lua",     LuaBackend,    |d, f, n| build_lua(d, f, n),     "lua");
-    run_lang!("Dart",    DartBackend,   |d, f, n| build_dart(d, f, n),    "dart");
+    run_lang!("Rust", RustBackend, |d, f, n| build_rust(d, f, n), "rust");
+    run_lang!("C", CBackend, |d, f, n| build_c(d, f, n), "c");
+    run_lang!("C++", CppBackend, |d, f, n| build_cpp(d, f, n), "cpp");
+    run_lang!(
+        "C#",
+        CSharpBackend,
+        |d, f, n| build_csharp(d, f, n),
+        "csharp"
+    );
+    run_lang!(
+        "Node.js",
+        NodeJsBackend,
+        |d, f, n| build_nodejs(d, f, n),
+        "nodejs"
+    );
+    run_lang!(
+        "Python",
+        PythonBackend,
+        |d, f, n| build_python(d, f, n),
+        "python"
+    );
+    run_lang!("Go", GoBackend, |d, f, n| build_go(d, f, n), "go");
+    run_lang!("Java", JavaBackend, |d, f, n| build_java(d, f, n), "java");
+    run_lang!("Lua", LuaBackend, |d, f, n| build_lua(d, f, n), "lua");
+    run_lang!("Dart", DartBackend, |d, f, n| build_dart(d, f, n), "dart");
 
     eprintln!("\n╔════════════╦═══════╦═══════╦═══════╗");
     eprintln!("║ Language   ║  OK   ║ SKIP  ║ FAIL  ║");
     eprintln!("╠════════════╬═══════╬═══════╬═══════╣");
     for (lang, outcomes) in &all_outcomes {
-        let ok   = outcomes.iter().filter(|o| matches!(o, BuildOutcome::Built { .. })).count();
+        let ok = outcomes
+            .iter()
+            .filter(|o| matches!(o, BuildOutcome::Built { .. }))
+            .count();
         let skip = outcomes.iter().filter(|o| o.is_skipped()).count();
         let fail = outcomes.iter().filter(|o| !o.is_ok()).count();
         eprintln!("║ {lang:<10} ║  {ok:<4} ║  {skip:<4} ║  {fail:<4} ║");
@@ -698,7 +996,10 @@ fn test_build_all() {
 }
 
 fn print_summary(lang: &str, outcomes: &[BuildOutcome]) {
-    let ok   = outcomes.iter().filter(|o| matches!(o, BuildOutcome::Built { .. })).count();
+    let ok = outcomes
+        .iter()
+        .filter(|o| matches!(o, BuildOutcome::Built { .. }))
+        .count();
     let skip = outcomes.iter().filter(|o| o.is_skipped()).count();
     let gone = outcomes.iter().filter(|o| o.is_unavailable()).count();
     let fail = outcomes.iter().filter(|o| !o.is_ok()).count();

@@ -15,9 +15,17 @@ fn constraints_on_a_newtype_member_check_its_value() {
                opts = { ? max: (js-uint .ge 1), ? short: (label .size (1..3)), ? plain: (uint .le 5) }";
     let parsed = parse_cddl(src, PathBuf::from("test.cddl")).expect("parse");
     let lowered = lower(&parsed.value, 16, 64).expect("lower");
-    let lib = RustBackend.generate(&lowered.module, &CodegenOptions::default()).expect("generate").files[1].content.clone();
+    let lib = RustBackend
+        .generate(&lowered.module, &CodegenOptions::default())
+        .expect("generate")
+        .files[1]
+        .content
+        .clone();
     assert!(lib.contains("if !(val.0 >= 1)"), "{lib}");
     // Through a plain alias (`label = name`) to the newtype.
-    assert!(lib.contains("if !(val.0.len() >= 1 && val.0.len() <= 3)"), "{lib}");
+    assert!(
+        lib.contains("if !(val.0.len() >= 1 && val.0.len() <= 3)"),
+        "{lib}"
+    );
     assert!(lib.contains("if !(val <= 5)"), "{lib}");
 }
