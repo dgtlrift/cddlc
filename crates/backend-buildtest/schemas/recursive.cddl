@@ -11,3 +11,7 @@ binop = [op: tstr, lhs: expr, rhs: expr]
 ; A chain through an optional member
 chain = { head: int, ? tail: chain }
 
+
+; A type that holds itself through an array and a map (dgtlrift/cddlc#226,
+; dgtlrift/cddlc#245)
+node = { name: tstr, kids: [* node], ? attrs: { * tstr => node } }

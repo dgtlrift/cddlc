@@ -336,6 +336,28 @@ with `* tstr => any`.
 
 ---
 
+### `any`
+
+A member of type `any` holds any data item (#178). Most backends hold the item's encoding, which
+encoding writes back unchanged; the others hold their CBOR or JSON library's value of it:
+
+| Backend | CBOR | JSON |
+|---|---|---|
+| Rust | `AnyItem`, the item's bytes | `serde_json::Value` |
+| C | `cbor_any_t`, a pointer and length into the input | `json_any_t`, the value's text |
+| C++ | `std::string_view` of the item's encoding | `nlohmann::json` |
+| C# | `byte[]` (`ReadEncodedValue` / `WriteEncodedValue`) | `JsonElement` |
+| Go | `RawItem`, an alias of `cbor.RawMessage` | `RawItem`, an alias of `json.RawMessage` |
+| Python | the value cbor2 decodes it to | the value `json` decodes it to |
+| Java | the runtime's raw value (`Object`) | the runtime's raw value (`Object`) |
+| Node | the value cborg decodes it to (`unknown`) | the value `JSON.parse` gives (`unknown`) |
+| Lua | the runtime's item, written back byte for byte | the runtime's item |
+| Dart | package:cbor's `CborValue` | the value `jsonDecode` gives (`dynamic`) |
+
+A library's value comes back as the same value, though not always the same bytes: cbor2, Java and
+Node rewrite a float's width, and Java and Node read map keys as text (each backend's README says
+how). A choice's `any` alternative takes any item the others don't.
+
 ## Backend Capability Matrix
 
 | Feature | Rust | C | C++ | C# | Node.js | Python | Dart | Go | Java | Lua |
@@ -602,16 +624,6 @@ and the test fails when one starts working, so the list stays current.
   them) for the other entries; other key types there (`{ a: uint, * bstr => any }`), and
   more than one member with a computed key, are rejected with an "unsupported" error (#136).
   Integer keys there are CBOR only, in Rust, C, C++, C#, Python and Go (#181).
-- **`any`** is held as a byte string in most backends, so a value that's any other data item
-  (COSE's header values, `values = any`) can't be decoded yet (#178). Rust holds the encoded
-  item: an `AnyItem` whose bytes encoding writes back unchanged, or a `serde_json::Value` in JSON.
-  C holds a pointer and length into the input (`cbor_any_t`), or the value's JSON text
-  (`json_any_t`). C++ holds a `std::string_view` of the item's encoding, or an `nlohmann::json`.
-  C# holds the item's encoding in a `byte[]` (`ReadEncodedValue` / `WriteEncodedValue`), or a
-  `JsonElement`. Go holds a `RawItem`, an alias of `cbor.RawMessage` or `json.RawMessage`.
-  Python holds the value cbor2 or `json` decodes it to, and gives it back to them to encode.
-  Java holds the runtime's raw value (`Object`: `Map`, `List`, `Long`, `String`, `byte[]`, ...).
-
 ### Validator gaps (`cddlc validate`)
 
 - **Tagged prelude types** (`tdate`, `time`, `uri`, `b64url`, `biguint`, `bigint`,

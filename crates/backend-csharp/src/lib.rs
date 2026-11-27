@@ -10,8 +10,8 @@ use cddlc_codegen::{
     GeneratedFile, IndentWriter,
 };
 use cddlc_ir::{
-    AliasDef, ArrayDef, Constraint, EnumDef, IrModule, LiteralValue, MapDef, Occurrence, Primitive,
-    StructDef, TypeDef, TypeRef,
+    AliasDef, ArrayDef, Constraint, EnumDef, EnumVariant, IrModule, LiteralValue, MapDef,
+    Occurrence, Primitive, StructDef, TypeDef, TypeRef,
 };
 
 pub struct CSharpBackend;
@@ -35,6 +35,23 @@ impl Backend for CSharpBackend {
         let renamed =
             cddlc_codegen::rename_types(module, &cddlc_codegen::csharp_reserved_renames(module));
         let module = &renamed;
+        // The variants that hold their enum again (dgtlrift/cddlc#224).
+        RECURSIVE_VARIANTS.with(|r| {
+            *r.borrow_mut() = module
+                .types
+                .iter()
+                .filter_map(|(n, d)| match d {
+                    TypeDef::Enum(e) => Some((n, e)),
+                    _ => None,
+                })
+                .flat_map(|(n, e)| {
+                    e.variants
+                        .iter()
+                        .filter(|v| cddlc_codegen::is_indirect(n, &v.ty, module))
+                        .map(move |v| (n.to_string(), v.name.to_string()))
+                })
+                .collect()
+        });
         let name = module.name.as_str();
         let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
@@ -1271,10 +1288,29 @@ fn qualified(expr: String, ty: &TypeRef, ns: &str) -> String {
     expr
 }
 
-/// An enum's first variant, as a value.
+// The (enum, variant) pairs whose variant holds the enum again, set for each
+// `generate`.
+thread_local! {
+    static RECURSIVE_VARIANTS: std::cell::RefCell<std::collections::HashSet<(String, String)>> = Default::default();
+}
+
+/// An enum's `Default`: its first variant that doesn't hold the enum again,
+/// whose default would build itself without end (`link = next / null`;
+/// dgtlrift/cddlc#224); its first if they all do.
 fn enum_variant_default(e: &EnumDef, ns: &str, opts: &CodegenOptions) -> String {
     let type_name = to_pascal_case(&e.name);
-    let Some(v) = e.variants.first() else {
+    let recursive = |v: &&EnumVariant| {
+        RECURSIVE_VARIANTS.with(|r| {
+            r.borrow()
+                .contains(&(e.name.to_string(), v.name.to_string()))
+        })
+    };
+    let Some(v) = e
+        .variants
+        .iter()
+        .find(|v| !recursive(v))
+        .or(e.variants.first())
+    else {
         return "null!".into();
     };
     let vname = to_pascal_case(&v.name);
@@ -1372,6 +1408,12 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOpt
             Some(lit) => w.line(&format!(
                 "j => {} == {lit} ? {vname}.Instance : throw new JsonException(\"not {vname}\"){sep}",
                 cs_json_from_element(&v.ty, "j", opts)
+            )),
+            // A named variant isn't JSON null, which System.Text.Json reads as
+            // a null object rather than failing (dgtlrift/cddlc#224).
+            None if matches!(v.ty, TypeRef::Named(_)) => w.line(&format!(
+                "j => j.ValueKind == JsonValueKind.Null ? throw new JsonException(\"null\") : new {vname}({}){sep}",
+                qualified(cs_json_from_element(&v.ty, "j", opts), &v.ty, ns)
             )),
             None => w.line(&format!("j => new {vname}({}){sep}", qualified(cs_json_from_element(&v.ty, "j", opts), &v.ty, ns))),
         }

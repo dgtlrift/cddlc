@@ -40,10 +40,34 @@ fn inline_named(ty: &TypeRef) -> Option<&str> {
     }
 }
 
+thread_local! {
+    /// Whether this `generate` is `--no-std`, where an array or table holds its
+    /// items inline (`heapless`), so it doesn't end a cycle as a `Vec` does
+    /// (dgtlrift/cddlc#245).
+    static NO_STD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// The types `name` holds inline: its required and optional members' and its
-/// variants' named types.
+/// variants' named types; with `--no-std`, its repeated members', other
+/// entries', items' and entries' too.
 fn inline_edges<'m>(name: &str, module: &'m IrModule) -> Vec<&'m str> {
+    let no_std = NO_STD.with(|n| n.get());
     match module.get(name) {
+        Some(TypeDef::Struct(s)) if no_std => s
+            .fields
+            .iter()
+            .filter_map(|f| inline_named(&f.ty))
+            .chain(s.rest.iter().flat_map(|r| {
+                inline_named(&r.key_ty)
+                    .into_iter()
+                    .chain(inline_named(&r.val_ty))
+            }))
+            .collect(),
+        Some(TypeDef::Array(a)) if no_std => inline_named(&a.element).into_iter().collect(),
+        Some(TypeDef::Map(m)) if no_std => inline_named(&m.key_ty)
+            .into_iter()
+            .chain(inline_named(&m.val_ty))
+            .collect(),
         Some(TypeDef::Struct(s)) => s
             .fields
             .iter()
@@ -393,6 +417,7 @@ impl Backend for RustBackend {
         opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "Rust", true)?;
+        NO_STD.with(|n| n.set(opts.no_std));
         // A member whose type is an inline choice holds any alternative, in
         // an enum of its own (dgtlrift/cddlc#146).
         // A rule whose type would hide one the crate uses (`result` →

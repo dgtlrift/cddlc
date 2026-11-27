@@ -103,8 +103,13 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
         w.line("import 'package:cbor/cbor.dart';");
     }
     w.blank();
-    if !opts.is_json() && module_uses_tags(module) {
-        let mut helpers = vec![UNTAG_HELPER];
+    if !opts.is_json() && (module_uses_tags(module) || module_uses_any(module)) {
+        let mut helpers = Vec::new();
+        if module_uses_tags(module) {
+            helpers.push(UNTAG_HELPER);
+        }
+        // An `any` or inline choice is written through `_withTags`, with or
+        // without tags (a choice's `any` variant was, with none in the schema).
         if module_uses_any(module) {
             helpers.push(WITH_TAGS_HELPER);
         }
@@ -938,7 +943,7 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
                         "static const {vname} = {class_name}._({kind_str:?}, {lit});"
                     ));
                 } else {
-                    let dart_t = primitive_to_dart(unwrap_primitive(&v.ty));
+                    let dart_t = primitive_to_dart(unwrap_primitive(&v.ty), opts.is_json());
                     w.line(&format!(
                         "static {class_name} {vname}({dart_t} value) => \
                          {class_name}._({kind_str:?}, value);"
@@ -946,7 +951,7 @@ fn emit_enum(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &Codege
                 }
             }
             TypeRef::Primitive(_) => {
-                let dart_t = primitive_to_dart(unwrap_primitive(&v.ty));
+                let dart_t = primitive_to_dart(unwrap_primitive(&v.ty), opts.is_json());
                 w.line(&format!(
                     "static {class_name} {vname}({dart_t} value) => \
                      {class_name}._({kind_str:?}, value);"
@@ -1155,9 +1160,20 @@ fn emit_enum_json(
             via_alias(json_from_expr(&v.ty, "raw", module, opts), &class_name, v)
         ));
     }
-    w.line(&format!(
-        "throw ArgumentError('Cannot decode {class_name}: $raw');"
-    ));
+    // An `any` variant takes what the others don't (dgtlrift/cddlc#178).
+    match e
+        .variants
+        .iter()
+        .find(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Any)))
+    {
+        Some(v) => w.line(&format!(
+            "return {class_name}._({:?}, raw);",
+            variant_kind_str(v)
+        )),
+        None => w.line(&format!(
+            "throw ArgumentError('Cannot decode {class_name}: $raw');"
+        )),
+    }
     w.dedent();
     w.line("}");
 }
@@ -1331,9 +1347,20 @@ fn emit_enum_cbor(
             via_alias(cbor_from_expr(&v.ty, "v", module, opts), &class_name, v)
         ));
     }
-    w.line(&format!(
-        "throw ArgumentError('Cannot decode {class_name}: $v');"
-    ));
+    // An `any` variant takes what the others don't (dgtlrift/cddlc#178).
+    match e
+        .variants
+        .iter()
+        .find(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Any)))
+    {
+        Some(v) => w.line(&format!(
+            "return {class_name}._({:?}, v);",
+            variant_kind_str(v)
+        )),
+        None => w.line(&format!(
+            "throw ArgumentError('Cannot decode {class_name}: $v');"
+        )),
+    }
     w.dedent();
     w.line("}");
 }
@@ -1387,6 +1414,10 @@ fn emit_tests(module: &IrModule, lib_name: &str, opts: &CodegenOptions) -> Strin
         w.line("import 'dart:typed_data';");
     }
     w.line("import 'package:test/test.dart';");
+    // An `any`'s test values are package:cbor's (dgtlrift/cddlc#178).
+    if !opts.is_json() && cddlc_codegen::module_uses_any(module) {
+        w.line("import 'package:cbor/cbor.dart';");
+    }
     w.line(&format!("import '../lib/{lib_name}.dart';"));
     w.blank();
     w.line("void main() {");
@@ -1580,7 +1611,7 @@ fn emit_enum_test(w: &mut IndentWriter, module: &IrModule, e: &EnumDef, opts: &C
 
 // ── Type helpers ──────────────────────────────────────────────────────────────
 
-fn primitive_to_dart(p: &Primitive) -> &'static str {
+fn primitive_to_dart(p: &Primitive, json: bool) -> &'static str {
     match p {
         Primitive::Bool => "bool",
         Primitive::Null => "Null",
@@ -1589,13 +1620,16 @@ fn primitive_to_dart(p: &Primitive) -> &'static str {
         Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => "double",
         Primitive::Bstr => "Uint8List",
         Primitive::Tstr => "String",
-        Primitive::Any => "dynamic",
+        // `any` (dgtlrift/cddlc#178): package:cbor's value of the item, which
+        // keeps its kind, tags and float width; any JSON value in JSON.
+        Primitive::Any if json => "dynamic",
+        Primitive::Any => "CborValue",
     }
 }
 
 fn typeref_to_dart(tr: &TypeRef, _opts: &CodegenOptions) -> String {
     match tr {
-        TypeRef::Primitive(p) => primitive_to_dart(p).to_owned(),
+        TypeRef::Primitive(p) => primitive_to_dart(p, _opts.is_json()).to_owned(),
         TypeRef::Named(n) => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => typeref_to_dart(inner, _opts),
         TypeRef::Choice(_) => "dynamic".to_owned(),
@@ -1738,7 +1772,9 @@ fn cbor_from_expr(ty: &TypeRef, expr: &str, module: &IrModule, opts: &CodegenOpt
             }
             Primitive::Bstr => format!("Uint8List.fromList(({expr} as CborBytes).bytes)"),
             Primitive::Tstr => format!("({expr} as CborString).toString()"),
-            Primitive::Undefined | Primitive::Any => format!("({expr}).toObject()"),
+            Primitive::Undefined => format!("({expr}).toObject()"),
+            // The item's own value (dgtlrift/cddlc#178).
+            Primitive::Any => expr.to_owned(),
         },
         TypeRef::Named(n) => match module.get(n.as_str()) {
             Some(TypeDef::Alias(a)) => match a.tagged {
@@ -1849,8 +1885,8 @@ fn cbor_to_expr_tagged(
             Primitive::Bstr => format!("CborBytes({field}{t})"),
             Primitive::Tstr => format!("CborString({field}{t})"),
             Primitive::Undefined => format!("CborUndefined({t_only})"),
-            Primitive::Any if tags.is_empty() => format!("CborValue({field})"),
-            Primitive::Any => format!("_withTags({tags}, CborValue({field}))"),
+            Primitive::Any if tags.is_empty() => format!("(({field}) as CborValue)"),
+            Primitive::Any => format!("_withTags({tags}, ({field}) as CborValue)"),
         },
         TypeRef::Named(n) => match module.get(n.as_str()) {
             Some(TypeDef::Alias(a)) => {
@@ -1961,6 +1997,8 @@ fn test_default_for(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> St
                 }
             }
             Primitive::Tstr => "'test'".to_owned(),
+            // `null`, as an item (dgtlrift/cddlc#178).
+            Primitive::Any if !opts.is_json() => "const CborNull()".to_owned(),
             _ => "null".to_owned(),
         },
         TypeRef::Named(_) => "null".to_owned(), // can't default-construct

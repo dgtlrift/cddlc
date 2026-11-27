@@ -133,6 +133,11 @@ function R.want_string(x, at)
   if type(x) ~= "string" then fail(at, "expected a string, got " .. lua_kind(x)) end
 end
 
+--- An `any` member's value: an item, as `decode` reads one (dgtlrift/cddlc#178).
+function R.want_item(x, at)
+  if type(x) ~= "table" or KINDS[x.k] == nil then fail(at, "expected an item, got " .. lua_kind(x)) end
+end
+
 function R.want_text(x, at)
   R.want_string(x, at)
   if not utf8.len(x) then fail(at, "text is not valid UTF-8") end
@@ -205,12 +210,13 @@ local function enc(item, out)
   elseif k == "nint" then
     out[#out + 1] = head(1, -1 - item.v)
   elseif k == "float" then
-    if item.w == 32 then out[#out + 1] = "\xfa" .. spack(">f", item.v)
+    if item.w == 16 and item.bits then out[#out + 1] = "\xf9" .. spack(">I2", item.bits)
+    elseif item.w == 32 then out[#out + 1] = "\xfa" .. spack(">f", item.v)
     else out[#out + 1] = "\xfb" .. spack(">d", item.v) end
   elseif k == "bool" then
     out[#out + 1] = item.v and "\xf5" or "\xf4"
   elseif k == "null" then
-    out[#out + 1] = "\xf6"
+    out[#out + 1] = item.undefined and "\xf7" or "\xf6"
   elseif k == "text" then
     out[#out + 1] = head(3, #item.v)
     out[#out + 1] = item.v
@@ -347,8 +353,11 @@ dec = function(s, pos, depth)
   end
   if ai == 20 then return { k = "bool", v = false }, pos end
   if ai == 21 then return { k = "bool", v = true }, pos end
-  if ai == 22 or ai == 23 then return { k = "null" }, pos end
-  if ai == 25 then need(s, pos, 2) local h = sunpack(">I2", s, pos) return { k = "float", v = half(h), w = 16 }, pos + 2 end
+  if ai == 22 then return { k = "null" }, pos end
+  -- `undefined` reads as null, and is written back as itself (dgtlrift/cddlc#178).
+  if ai == 23 then return { k = "null", undefined = true }, pos end
+  -- A float16 keeps its bits, so it's written back as it was.
+  if ai == 25 then need(s, pos, 2) local h = sunpack(">I2", s, pos) return { k = "float", v = half(h), w = 16, bits = h }, pos + 2 end
   if ai == 26 then need(s, pos, 4) local f = sunpack(">f", s, pos) return { k = "float", v = f, w = 32 }, pos + 4 end
   if ai == 27 then need(s, pos, 8) local d = sunpack(">d", s, pos) return { k = "float", v = d, w = 64 }, pos + 8 end
   error("cbor: unsupported simple value " .. ai, 0)
@@ -475,7 +484,9 @@ local function enc(item, out)
     out[#out + 1] = "{"
     for i, p in ipairs(item.v) do
       if i > 1 then out[#out + 1] = "," end
-      out[#out + 1] = json_str(p[1])
+      -- A key is text, or a text item as `decode` reads it (an `any`'s maps,
+      -- dgtlrift/cddlc#178).
+      out[#out + 1] = json_str(type(p[1]) == "table" and p[1].v or p[1])
       out[#out + 1] = ":"
       enc(p[2], out)
     end
