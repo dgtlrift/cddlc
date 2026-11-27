@@ -1413,9 +1413,19 @@ fn int_literal(v: &EnumVariant) -> Option<String> {
     }
 }
 
-/// A variant that carries no value: a string or null literal, or an integer literal.
+/// Whether a `tstr` variant is a text literal (`"ok"`), not any text.
+fn is_text_literal(v: &EnumVariant) -> bool {
+    v.constraints
+        .iter()
+        .any(|c| matches!(c, Constraint::Eq(LiteralValue::Text(_))))
+}
+
+/// A variant that carries no value: a string or null literal, or an integer
+/// literal. A `tstr` variant that isn't a literal holds its text
+/// (dgtlrift/cddlc#234).
 fn is_unit_variant(v: &EnumVariant) -> bool {
-    matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr | Primitive::Null))
+    matches!(&v.ty, TypeRef::Primitive(Primitive::Null))
+        || (matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v))
         || int_literal(v).is_some()
 }
 
@@ -1489,7 +1499,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                 TypeRef::Primitive(Primitive::Null) => {
                     w.line("return new TextEncoder().encode('null');");
                 }
-                TypeRef::Primitive(Primitive::Tstr) => {
+                TypeRef::Primitive(Primitive::Tstr) if is_text_literal(v) => {
                     w.line(&format!(
                         "return new TextEncoder().encode(JSON.stringify({cddl_str:?}));"
                     ));
@@ -1526,9 +1536,13 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                     w.line(&format!("enc.int({n}n); break;"));
                 }
                 TypeRef::Primitive(Primitive::Null) => w.line("enc.null(); break;"),
-                TypeRef::Primitive(Primitive::Tstr) => {
+                TypeRef::Primitive(Primitive::Tstr) if is_text_literal(v) => {
                     let s = variant_str(v);
                     w.line(&format!("enc.text({s:?}); break;"));
+                }
+                // A `tstr` variant writes its text (dgtlrift/cddlc#234).
+                TypeRef::Primitive(Primitive::Tstr) => {
+                    w.line("enc.text((val as any).value); break;")
                 }
                 TypeRef::Primitive(Primitive::Uint) => {
                     w.line("enc.uint((val as any).value); break;")
@@ -1615,15 +1629,26 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.line("switch (inner) {");
         w.indent();
         for v in &e.variants {
-            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
+            if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v) {
                 let vname = to_pascal_case(&v.name);
                 let cddl_str = variant_str(v);
                 w.line(&format!("case {cddl_str:?}: return {{ kind: {vname:?} }};"));
             }
         }
-        w.line(&format!(
-            "default: throw new Error(`Unknown {type_name} variant: ${{inner}}`);"
-        ));
+        // A `tstr` variant takes any other text (dgtlrift/cddlc#234).
+        let tstr = e
+            .variants
+            .iter()
+            .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v));
+        match tstr {
+            Some(v) => w.line(&format!(
+                "default: return {{ kind: {:?}, value: inner }};",
+                to_pascal_case(&v.name)
+            )),
+            None => w.line(&format!(
+                "default: throw new Error(`Unknown {type_name} variant: ${{inner}}`);"
+            )),
+        }
         w.dedent();
         w.line("}");
         w.dedent();
@@ -2732,6 +2757,9 @@ fn ts_enum_variant_value(
     let n = if opts.is_json() { "" } else { "n" };
     match &v.ty {
         _ if is_unit_variant(v) => format!("{{ kind: {vname:?} }} as {type_name}"),
+        TypeRef::Primitive(Primitive::Tstr) => {
+            format!("{{ kind: {vname:?}, value: 'hello' }} as {type_name}")
+        }
         TypeRef::Primitive(Primitive::Uint) => {
             format!("{{ kind: {vname:?}, value: 42{n} }} as {type_name}")
         }

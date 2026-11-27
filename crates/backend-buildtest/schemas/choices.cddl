@@ -29,3 +29,7 @@ labels = { + tstr => tstr } / null
 
 ; `null` is CBOR null, not the text "null"
 power = "on" / "off" / null
+
+; A text literal beside a `tstr` alternative, which holds any other text
+; (dgtlrift/cddlc#234)
+label = "none" / tstr
