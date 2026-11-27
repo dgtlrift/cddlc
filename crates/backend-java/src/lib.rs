@@ -614,7 +614,19 @@ fn java_type(ty: &TypeRef, boxed: bool, qual: Option<&str>) -> String {
             None => java_type_name(n),
         },
         TypeRef::Tagged(_, inner) => java_type(inner, boxed, qual),
+        // One type or `null`: that type, null when it's null (dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if or_null(cs).is_some() => java_type(or_null(cs).unwrap(), true, qual),
         TypeRef::Choice(_) => "Object".into(),
+    }
+}
+
+/// The other alternative of a choice of one type and `null`.
+fn or_null(cs: &[TypeRef]) -> Option<&TypeRef> {
+    let is_null = |t: &TypeRef| matches!(t, TypeRef::Primitive(Primitive::Null));
+    match cs {
+        [a, b] if is_null(b) && !is_null(a) => Some(a),
+        [a, b] if is_null(a) && !is_null(b) => Some(b),
+        _ => None,
     }
 }
 
@@ -648,6 +660,10 @@ fn is_bytes(ty: &TypeRef) -> bool {
 
 /// Whether a Java value of this type is a reference that must not be null.
 fn is_reference(ty: &TypeRef) -> bool {
+    // A type-or-null choice may be null (dgtlrift/cddlc#224).
+    if matches!(ty, TypeRef::Choice(cs) if or_null(cs).is_some()) {
+        return false;
+    }
     match base_primitive(ty) {
         Some(p) => matches!(
             p,
@@ -674,6 +690,12 @@ fn to_raw(ty: &TypeRef, expr: &str) -> String {
         },
         TypeRef::Named(_) => format!("{expr}.toRaw()"),
         TypeRef::Tagged(tag, inner) => format!("Cddl.tag({}L, {})", tag.0, to_raw(inner, expr)),
+        TypeRef::Choice(cs) if or_null(cs).is_some() => {
+            format!(
+                "({expr} == null ? null : {})",
+                to_raw(or_null(cs).unwrap(), expr)
+            )
+        }
         TypeRef::Choice(cs) if cs.iter().all(|c| matches!(c, TypeRef::Primitive(_))) => {
             format!("Cddl.choiceToRaw({expr})")
         }
@@ -709,6 +731,10 @@ fn from_raw(ty: &TypeRef, raw: &str, at: &str, qual: Option<&str>) -> String {
             qual,
         ),
         // A choice of primitives: each alternative's reader, in order.
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "({raw} == null ? null : {})",
+            from_raw(or_null(cs).unwrap(), raw, at, qual)
+        ),
         TypeRef::Choice(cs) if cs.iter().all(|c| matches!(c, TypeRef::Primitive(_))) => {
             let alts: Vec<String> = cs
                 .iter()
@@ -2778,6 +2804,14 @@ fn java_value(
                 Some(TypeDef::Map(_)) if depth > MAX_FIXTURE_DEPTH => {
                     format!("new {class}(Map.of())")
                 }
+                // An enum takes a variant that doesn't nest, if it has one
+                // (`link = next / null`; dgtlrift/cddlc#224).
+                Some(TypeDef::Enum(e)) if depth >= MAX_FIXTURE_DEPTH => e
+                    .variants
+                    .iter()
+                    .find(|v| !matches!(v.ty, TypeRef::Named(_)))
+                    .map(|v| java_variant_value(cx, e, v, depth))
+                    .unwrap_or_else(|| "null".into()),
                 _ if depth > MAX_FIXTURE_DEPTH => "null".into(),
                 Some(TypeDef::Struct(s)) => java_struct_value(cx, s, explicit, depth),
                 Some(TypeDef::Alias(a)) => format!(
