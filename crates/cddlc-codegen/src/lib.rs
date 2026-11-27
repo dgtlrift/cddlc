@@ -30,12 +30,12 @@ pub use backend::{
 pub use regexp::{constrained_sample, regexp_sample, SampleValue};
 pub use emit::{
     bits_mask_bytes, bits_mask_u64, c_reserved_renames, capacity_value, check_rest_keys,
-    constraint_to_c_check, constraint_to_cpp_check, constraint_to_rust_check,
-    csharp_reserved_renames, dart_reserved_renames, dcbor_key_order, default_is_encodable,
-    emit_doc_lines, enum_variant_text, field_key_json, has_int_keys, inline_decl_order,
-    is_indirect, literal_to_c, literal_to_rust, map_with_non_text_rest, module_uses_any,
-    module_uses_bits, primitive_to_c, primitive_to_rust, record_optionals_before, record_repeated,
-    rename_types, repeat_bounds, reserved_renames, rest_keys_are_text, rust_field_ident,
-    rust_reserved_renames, same_map_shape, to_pascal_case, to_screaming_snake, to_snake_case,
-    with_source_docs, DocStyle, IndentWriter,
+    constraint_to_c_check, constraint_to_cpp_check, constraint_to_rust_check, cpp_ident,
+    cpp_reserved_renames, csharp_reserved_renames, dart_reserved_renames, dcbor_key_order,
+    default_is_encodable, emit_doc_lines, enum_variant_text, field_key_json, has_int_keys,
+    inline_decl_order, is_indirect, literal_to_c, literal_to_rust, map_with_non_text_rest,
+    module_uses_any, module_uses_bits, primitive_to_c, primitive_to_rust, record_optionals_before,
+    record_repeated, rename_types, repeat_bounds, reserved_renames, rest_keys_are_text,
+    rust_field_ident, rust_reserved_renames, same_map_shape, to_pascal_case, to_screaming_snake,
+    to_snake_case, with_source_docs, DocStyle, IndentWriter,
 };

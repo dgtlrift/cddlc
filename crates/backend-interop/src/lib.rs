@@ -100,9 +100,13 @@ pub fn generate(
         });
     }
     if langs.cpp {
+        // C++ renames a rule named like a runtime type (`ErrorCode`).
+        let renamed =
+            cddlc_codegen::rename_types(module, &cddlc_codegen::cpp_reserved_renames(module));
+        let cpp_vectors = collect_vectors(&renamed, opts);
         files.push(GeneratedFile {
             path: format!("{dir}/cpp/test_interop.cpp"),
-            content: emit_cpp_harness(&vectors, name, opts),
+            content: emit_cpp_harness(&cpp_vectors, name, opts),
         });
     }
     if langs.csharp {
@@ -1186,7 +1190,8 @@ fn emit_cpp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptions)
         w.blank();
 
         for f in &v.fields {
-            let fname = &f.name;
+            // As the C++ backend names it: a keyword gets a `_`.
+            let fname = cddlc_codegen::cpp_ident(&f.name);
             match &f.value {
                 FieldVal::Uint(n) => w.line(&format!("assert(decoded.{fname} == {n}ULL);")),
                 FieldVal::Int(n) => w.line(&format!("assert(decoded.{fname} == {n}LL);")),

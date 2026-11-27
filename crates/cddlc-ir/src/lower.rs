@@ -572,6 +572,28 @@ impl<'m> LowerCtx<'m> {
                     vec![Constraint::Eq(lit)],
                 ))
             }
+            // A generic's instance (`extension-block-use<6, embedded-cbor<x>>`,
+            // RFC 9171) is a type of its own, `<rule>-alt<i>`: it was the
+            // generic itself, which no backend emits.
+            Type2::Typename { name, args } if !args.is_empty() => {
+                let mut inst: SmolStr = format!("{rule_name}-alt{index}").into();
+                while self.output.contains_key(&inst) || self.known_rules.contains(&inst) {
+                    inst = format!("{inst}-type").into();
+                }
+                self.known_rules.insert(inst.clone());
+                let def = self.lower_generic_instance(
+                    &inst,
+                    name.node.as_str(),
+                    args,
+                    &PragmaMeta::default(),
+                )?;
+                self.output.insert(inst.clone(), def);
+                Ok((
+                    format!("{}{index}", pascal_case(name.node.as_str())).into(),
+                    TypeRef::Named(inst),
+                    vec![],
+                ))
+            }
             Type2::Typename { name, .. } => {
                 let n = name.node.as_str();
                 let tr = self.resolve_typeref(n, rule_name)?;

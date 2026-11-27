@@ -486,7 +486,7 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
     }
     for f in &s.fields {
         let ty = cs_field_type(&f.ty, &f.occurrence, opts);
-        let local = to_snake_case(&f.name);
+        let local = cs_local(&f.name);
         let def = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
@@ -508,7 +508,7 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
     w.line("int read = 0;");
     w.line("bool More() => length is int n ? read < n : reader.PeekState() != CborReaderState.EndArray;");
     for (i, f) in s.fields.iter().enumerate() {
-        let local = to_snake_case(&f.name);
+        let local = cs_local(&f.name);
         if let (Occurrence::Optional, Some(b)) = (&f.occurrence, &before) {
             w.line(&format!("if (count > {})", required + b[i]));
         } else if matches!(f.occurrence, Occurrence::Optional) {
@@ -556,7 +556,7 @@ fn emit_record_cbor(w: &mut IndentWriter, s: &StructDef, type_name: &str, opts: 
         w.line(&format!(
             "{} = {},",
             to_pascal_case(&f.name),
-            to_snake_case(&f.name)
+            cs_local(&f.name)
         ));
     }
     w.dedent();
@@ -650,7 +650,7 @@ fn emit_record_cbor_repeated(
     }
     for f in &s.fields {
         let ty = cs_field_type(&f.ty, &f.occurrence, opts);
-        let local = to_snake_case(&f.name);
+        let local = cs_local(&f.name);
         let def = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
@@ -669,7 +669,7 @@ fn emit_record_cbor_repeated(
     emit_cs_repeat_check(w, type_name, rf, "reps", "CborContentException");
     w.line("reader.ReadStartArray();");
     for f in &s.fields {
-        let local = to_snake_case(&f.name);
+        let local = cs_local(&f.name);
         if f.occurrence.is_repeated() {
             w.line(&format!(
                 "for (int k = 0; k < reps; k++) {local}.Add({});",
@@ -695,7 +695,7 @@ fn emit_record_cbor_repeated(
         w.line(&format!(
             "{} = {},",
             to_pascal_case(&f.name),
-            to_snake_case(&f.name)
+            cs_local(&f.name)
         ));
     }
     w.dedent();
@@ -736,7 +736,7 @@ fn emit_record_json_repeated(
     ));
     w.line(&format!("int reps = a.GetArrayLength() - {fixed};"));
     emit_cs_repeat_check(w, type_name, rf, "reps", "JsonException");
-    let local = to_snake_case(&rf.name);
+    let local = cs_local(&rf.name);
     w.line(&format!(
         "var {local} = {};",
         cs_default_value(&rf.ty, &rf.occurrence, opts).trim()
@@ -1115,7 +1115,7 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     // Declare locals
     for f in &s.fields {
         let ty = cs_field_type(&f.ty, &f.occurrence, opts);
-        let local = to_snake_case(&f.name);
+        let local = cs_local(&f.name);
         let def = cs_default_value(&f.ty, &f.occurrence, opts);
         w.line(&format!("{ty} {local} = {def};"));
     }
@@ -1155,7 +1155,7 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.indent();
 
     for f in &s.fields {
-        let local = to_snake_case(&f.name);
+        let local = cs_local(&f.name);
         match &f.key {
             cddlc_ir::FieldKey::Text(t) => w.line(&format!("case {:?}:", t.as_str())),
             cddlc_ir::FieldKey::Int(n) => w.line(&format!("case {n}L:")),
@@ -1212,7 +1212,7 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
     w.indent();
     for f in &s.fields {
         let pname = to_pascal_case(&f.name);
-        let local = to_snake_case(&f.name);
+        let local = cs_local(&f.name);
         w.line(&format!("{pname} = {local},"));
     }
     if let Some(r) = &s.rest {
@@ -2812,6 +2812,98 @@ fn cs_type_default(ty: &TypeRef, opts: &CodegenOptions) -> String {
             .first()
             .map(|c| cs_type_default(c, opts))
             .unwrap_or_else(|| "null!".into()),
+    }
+}
+
+/// C#'s keywords, which a local can't be named without an `@`.
+const CS_KEYWORDS: &[&str] = &[
+    "abstract",
+    "as",
+    "base",
+    "bool",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "checked",
+    "class",
+    "const",
+    "continue",
+    "decimal",
+    "default",
+    "delegate",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "event",
+    "explicit",
+    "extern",
+    "false",
+    "finally",
+    "fixed",
+    "float",
+    "for",
+    "foreach",
+    "goto",
+    "if",
+    "implicit",
+    "in",
+    "int",
+    "interface",
+    "internal",
+    "is",
+    "lock",
+    "long",
+    "namespace",
+    "new",
+    "null",
+    "object",
+    "operator",
+    "out",
+    "override",
+    "params",
+    "private",
+    "protected",
+    "public",
+    "readonly",
+    "ref",
+    "return",
+    "sbyte",
+    "sealed",
+    "short",
+    "sizeof",
+    "stackalloc",
+    "static",
+    "string",
+    "struct",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "uint",
+    "ulong",
+    "unchecked",
+    "unsafe",
+    "ushort",
+    "using",
+    "virtual",
+    "void",
+    "volatile",
+    "while",
+];
+
+/// A decoder's local for a member: its snake_case name, with an `@` when
+/// that's a C# keyword (`ref`, `protected`, `params`).
+fn cs_local(name: &str) -> String {
+    let s = to_snake_case(name);
+    if CS_KEYWORDS.contains(&s.as_str()) {
+        format!("@{s}")
+    } else {
+        s
     }
 }
 
