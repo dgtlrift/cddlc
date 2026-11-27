@@ -114,6 +114,13 @@ class Readings {
 typedef DeviceId = String;
 ```
 
+## `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178): in CBOR,
+package:cbor's `CborValue` of it, which keeps its kind, tags and float width
+and is written back byte for byte; in JSON, the value `jsonDecode` gives
+(`dynamic`). A choice's `any` variant takes any item the others don't.
+
 ## Supported serialization formats
 
 | `--format` | Generated methods |
