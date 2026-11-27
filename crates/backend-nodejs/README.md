@@ -81,6 +81,15 @@ export function decodeReadings(data: Uint8Array): Readings { … }
 export type DeviceId = string;
 ```
 
+### `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178): `unknown`, the
+value cborg (or `JSON.parse`) decodes it to, which encoding gives back to them.
+The same value comes back, though not always the same bytes: a map is read as
+an object keyed by text, and a float is written at the width cborg picks. A
+CBOR tag inside it decodes only if the schema uses that tag. A choice's `any`
+variant takes any item the others don't.
+
 ## Supported serialization formats
 
 | `--format` | Generated functions |

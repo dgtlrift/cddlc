@@ -458,10 +458,12 @@ fn emit_source(module: &IrModule, opts: &CodegenOptions) -> String {
         // A map with integer keys (`1 => tstr`) needs cborg's `useMaps`; the
         // decoded Maps become objects whose keys are the keys' text, which is
         // how the generated code reads them, as in JSON (dgtlrift/cddlc#176).
-        let int_keys = module
-            .types
-            .values()
-            .any(|d| matches!(d, TypeDef::Struct(s) if cddlc_codegen::has_int_keys(s)));
+        // An `any` may hold a map with integer keys too (dgtlrift/cddlc#178).
+        let int_keys = cddlc_codegen::module_uses_any(module)
+            || module
+                .types
+                .values()
+                .any(|d| matches!(d, TypeDef::Struct(s) if cddlc_codegen::has_int_keys(s)));
         if int_keys {
             w.line("]), useMaps: true };");
         } else {
@@ -1547,6 +1549,10 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                     let ef = encode_fn_name(n);
                     w.line(&format!("enc.writeBytes({ef}((val as any).value)); break;"));
                 }
+                // The value cborg decoded, written back (dgtlrift/cddlc#178).
+                TypeRef::Primitive(Primitive::Any) => {
+                    w.line("enc.writeBytes(cborgEncode((val as any).value)); break;")
+                }
                 _ => w.line("enc.null(); break;"),
             }
             w.dedent();
@@ -1621,9 +1627,15 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
                 w.line(&format!("case {cddl_str:?}: return {{ kind: {vname:?} }};"));
             }
         }
-        w.line(&format!(
-            "default: throw new Error(`Unknown {type_name} variant: ${{inner}}`);"
-        ));
+        if !e
+            .variants
+            .iter()
+            .any(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Any)))
+        {
+            w.line(&format!(
+                "default: throw new Error(`Unknown {type_name} variant: ${{inner}}`);"
+            ));
+        }
         w.dedent();
         w.line("}");
         w.dedent();
@@ -1742,7 +1754,18 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.line(&format!("try {{ return {{ kind: {vname:?}, value: {value} }}; }} catch {{ /* next variant */ }}"));
     }
 
-    w.line(&format!("throw new Error(`Cannot decode {type_name}`);"));
+    // An `any` variant takes what the others don't (dgtlrift/cddlc#178).
+    match e
+        .variants
+        .iter()
+        .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Any)))
+    {
+        Some(v) => w.line(&format!(
+            "return {{ kind: {:?}, value: inner }};",
+            to_pascal_case(&v.name)
+        )),
+        None => w.line(&format!("throw new Error(`Cannot decode {type_name}`);")),
+    }
     w.dedent();
     w.line("}");
 }
@@ -2111,7 +2134,7 @@ fn emit_alias(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
 /// Produce an expression that converts a TS value to its JSON-serializable form.
 fn ts_json_encode_expr(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => format!("toBase64Url({expr})"),
+        TypeRef::Primitive(Primitive::Bstr) => format!("toBase64Url({expr})"),
         TypeRef::Named(n) => {
             let ef = encode_fn_name(n);
             // encode returns Uint8Array; convert to JSON string and parse back
@@ -2155,8 +2178,8 @@ fn ts_json_convert_primitive(p: &Primitive, expr: &str, at: &str) -> String {
         }
         Primitive::Tstr => format!("expectString({expr}, {at:?})"),
         Primitive::Bstr => format!("fromBase64Url(expectString({expr}, {at:?}))"),
-        // `any` keeps its historical form: a base64url string.
-        Primitive::Any => format!("fromBase64Url(String({expr}))"),
+        // Any JSON value, as JSON.parse read it (dgtlrift/cddlc#178).
+        Primitive::Any => expr.to_owned(),
         Primitive::Null => format!("expectNull({expr}, {at:?})"),
         Primitive::Undefined => "null".into(),
     }
@@ -2231,7 +2254,9 @@ fn ts_encode_call(p: &Primitive, expr: &str) -> String {
         Primitive::Float32 => format!("enc.float32({expr})"),
         Primitive::Float64 | Primitive::Float => format!("enc.float64({expr})"),
         Primitive::Tstr => format!("enc.text({expr})"),
-        Primitive::Bstr | Primitive::Any => format!("enc.bytes({expr})"),
+        Primitive::Bstr => format!("enc.bytes({expr})"),
+        // The value cborg decoded, written back (dgtlrift/cddlc#178).
+        Primitive::Any => format!("enc.writeBytes(cborgEncode({expr}))"),
     }
 }
 
@@ -2290,7 +2315,8 @@ fn ts_convert_primitive(p: &Primitive, expr: &str) -> String {
         Primitive::Float16 | Primitive::Float32 => format!("Number({expr}) as number"),
         Primitive::Float64 | Primitive::Float => format!("Number({expr}) as number"),
         Primitive::Tstr => format!("String({expr})"),
-        Primitive::Bstr | Primitive::Any => format!("{expr} as Uint8Array"),
+        Primitive::Bstr => format!("{expr} as Uint8Array"),
+        Primitive::Any => expr.to_owned(),
         Primitive::Null | Primitive::Undefined => "null".into(),
     }
 }
@@ -2527,7 +2553,9 @@ fn ts_primitive(p: &Primitive, opts: &CodegenOptions) -> &'static str {
         Primitive::Float16 | Primitive::Float32 => "number",
         Primitive::Float64 | Primitive::Float => "number",
         Primitive::Tstr => "string",
-        Primitive::Bstr | Primitive::Any => "Uint8Array",
+        Primitive::Bstr => "Uint8Array",
+        // The value cborg or JSON.parse decoded (dgtlrift/cddlc#178).
+        Primitive::Any => "unknown",
     }
 }
 
@@ -2745,6 +2773,10 @@ fn ts_enum_variant_value(
         TypeRef::Primitive(
             Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float,
         ) => format!("{{ kind: {vname:?}, value: 1.5 }} as {type_name}"),
+        // An item no other variant takes, `[1, "a"]` (dgtlrift/cddlc#178).
+        TypeRef::Primitive(Primitive::Any) => {
+            format!("{{ kind: {vname:?}, value: [1, 'a'] }} as {type_name}")
+        }
         // A variant of a named type holds a value of it (dgtlrift/cddlc#102).
         TypeRef::Named(n) => format!(
             "{{ kind: {vname:?}, value: {} }} as {type_name}",
@@ -3040,10 +3072,13 @@ fn ts_test_value(
             ) => "0".into(),
             TypeRef::Primitive(Primitive::Tstr) if explicit => "'hello'".into(),
             TypeRef::Primitive(Primitive::Tstr) => "''".into(),
-            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if explicit => {
+            TypeRef::Primitive(Primitive::Bstr) if explicit => {
                 "new Uint8Array([0x01, 0x02])".into()
             }
-            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "new Uint8Array()".into(),
+            TypeRef::Primitive(Primitive::Bstr) => "new Uint8Array()".into(),
+            // An item that isn't a byte string (dgtlrift/cddlc#178), or `null`.
+            TypeRef::Primitive(Primitive::Any) if explicit => "[1, 'a']".into(),
+            TypeRef::Primitive(Primitive::Any) => "null".into(),
             TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "null".into(),
             TypeRef::Named(name) => ts_named_value(name, module, opts, explicit, depth),
             // A tagged member (`timestamp: #6.1(uint)`) holds its inner type's value.
