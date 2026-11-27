@@ -993,8 +993,19 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
                 })
             })
             .collect();
+        // Members with constraints to check, as CBOR checks them on decode.
+        let checked: Vec<&cddlc_ir::FieldDef> = s
+            .fields
+            .iter()
+            .filter(|f| matches!(f.occurrence, Occurrence::Required | Occurrence::Optional))
+            .filter(|f| {
+                f.constraints
+                    .iter()
+                    .any(|c| cs_constraint_check(c, "x", &f.ty).is_some())
+            })
+            .collect();
         w.line(&format!("public static {type_name} FromJson(byte[] data)"));
-        if pinned.is_empty() {
+        if pinned.is_empty() && checked.is_empty() {
             w.indent();
             w.line(&format!(
                 "=> JsonSerializer.Deserialize<{type_name}>(data)!;"
@@ -1012,6 +1023,26 @@ fn emit_struct_decode(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions
                 "if (!Equals(v.{prop}, {lit})) throw new JsonException({:?});",
                 format!("{type_name}.{prop}: must be {lit}")
             ));
+        }
+        for f in checked {
+            let prop = format!("v.{}", to_pascal_case(&f.name));
+            if matches!(f.occurrence, Occurrence::Optional) {
+                w.line(&format!("if ({prop} is not null)"));
+                w.line("{");
+                w.indent();
+                emit_cs_validation(
+                    w,
+                    &f.constraints,
+                    &cs_present_expr(&f.ty, &prop, opts),
+                    &f.name,
+                    &f.ty,
+                    opts,
+                );
+                w.dedent();
+                w.line("}");
+            } else {
+                emit_cs_validation(w, &f.constraints, &prop, &f.name, &f.ty, opts);
+            }
         }
         w.line("return v;");
         w.dedent();
@@ -2632,6 +2663,14 @@ fn cs_constraint_check(c: &Constraint, expr: &str, ty: &TypeRef) -> Option<Strin
             Some(format!("{expr} {op} {l}"))
         }
         Constraint::Regexp { hook: Some(h), .. } => Some(format!("{h}({expr})")),
+        // `.regexp` without a hook: the whole text matches (.NET's grammar).
+        Constraint::Regexp {
+            pattern,
+            hook: None,
+        } if matches!(p, Some(Primitive::Tstr)) => Some(format!(
+            "System.Text.RegularExpressions.Regex.IsMatch({expr}, @\"\\A(?:{})\\z\")",
+            pattern.replace('"', "\"\"")
+        )),
         // `.bits` (dgtlrift/cddlc#107): no bit outside the mask is set.
         Constraint::Bits(bits) if is_uint => Some(format!(
             "({expr} & ~{:#x}UL) == 0",
@@ -3119,6 +3158,15 @@ fn cs_valid_constrained_value(
         _ => None,
     }) {
         return lit;
+    }
+    // A `.regexp`: the shortest text it accepts.
+    if matches!(p, Primitive::Tstr) {
+        if let Some(t) = constraints.iter().find_map(|c| match c {
+            Constraint::Regexp { pattern, .. } => cddlc_codegen::regexp_sample(pattern),
+            _ => None,
+        }) {
+            return format!("{t:?}");
+        }
     }
     // Sizes: the smallest allowed.
     let size = constraints.iter().find_map(|c| match c {

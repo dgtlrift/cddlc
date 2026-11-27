@@ -564,7 +564,7 @@ and the test fails when one starts working, so the list stays current.
 ### Per-backend gaps
 
 - **Dart**: missing dCBOR deterministic encoding, constraint validation, and interop harness generation.
-- **C# / Node.js / Python**: constraint validation is partial (`.size`, `.range` checks only; `.regexp` not enforced).
+- **Node.js / Python**: constraint validation is partial (`.size`, `.range` checks only; `.regexp` not enforced).
 - **Go**: `.regexp` constraints are not checked; `float16` is written at float32 width.
 - **Java**: `float16` is written at float32 width; Jakarta EE `@Size` on text counts UTF-16 chars, not UTF-8 bytes.
 - **Lua**: `float16` is written at float32 width; `.regexp` constraints are not checked; Lua 5.3+ only (no LuaJIT).
