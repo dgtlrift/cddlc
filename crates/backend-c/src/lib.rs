@@ -3699,8 +3699,12 @@ fn emit_json_enum_impl(
         match &v.ty {
             // `null` is JSON null, not text (dgtlrift/cddlc#147).
             TypeRef::Primitive(Primitive::Null) => w.line("return cJSON_CreateNull();"),
-            TypeRef::Primitive(Primitive::Tstr) => {
+            TypeRef::Primitive(Primitive::Tstr) if is_text_literal(v) => {
                 w.line(&format!("return cJSON_CreateString({cddl_str:?});"))
+            }
+            // A `tstr` alternative holds its text (dgtlrift/cddlc#234).
+            TypeRef::Primitive(Primitive::Tstr) => {
+                w.line(&format!("return cJSON_CreateString(obj->value.{vsnake});"))
             }
             TypeRef::Primitive(Primitive::Uint) => w.line(&format!(
                 "return cJSON_CreateNumber((double)obj->value.{vsnake});"
@@ -3792,7 +3796,7 @@ fn emit_json_enum_impl(
     w.indent();
     w.line("const char* s = cJSON_GetStringValue(j);");
     for v in &e.variants {
-        if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) {
+        if matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && is_text_literal(v) {
             let vconst = format!(
                 "{}_{}",
                 to_screaming_snake(&e.name),
@@ -3803,6 +3807,25 @@ fn emit_json_enum_impl(
                 "if (strcmp(s, {cddl_str:?}) == 0) {{ out->tag = {vconst}; return true; }}"
             ));
         }
+    }
+    // A `tstr` alternative takes any other text, and holds it (dgtlrift/cddlc#234).
+    let tstr = e
+        .variants
+        .iter()
+        .find(|v| matches!(&v.ty, TypeRef::Primitive(Primitive::Tstr)) && !is_text_literal(v));
+    if let Some(v) = tstr {
+        let vconst = format!(
+            "{}_{}",
+            to_screaming_snake(&e.name),
+            to_screaming_snake(&v.name)
+        );
+        let vsnake = to_snake_case(&v.name);
+        w.line(&format!(
+            "if (strlen(s) >= sizeof(out->value.{vsnake})) return false;"
+        ));
+        w.line(&format!(
+            "strcpy(out->value.{vsnake}, s); out->tag = {vconst}; return true;"
+        ));
     }
     // An `any` alternative takes what the others don't (dgtlrift/cddlc#178).
     let any = e

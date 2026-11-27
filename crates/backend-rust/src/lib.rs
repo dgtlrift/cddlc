@@ -304,6 +304,20 @@ fn rust_primitive(p: &Primitive, opts: &CodegenOptions) -> String {
     }
 }
 
+/// The variant an enum's `Default` is: the first that doesn't hold the enum
+/// again, so the default doesn't build itself without end (dgtlrift/cddlc#228),
+/// nor is `any`, whose default item (`null`) another variant may take; failing
+/// that, the first that isn't boxed, then the first.
+fn default_variant<'e>(e: &'e EnumDef, module: &IrModule) -> Option<&'e EnumVariant> {
+    let unboxed = |v: &&EnumVariant| !is_boxed(&e.name, &v.ty, module);
+    let any = |v: &&EnumVariant| matches!(v.ty, TypeRef::Primitive(Primitive::Any));
+    e.variants
+        .iter()
+        .find(|v| unboxed(v) && !any(v))
+        .or_else(|| e.variants.iter().find(unboxed))
+        .or(e.variants.first())
+}
+
 /// Whether `name` is an array or table type, which with `--no-std` is encoded
 /// and decoded by its own functions.
 fn is_container(name: &str, module: Option<&IrModule>) -> bool {
@@ -1433,7 +1447,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &
 
     // If first variant holds data, emit Default manually
     if !first_is_unit {
-        if let Some(v) = e.variants.first() {
+        if let Some(v) = default_variant(e, module) {
             let type_name = to_pascal_case(&e.name);
             let vname = to_pascal_case(&v.name);
             w.blank();
@@ -1471,10 +1485,19 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions, module: &
                     }
                 }
                 TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "Default::default()".into(),
+                // A recursive variant holds its value in a `Box`.
+                TypeRef::Named(n) if is_boxed(&e.name, &v.ty, module) => {
+                    format!("Box::new({}::default())", to_pascal_case(n))
+                }
                 TypeRef::Named(n) => format!("{}::default()", to_pascal_case(n)),
                 _ => "Default::default()".into(),
             };
-            w.line(&format!("{type_name}::{vname}({default_inner})"));
+            if matches!(v.ty, TypeRef::Primitive(Primitive::Null)) {
+                // A `nil` variant has no value.
+                w.line(&format!("{type_name}::{vname}"));
+            } else {
+                w.line(&format!("{type_name}::{vname}({default_inner})"));
+            }
             w.dedent();
             w.line("}");
             w.dedent();
@@ -4153,6 +4176,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
         w.line(&format!("pub enum {type_name} {{"));
         w.indent();
         let mut default_expr = None;
+        let chosen = default_variant(e, module).map(|v| v.name.clone());
         for v in &e.variants {
             let vname = to_pascal_case(&v.name);
             // Text and integer literals are marker types that serialize as, and only
@@ -4220,7 +4244,9 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, _opts: &CodegenOptions, mod
                 }
             };
             w.line(&line);
-            default_expr.get_or_insert(default);
+            if chosen.as_ref() == Some(&v.name) {
+                default_expr = Some(default);
+            }
         }
         w.dedent();
         w.line("}");
