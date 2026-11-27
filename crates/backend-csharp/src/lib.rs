@@ -243,10 +243,7 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
                 w.line("[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]");
             }
             if matches!(f.occurrence, Occurrence::Optional | Occurrence::Required) {
-                if matches!(
-                    cs_base(&f.ty),
-                    TypeRef::Primitive(Primitive::Bstr | Primitive::Any)
-                ) {
+                if matches!(cs_base(&f.ty), TypeRef::Primitive(Primitive::Bstr)) {
                     w.line("[JsonConverter(typeof(Base64UrlJsonConverter))]");
                 } else if cs_typeref(&f.ty, opts) == "object" {
                     w.line(&format!(
@@ -1396,8 +1393,11 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOpt
 fn cs_json_to_bytes(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
     match cs_base(ty) {
         TypeRef::Named(_) => format!("{expr}.ToJson()"),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+        TypeRef::Primitive(Primitive::Bstr) => {
             format!("JsonSerializer.SerializeToUtf8Bytes(Base64Url.Encode({expr}))")
+        }
+        TypeRef::Primitive(Primitive::Any) => {
+            format!("JsonSerializer.SerializeToUtf8Bytes({expr})")
         }
         _ => format!(
             "JsonSerializer.SerializeToUtf8Bytes<{}>({expr})",
@@ -1413,7 +1413,9 @@ fn cs_json_from_element(ty: &TypeRef, el: &str, opts: &CodegenOptions) -> String
         TypeRef::Named(n) => format!(
             "{}.FromJson(System.Text.Encoding.UTF8.GetBytes({el}.GetRawText()))", to_pascal_case(n)
         ),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => format!("Base64Url.Decode({el}.GetString()!)"),
+        TypeRef::Primitive(Primitive::Bstr) => format!("Base64Url.Decode({el}.GetString()!)"),
+        // Its own copy, which outlives the document it was read from.
+        TypeRef::Primitive(Primitive::Any) => format!("{el}.Clone()"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) =>
             format!("({el}.ValueKind == JsonValueKind.Null ? null : throw new JsonException(\"expected null\"))"),
         TypeRef::Choice(alts) => {
@@ -1506,9 +1508,10 @@ fn emit_delegating_json_converter(w: &mut IndentWriter, type_name: &str) {
 /// A statement writing `expr`, a value of type `ty`, to `writer`.
 fn cs_json_write_stmt(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
     match cs_base(ty) {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+        TypeRef::Primitive(Primitive::Bstr) => {
             format!("writer.WriteStringValue(Base64Url.Encode({expr}));")
         }
+        TypeRef::Primitive(Primitive::Any) => format!("{expr}.WriteTo(writer);"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => {
             "writer.WriteNullValue();".into()
         }
@@ -2276,7 +2279,9 @@ fn cs_encode_call(p: &Primitive, expr: &str, opts: &CodegenOptions) -> String {
         Primitive::Float32 => format!("writer.WriteSingle({expr})"),
         Primitive::Float64 | Primitive::Float => format!("writer.WriteDouble({expr})"),
         Primitive::Tstr => format!("writer.WriteTextString({expr})"),
-        Primitive::Bstr | Primitive::Any => format!("writer.WriteByteString({expr})"),
+        Primitive::Bstr => format!("writer.WriteByteString({expr})"),
+        // The encoded item, written back unchanged (dgtlrift/cddlc#178).
+        Primitive::Any => format!("writer.WriteEncodedValue({expr})"),
     }
 }
 
@@ -2461,7 +2466,9 @@ fn cs_decode_call(p: &Primitive, reader: &str) -> String {
         Primitive::Float32 => format!("{reader}.ReadSingle()"),
         Primitive::Float64 | Primitive::Float => format!("{reader}.ReadDouble()"),
         Primitive::Tstr => format!("{reader}.ReadTextString()"),
-        Primitive::Bstr | Primitive::Any => format!("{reader}.ReadByteString()"),
+        Primitive::Bstr => format!("{reader}.ReadByteString()"),
+        // The whole item's encoding.
+        Primitive::Any => format!("{reader}.ReadEncodedValue().ToArray()"),
     }
 }
 
@@ -2665,7 +2672,10 @@ fn cs_type_default(ty: &TypeRef, opts: &CodegenOptions) -> String {
             Primitive::Float16 | Primitive::Float32 => "0.0f".into(),
             Primitive::Float64 | Primitive::Float => "0.0".into(),
             Primitive::Tstr => "string.Empty".into(),
-            Primitive::Bstr | Primitive::Any => "Array.Empty<byte>()".into(),
+            Primitive::Bstr => "Array.Empty<byte>()".into(),
+            // `null`, as an item or a JSON value: an empty one is neither.
+            Primitive::Any if opts.is_json() => "JsonDocument.Parse(\"null\").RootElement".into(),
+            Primitive::Any => "new byte[] { 0xf6 }".into(),
             Primitive::Null | Primitive::Undefined => "null!".into(),
         },
         TypeRef::Named(n) => format!("{}.Default", to_pascal_case(n)),
@@ -2679,6 +2689,9 @@ fn cs_type_default(ty: &TypeRef, opts: &CodegenOptions) -> String {
 
 fn cs_typeref(ty: &TypeRef, opts: &CodegenOptions) -> String {
     match ty {
+        // `any` (dgtlrift/cddlc#178): the item's CBOR encoding (`byte[]`), or
+        // any JSON value.
+        TypeRef::Primitive(Primitive::Any) if opts.is_json() => "JsonElement".into(),
         TypeRef::Primitive(p) => cs_primitive(p).to_owned(),
         TypeRef::Named(n) => to_pascal_case(n),
         TypeRef::Tagged(_, inner) => cs_typeref(inner, opts),
@@ -3032,9 +3045,12 @@ fn cs_explicit_value(ty: &TypeRef, occ: &Occurrence, opts: &CodegenOptions) -> S
             TypeRef::Primitive(Primitive::Float64 | Primitive::Float) => "3.14".into(),
             TypeRef::Primitive(Primitive::Bool) => "true".into(),
             TypeRef::Primitive(Primitive::Tstr) => "\"hello\"".into(),
-            TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
-                "new byte[] { 0x01, 0x02 }".into()
+            TypeRef::Primitive(Primitive::Bstr) => "new byte[] { 0x01, 0x02 }".into(),
+            // An item that isn't a byte string, `[1, "a"]` (dgtlrift/cddlc#178).
+            TypeRef::Primitive(Primitive::Any) if opts.is_json() => {
+                "JsonDocument.Parse(\"[1,\\\"a\\\"]\").RootElement".into()
             }
+            TypeRef::Primitive(Primitive::Any) => "new byte[] { 0x82, 0x01, 0x61, 0x61 }".into(),
             TypeRef::Tagged(_, inner) => cs_explicit_value(inner, occ, opts),
             TypeRef::Choice(cs) if !cs.is_empty() => cs_explicit_value(&cs[0], occ, opts),
             _ => cs_type_default(ty, opts),

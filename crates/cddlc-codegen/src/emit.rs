@@ -1018,7 +1018,9 @@ pub fn rust_reserved_renames(
 }
 
 /// Names a C# rule's class can't take: the members of the `JsonConverter`
-/// it gets, inside which the class is named (`Write`, dgtlrift/cddlc#191).
+/// it gets, inside which the class is named (`Write`, dgtlrift/cddlc#191),
+/// and the members every generated class has, as a class can't have a member
+/// of its own name (`items = [* any]` and its `Items`).
 #[rustfmt::skip]
 const RESERVED_CSHARP_TYPES: &[&str] = &[
     "CanConvert",
@@ -1026,6 +1028,15 @@ const RESERVED_CSHARP_TYPES: &[&str] = &[
     "Read",
     "Type",
     "Write",
+    // The generated classes' members
+    "Decode",
+    "Default",
+    "Encode",
+    "Entries",
+    "FromJson",
+    "Items",
+    "ToJson",
+    "Value",
 ];
 
 /// The rules to rename so their C# classes don't clash with one in

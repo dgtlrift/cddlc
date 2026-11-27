@@ -84,6 +84,18 @@ public List<float> Items { get; set; } = new();
 // Transparent alias — generated as a using directive or documented typedef
 ```
 
+## `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178): in CBOR, a
+`byte[]` holding the whole item's encoding (`CborReader.ReadEncodedValue`),
+which encoding writes back unchanged (`CborWriter.WriteEncodedValue`) and a
+`CborReader` over it decodes further; in JSON, a `JsonElement`. A choice's
+`any` alternative takes any item the others don't.
+
+A rule named like a member every generated class has (`Items`, `Entries`,
+`Value`, `Default`, `Encode`, `Decode`, `ToJson`, `FromJson`) is renamed
+`<module>-<rule>`, as a class can't have a member of its own name.
+
 ## Supported serialization formats
 
 | `--format` | Generated code |
