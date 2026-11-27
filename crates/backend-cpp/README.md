@@ -237,7 +237,10 @@ A repeated member, or a map's other entries, that holds its own type again isn't
 ## Known gaps
 
 - **nanocbor only**: `--runtime` is accepted, but only nanocbor is wired up.
-- **`.regexp`** constraints need a user-supplied `@regex-hook`.
+- **`.regexp`** is checked with `std::regex` (ECMAScript grammar), matching the
+  whole text, unless a `@regex-hook` names a function to call instead. It's
+  close to the XSD grammar CDDL names, but not the same: character class
+  subtraction (`[a-z-[aeiou]]`) isn't supported.
 
 ## License
 

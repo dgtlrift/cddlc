@@ -12,6 +12,8 @@ path = "src/lib.rs"
 [dependencies]
 cddlc-ir  = { path = "../cddlc-ir" }
 smol_str  = "0.2"
+regex-syntax = "0.8"
+regex     = { workspace = true }
 
 [dev-dependencies]
 cddlc-parser = { path = "../cddlc-parser" }
