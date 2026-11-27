@@ -192,6 +192,20 @@ cmake --build build
 Requires CMake 3.17+ (3.16+ for JSON) and a C++17 compiler. CMake downloads
 nanocbor (or nlohmann/json) on the first configure.
 
+## `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178):
+
+- **CBOR:** a `std::string_view` over the whole item's encoding in the decode
+  buffer (`nanocbor_get_subcbor`). Encoding writes those bytes back unchanged
+  (`cddlc_put_item`), and a `nanocbor_value_t` over them decodes the item
+  further. Like text and bytes, it points into the input, so the buffer must
+  outlive the value.
+- **JSON:** an `nlohmann::json`.
+
+A choice's `any` alternative takes any item the others don't: a case that
+finds no alternative goes back to the item's start and takes it whole.
+
 ## Recursive types
 
 A member or alternative that holds its own type again, directly or through other types, is a

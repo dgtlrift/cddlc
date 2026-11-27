@@ -230,6 +230,21 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("};");
     w.blank();
 
+    if cddlc_codegen::module_uses_any(module) {
+        // `any`: the item's encoding, in the decode buffer (dgtlrift/cddlc#178).
+        w.line("/// Writes an encoded data item (an `any` member) as is, as nanocbor");
+        w.line("/// writes its own bytes.");
+        w.line("inline int cddlc_put_item(nanocbor_encoder_t *enc, std::string_view item) {");
+        w.indent();
+        w.line("enc->len += item.size();");
+        w.line("if (!enc->fits(enc, enc->context, item.size())) return NANOCBOR_ERR_END;");
+        w.line("enc->append(enc, enc->context, reinterpret_cast<const uint8_t *>(item.data()), item.size());");
+        w.line("return static_cast<int>(item.size());");
+        w.dedent();
+        w.line("}");
+        w.blank();
+    }
+
     // ── Forward declarations ──────────────────────────────────────────────────
     w.line("// Forward declarations");
     for (_, def) in &module.types {
@@ -1233,8 +1248,15 @@ fn emit_encode_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, opts: 
                     (TypeRef::Primitive(Primitive::Tstr), Some(t)) => {
                         w.line(&format!("{{ const auto &s = {}; nanocbor_put_tstrn(enc, s.data(), s.size()); }}", get(t)));
                     }
-                    (TypeRef::Primitive(Primitive::Bstr | Primitive::Any), Some(t)) => {
+                    (TypeRef::Primitive(Primitive::Bstr), Some(t)) => {
                         w.line(&format!("{{ const auto &b = {}; nanocbor_put_bstr(enc, reinterpret_cast<const uint8_t*>(b.data()), b.size()); }}", get(t)));
+                    }
+                    // The encoded item, written back unchanged (dgtlrift/cddlc#178).
+                    (TypeRef::Primitive(Primitive::Any), Some(t)) => {
+                        w.line(&format!(
+                            "if (cddlc_put_item(enc, {}) < 0) return -1;",
+                            get(t)
+                        ));
                     }
                     (TypeRef::Named(_), Some(t)) => {
                         w.line(&format!("return encode(enc, {});", get(t)))
@@ -1365,8 +1387,10 @@ fn cpp_encode_call(p: &Primitive, expr: &str) -> String {
         Primitive::Float32 | Primitive::Float16 => format!("nanocbor_fmt_float(enc, {expr})"),
         Primitive::Float64 | Primitive::Float   => format!("nanocbor_fmt_double(enc, {expr})"),
         Primitive::Tstr      => format!("nanocbor_put_tstrn(enc, {expr}.data(), {expr}.size())"),
-        Primitive::Bstr | Primitive::Any =>
+        Primitive::Bstr =>
             format!("nanocbor_put_bstr(enc, reinterpret_cast<const uint8_t*>({expr}.data()), {expr}.size())"),
+        // The encoded item, written back unchanged (dgtlrift/cddlc#178).
+        Primitive::Any => format!("cddlc_put_item(enc, {expr})"),
     }
 }
 
@@ -1745,6 +1769,20 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
         cpp_variant_payload(v, opts).is_some() && matches!(&v.ty, TypeRef::Primitive(p) if f(p))
     };
 
+    // An `any` alternative takes what no other does (dgtlrift/cddlc#178): a case
+    // that finds no alternative goes back to the item's start and takes it whole.
+    let any = e
+        .variants
+        .iter()
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Any)));
+    let nomatch = if any.is_some() {
+        "goto cddlc_any;"
+    } else {
+        "return -1;"
+    };
+    if any.is_some() {
+        w.line("const nanocbor_value_t _start = *dec;");
+    }
     w.line("switch (nanocbor_get_type(dec)) {");
 
     // Text: text literals, then a `tstr` payload variant.
@@ -1771,7 +1809,7 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
     {
         w.line(&make(v, "sv"));
     } else {
-        w.line("return -1;");
+        w.line(nomatch);
     }
     w.dedent();
     w.line("}");
@@ -1800,9 +1838,9 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
             "if (u <= static_cast<uint64_t>(INT64_MAX)) {{ {} }}",
             make(v, "static_cast<int64_t>(u)")
         ));
-        w.line("return -1;");
+        w.line(nomatch);
     } else {
-        w.line("return -1;");
+        w.line(nomatch);
     }
     w.dedent();
     w.line("}");
@@ -1821,7 +1859,7 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
     {
         w.line(&make(v, "n"));
     } else {
-        w.line("return -1;");
+        w.line(nomatch);
     }
     w.dedent();
     w.line("}");
@@ -1830,7 +1868,7 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
     if let Some(v) = e
         .variants
         .iter()
-        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Bstr | Primitive::Any)))
+        .find(|v| payload_is(v, &|p| matches!(p, Primitive::Bstr)))
     {
         w.line("case NANOCBOR_TYPE_BSTR: {");
         w.indent();
@@ -1919,7 +1957,23 @@ fn emit_cpp_enum_decode(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions
             w.line("}");
         }
     }
-    w.line("return -1;");
+    match any {
+        Some(v) => {
+            w.line("cddlc_any:");
+            w.line("*dec = _start;");
+            w.line("{");
+            w.indent();
+            w.line("const uint8_t *p; size_t len;");
+            w.line("if (nanocbor_get_subcbor(dec, &p, &len) < 0) return -1;");
+            w.line(&make(
+                v,
+                "std::string_view(reinterpret_cast<const char*>(p), len)",
+            ));
+            w.dedent();
+            w.line("}");
+        }
+        None => w.line("return -1;"),
+    }
 }
 
 fn emit_cpp_decode_field(
@@ -2081,8 +2135,13 @@ fn cpp_decode_call(p: &Primitive, dest: &str, dec: &str) -> String {
             "({{ const uint8_t *_p; size_t _l; int _r = nanocbor_get_tstr({dec}, &_p, &_l); \
              if (_r >= 0) {dest} = std::string_view(reinterpret_cast<const char*>(_p), _l); _r; }})"
         ),
-        Primitive::Bstr | Primitive::Any => format!(
+        Primitive::Bstr => format!(
             "({{ const uint8_t *_p; size_t _l; int _r = nanocbor_get_bstr({dec}, &_p, &_l); \
+             if (_r >= 0) {dest} = std::string_view(reinterpret_cast<const char*>(_p), _l); _r; }})"
+        ),
+        // The whole item's encoding, which nanocbor then skips (dgtlrift/cddlc#178).
+        Primitive::Any => format!(
+            "({{ const uint8_t *_p; size_t _l; int _r = nanocbor_get_subcbor({dec}, &_p, &_l); \
              if (_r >= 0) {dest} = std::string_view(reinterpret_cast<const char*>(_p), _l); _r; }})"
         ),
     }
@@ -2246,6 +2305,19 @@ fn emit_cpp_type_test(
                         }
                         (TypeRef::Primitive(Primitive::Tstr), _) => {
                             "std::string_view(\"hello\")".into()
+                        }
+                        // An item no other alternative takes (dgtlrift/cddlc#178):
+                        // `true`, or `[]` beside a `bool` alternative.
+                        (TypeRef::Primitive(Primitive::Any), _) => {
+                            let has_bool = e
+                                .variants
+                                .iter()
+                                .any(|o| matches!(o.ty, TypeRef::Primitive(Primitive::Bool)));
+                            if has_bool {
+                                "std::string_view(\"\\x80\", 1)".into()
+                            } else {
+                                "std::string_view(\"\\xf5\", 1)".into()
+                            }
                         }
                         // A map variant's members pinned to a literal (`type: "start"`) hold it.
                         (TypeRef::Named(n), Some(t)) => match module.get(n) {
@@ -2681,7 +2753,9 @@ fn cpp_json_field_type(ty: &TypeRef, opts: &CodegenOptions) -> String {
             Primitive::Float32 | Primitive::Float16 => "float".into(),
             Primitive::Float64 | Primitive::Float => "double".into(),
             Primitive::Tstr => "std::string".into(),
-            Primitive::Bstr | Primitive::Any => "std::vector<uint8_t>".into(),
+            Primitive::Bstr => "std::vector<uint8_t>".into(),
+            // Any JSON value (dgtlrift/cddlc#178).
+            Primitive::Any => "nlohmann::json".into(),
             Primitive::Null | Primitive::Undefined => "std::monostate".into(),
         },
         TypeRef::Named(n) => to_pascal_case(n),
@@ -2994,7 +3068,8 @@ fn json_enum_is_string(e: &EnumDef) -> bool {
 /// A C++ expression converting `expr` to a `nlohmann::json` value.
 fn cpp_json_to_val(ty: &TypeRef, expr: &str, module: &IrModule) -> String {
     match ty {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => format!("b64url_encode({expr})"),
+        TypeRef::Primitive(Primitive::Bstr) => format!("b64url_encode({expr})"),
+        TypeRef::Primitive(Primitive::Any) => expr.to_owned(),
         // `std::monostate` has no JSON conversion (dgtlrift/cddlc#54).
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "nullptr".into(),
         TypeRef::Named(n) => match json_named_kind(n, module) {
@@ -3023,9 +3098,10 @@ fn cpp_json_from_val(ty: &TypeRef, expr: &str, opts: &CodegenOptions, module: &I
             format!("{expr}.get<double>()")
         }
         TypeRef::Primitive(Primitive::Tstr) => format!("{expr}.get<std::string>()"),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+        TypeRef::Primitive(Primitive::Bstr) => {
             format!("b64url_decode({expr}.get<std::string>())")
         }
+        TypeRef::Primitive(Primitive::Any) => expr.to_owned(),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "std::monostate{}".into(),
         // `json_bytes` serializes once; building a vector from `dump().begin()` and
         // `dump().end()` used iterators of two different strings (dgtlrift/cddlc#54).
