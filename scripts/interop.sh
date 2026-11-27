@@ -107,7 +107,7 @@ for schema in crates/backend-buildtest/schemas/*.cddl; do
         continue
     fi
     # `any` as the encoded item: only these languages so far (dgtlrift/cddlc#178).
-    if [[ "$name" == any && ! " rust c cpp csharp " =~ " $lang " ]]; then
+    if [[ "$name" == any && ! " rust c cpp csharp go " =~ " $lang " ]]; then
         echo "== $lang $name: not for this language yet (dgtlrift/cddlc#178)"
         continue
     fi
