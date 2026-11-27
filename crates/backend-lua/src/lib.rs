@@ -1882,6 +1882,10 @@ fn table_specs(cx: &Cx, m: &MapDef) -> Vec<(String, Vec<String>)> {
 
 /// A table with one entry.
 fn lua_table_value(cx: &Cx, m: &MapDef, explicit: bool, depth: usize) -> String {
+    // Empty where its entry would stop the nesting (dgtlrift/cddlc#245).
+    if depth >= MAX_FIXTURE_DEPTH {
+        return format!("M.{}.new({{}})", lua_type_name(&m.name));
+    }
     let key = lua_value(
         cx,
         &m.key_ty,
@@ -2079,6 +2083,11 @@ fn lua_value(
         TypeRef::Named(n) => {
             let t = lua_type_name(n);
             match cx.module.get(n) {
+                // Where the nesting stops, an array or table is empty, not
+                // nil: a required one must be there (dgtlrift/cddlc#245).
+                Some(TypeDef::Array(_) | TypeDef::Map(_)) if depth > MAX_FIXTURE_DEPTH => {
+                    format!("M.{t}.new({{}})")
+                }
                 _ if depth > MAX_FIXTURE_DEPTH => "nil".into(),
                 Some(TypeDef::Struct(s)) => lua_struct_value(cx, s, explicit, depth),
                 Some(TypeDef::Alias(a)) => lua_value(

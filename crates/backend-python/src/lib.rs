@@ -2041,7 +2041,12 @@ fn py_value(
             .unwrap_or_else(|| "None".into()),
         TypeRef::Named(n) => {
             if depth > MAX_FIXTURE_DEPTH {
-                return "None".into();
+                // An array or table is empty, not None: a required one must
+                // be there (dgtlrift/cddlc#245).
+                return match module.get(n) {
+                    Some(TypeDef::Array(_) | TypeDef::Map(_)) => format!("{}()", to_pascal_case(n)),
+                    _ => "None".into(),
+                };
             }
             match module.get(n) {
                 Some(TypeDef::Struct(s)) => py_struct_value(s, module, opts, explicit, depth),
@@ -2079,6 +2084,10 @@ fn py_map_value(
     explicit: bool,
     depth: usize,
 ) -> String {
+    // Empty where its entry would stop the nesting (dgtlrift/cddlc#245).
+    if depth >= MAX_FIXTURE_DEPTH {
+        return format!("{}()", to_pascal_case(&m.name));
+    }
     let key = py_value(
         &m.key_ty,
         &Occurrence::Required,

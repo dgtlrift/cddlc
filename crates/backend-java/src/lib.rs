@@ -2770,6 +2770,14 @@ fn java_value(
         TypeRef::Named(n) => {
             let class = java_type_name(n);
             match cx.module.get(n) {
+                // Where the nesting stops, an array or table is empty, not
+                // null: a required one must be there (dgtlrift/cddlc#245).
+                Some(TypeDef::Array(_)) if depth > MAX_FIXTURE_DEPTH => {
+                    format!("new {class}(List.of())")
+                }
+                Some(TypeDef::Map(_)) if depth > MAX_FIXTURE_DEPTH => {
+                    format!("new {class}(Map.of())")
+                }
                 _ if depth > MAX_FIXTURE_DEPTH => "null".into(),
                 Some(TypeDef::Struct(s)) => java_struct_value(cx, s, explicit, depth),
                 Some(TypeDef::Alias(a)) => format!(
@@ -2798,6 +2806,10 @@ fn java_value(
 
 /// A table with one entry.
 fn java_table_value(cx: &Cx, m: &MapDef, explicit: bool, depth: usize) -> String {
+    // Empty where its entry would stop the nesting (dgtlrift/cddlc#245).
+    if depth >= MAX_FIXTURE_DEPTH {
+        return format!("new {}(Map.of())", java_type_name(&m.name));
+    }
     let key = java_value(
         cx,
         &m.key_ty,
