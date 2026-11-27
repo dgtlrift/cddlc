@@ -395,7 +395,23 @@ fn to_raw(ty: &TypeRef, x: &str) -> String {
         TypeRef::Tagged(tag, inner) => {
             format!("R.tag({}, {})", lua_int(tag.0 as i128), to_raw(inner, x))
         }
+        // One type or `null`: the type's item unless it's `M.null`
+        // (dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "(function(x) if x == M.null then return R.null() end return {} end)({x})",
+            to_raw(or_null(cs).unwrap(), "x")
+        ),
         TypeRef::Choice(_) => format!("R.from_lua({x})"),
+    }
+}
+
+/// The other alternative of a choice of one type and `null`.
+fn or_null(cs: &[TypeRef]) -> Option<&TypeRef> {
+    let is_null = |t: &TypeRef| matches!(t, TypeRef::Primitive(Primitive::Null));
+    match cs {
+        [a, b] if is_null(b) && !is_null(a) => Some(a),
+        [a, b] if is_null(a) && !is_null(b) => Some(b),
+        _ => None,
     }
 }
 
@@ -426,6 +442,10 @@ fn from_raw(ty: &TypeRef, item: &str, at: &str) -> String {
             &format!("R.untag({item}, {}, {at_lit})", lua_int(tag.0 as i128)),
             at,
         ),
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "(function(x) if x.k == \"null\" then return M.null end return {} end)({item})",
+            from_raw(or_null(cs).unwrap(), "x", at)
+        ),
         TypeRef::Choice(_) => format!("R.to_lua({item})"),
     }
 }
@@ -451,6 +471,10 @@ fn want(ty: &TypeRef, x: &str, at: &str) -> String {
         }
         TypeRef::Named(n) => format!("M.{}.validate({x})", lua_type_name(n)),
         TypeRef::Tagged(_, inner) => want(inner, x, at),
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "if {x} ~= M.null then {} end",
+            want(or_null(cs).unwrap(), x, at)
+        ),
         TypeRef::Choice(_) => format!("R.from_lua({x})"),
     }
 }
@@ -2088,6 +2112,14 @@ fn lua_value(
                 Some(TypeDef::Array(_) | TypeDef::Map(_)) if depth > MAX_FIXTURE_DEPTH => {
                     format!("M.{t}.new({{}})")
                 }
+                // An enum takes a variant that doesn't nest, if it has one
+                // (`link = next / null`; dgtlrift/cddlc#224).
+                Some(TypeDef::Enum(e)) if depth >= MAX_FIXTURE_DEPTH => e
+                    .variants
+                    .iter()
+                    .find(|v| !matches!(v.ty, TypeRef::Named(_)))
+                    .map(|v| lua_variant_value(cx, e, v, depth))
+                    .unwrap_or_else(|| "nil".into()),
                 _ if depth > MAX_FIXTURE_DEPTH => "nil".into(),
                 Some(TypeDef::Struct(s)) => lua_struct_value(cx, s, explicit, depth),
                 Some(TypeDef::Alias(a)) => lua_value(
