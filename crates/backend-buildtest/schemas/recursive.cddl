@@ -15,3 +15,12 @@ chain = { head: int, ? tail: chain }
 ; A type that holds itself through an array and a map (dgtlrift/cddlc#226,
 ; dgtlrift/cddlc#245)
 node = { name: tstr, kids: [* node], ? attrs: { * tstr => node } }
+
+; A recursive member that's a named type or null (WebDriver BiDi's
+; browsingContext.Info.children; dgtlrift/cddlc#224)
+info = { id: tstr, children: info-list / null }
+info-list = [* info]
+
+; A choice whose first alternative holds the choice again (dgtlrift/cddlc#224)
+link = next / null
+next = { value: int, link: link }

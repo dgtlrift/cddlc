@@ -922,7 +922,33 @@ private:
 /// holding a default value, which an empty `Box` doesn't encode as
 /// (dgtlrift/cddlc#156).
 fn cpp_filled(name: &str, module: &IrModule) -> String {
+    cpp_filled_at(name, module, 0, false)
+}
+
+/// [`cpp_filled`] for JSON, where an enum holds an `nlohmann::json` and its
+/// default is fine.
+fn cpp_filled_json(name: &str, module: &IrModule) -> String {
+    cpp_filled_at(name, module, 0, true)
+}
+
+/// [`cpp_filled`] at `depth` levels in. An enum takes a variant with no
+/// payload, if it has one, as its default may be a variant whose `Box` is
+/// empty (`link = next / null` is `Link::make_Null()`; dgtlrift/cddlc#224);
+/// a struct fills its required boxed members the same way, to a few levels.
+fn cpp_filled_at(name: &str, module: &IrModule, depth: usize, json: bool) -> String {
     let t = to_pascal_case(name);
+    match module.get(name) {
+        Some(TypeDef::Enum(e)) if !json => {
+            return e
+                .variants
+                .iter()
+                .find(|v| cpp_variant_payload(v, &CodegenOptions::default()).is_none())
+                .map(|v| format!("{t}::make_{}()", to_pascal_case(&v.name)))
+                .unwrap_or_else(|| format!("{t}{{}}"));
+        }
+        Some(TypeDef::Struct(_)) if depth < 4 => {}
+        _ => return format!("{t}{{}}"),
+    }
     let Some(TypeDef::Struct(s)) = module.get(name) else {
         return format!("{t}{{}}");
     };
@@ -930,21 +956,20 @@ fn cpp_filled(name: &str, module: &IrModule) -> String {
         .fields
         .iter()
         .filter(|f| f.occurrence.is_required() && is_boxed(&s.name, &f.name))
-        .filter_map(|f| match &f.ty {
-            TypeRef::Named(n) => Some(format!(
-                "v.{} = {}{{}};",
+        .filter_map(|f| {
+            let n = match &f.ty {
+                TypeRef::Named(n) => n,
+                TypeRef::Choice(cs) => match cs.iter().find(|c| matches!(c, TypeRef::Named(_))) {
+                    Some(TypeRef::Named(n)) => n,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            Some(format!(
+                "v.{} = {};",
                 to_snake_case(&f.name),
-                to_pascal_case(n)
-            )),
-            TypeRef::Choice(cs) => match cs.first() {
-                Some(TypeRef::Named(n)) => Some(format!(
-                    "v.{} = {}{{}};",
-                    to_snake_case(&f.name),
-                    to_pascal_case(n)
-                )),
-                _ => None,
-            },
-            _ => None,
+                cpp_filled_at(n, module, depth + 1, json)
+            ))
         })
         .collect();
     if sets.is_empty() {
@@ -3600,7 +3625,7 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                         w.line(&format!(
                             "original.{} = {};",
                             to_snake_case(&f.name),
-                            cpp_filled(n, module)
+                            cpp_filled_json(n, module)
                         ));
                     }
                 }
