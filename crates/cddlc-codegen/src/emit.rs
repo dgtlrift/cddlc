@@ -1402,3 +1402,18 @@ pub fn cpp_ident(name: &str) -> String {
         s
     }
 }
+
+/// A choice variant's class name: its PascalCase name, with a `_` when an
+/// enum's own member has it (`action: "default" / "cancel"`, WebDriver BiDi,
+/// would be a class `Default` beside the static `Default`).
+pub fn csharp_variant_name(name: &str) -> String {
+    let p = crate::to_pascal_case(name);
+    if matches!(
+        p.as_str(),
+        "Default" | "Encode" | "Decode" | "ToJson" | "FromJson" | "Instance" | "Value"
+    ) {
+        format!("{p}_")
+    } else {
+        p
+    }
+}

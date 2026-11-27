@@ -1288,7 +1288,11 @@ fn emit_csharp_harness(vectors: &[TestVector], schema: &str, opts: &CodegenOptio
                 )),
                 FieldVal::Text(s) => w.line(&format!("Assert.Equal({:?}, decoded.{pname});", s)),
                 FieldVal::Enum { kind, .. } => {
-                    w.line(&format!("Assert.IsType<{type_name}.{kind}>(decoded);"))
+                    // As the C# backend names a variant's class.
+                    w.line(&format!(
+                        "Assert.IsType<{type_name}.{}>(decoded);",
+                        cddlc_codegen::csharp_variant_name(kind)
+                    ))
                 }
                 FieldVal::Null => w.line(&format!("Assert.Null(decoded.{pname});")),
                 // An `any` item is checked by the re-encode (dgtlrift/cddlc#178).
