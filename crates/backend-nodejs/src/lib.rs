@@ -99,6 +99,16 @@ impl Backend for NodeJsBackend {
         opts: &CodegenOptions,
     ) -> Result<CodegenOutput, CodegenError> {
         cddlc_codegen::check_rest_keys(module, opts, "Node", false)?;
+        NULLABLE_ENUMS.with(|n| {
+            *n.borrow_mut() = module
+                .types
+                .iter()
+                .filter(|(_, d)| {
+                    matches!(d, TypeDef::Enum(e) if e.variants.iter().any(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Null))))
+                })
+                .map(|(k, _)| k.to_string())
+                .collect()
+        });
         let name = module.name.as_str();
         let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
@@ -1181,8 +1191,14 @@ fn emit_struct_decode_json(
                 w.dedent();
             }
             _ => {
+                // A type-or-null member may be null (dgtlrift/cddlc#224).
+                let missing = if is_or_null(&f.ty) {
+                    "=== undefined"
+                } else {
+                    "== null"
+                };
                 w.line(&format!(
-                    "if (m[{key:?}] == null) throw new Error('Missing field {key}');"
+                    "if (m[{key:?}] {missing}) throw new Error('Missing field {key}');"
                 ));
                 let conv = pin_bool_literal(
                     f,
@@ -1278,8 +1294,13 @@ fn emit_struct_decode_cbor(
                 w.dedent();
             }
             _ => {
+                let missing = if is_or_null(&f.ty) {
+                    "=== undefined"
+                } else {
+                    "== null"
+                };
                 w.line(&format!(
-                    "if (m[{:?}] == null) throw new Error('Missing field {key}');",
+                    "if (m[{:?}] {missing}) throw new Error('Missing field {key}');",
                     key
                 ));
                 let conv =
@@ -2166,6 +2187,10 @@ fn ts_json_encode_expr(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> Strin
             format!("JSON.parse(new TextDecoder().decode({ef}({expr})))")
         }
         TypeRef::Tagged(_, inner) => ts_json_encode_expr(inner, expr, opts),
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "({expr} === null ? null : {})",
+            ts_json_encode_expr(or_null(cs).unwrap(), expr, opts)
+        ),
         _ => expr.to_owned(),
     }
 }
@@ -2188,6 +2213,10 @@ fn ts_json_decode_expr(ty: &TypeRef, raw_expr: &str, at: &str, opts: &CodegenOpt
                 .collect();
             choice_expr(raw_expr, &alts, at)
         }
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "({raw_expr} === null ? null : {})",
+            ts_json_decode_expr(or_null(cs).unwrap(), raw_expr, at, opts)
+        ),
         TypeRef::Choice(_) => format!("{raw_expr} as unknown"),
     }
 }
@@ -2244,6 +2273,32 @@ fn emit_ts_encode_value(
     }
 }
 
+/// The other alternative of a choice of one type and `null`.
+fn or_null(cs: &[TypeRef]) -> Option<&TypeRef> {
+    let is_null = |t: &TypeRef| matches!(t, TypeRef::Primitive(Primitive::Null));
+    match cs {
+        [a, b] if is_null(b) && !is_null(a) => Some(a),
+        [a, b] if is_null(a) && !is_null(b) => Some(b),
+        _ => None,
+    }
+}
+
+thread_local! {
+    /// The enums with a `nil` variant, set for each `generate`.
+    static NULLABLE_ENUMS: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+}
+
+/// Whether a value of `ty` may be null: a choice of one type and `null`, or
+/// an enum with a `nil` variant. A required member of it may be null, so
+/// only an absent one is missing (dgtlrift/cddlc#224).
+fn is_or_null(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Choice(cs) => or_null(cs).is_some(),
+        TypeRef::Named(n) => NULLABLE_ENUMS.with(|e| e.borrow().contains(n.as_str())),
+        _ => false,
+    }
+}
+
 fn emit_ts_encode_primitive_or_named(
     w: &mut IndentWriter,
     ty: &TypeRef,
@@ -2262,6 +2317,14 @@ fn emit_ts_encode_primitive_or_named(
         TypeRef::Tagged(tag, inner) => {
             w.line(&format!("enc.tag({});", tag.0));
             emit_ts_encode_primitive_or_named(w, inner, expr, opts);
+        }
+        // One type or `null`: null, or the type (dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if or_null(cs).is_some() => {
+            w.line(&format!("if ({expr} === null) {{ enc.null(); }} else {{"));
+            w.indent();
+            emit_ts_encode_primitive_or_named(w, or_null(cs).unwrap(), expr, opts);
+            w.dedent();
+            w.line("}");
         }
         TypeRef::Choice(_) => {
             w.line(&format!("enc.writeBytes(cborgEncode({expr}));"));
@@ -2316,6 +2379,10 @@ fn ts_convert_expr(ty: &TypeRef, raw_expr: &str, opts: &CodegenOptions) -> Strin
             let alts: Vec<String> = cs.iter().map(|c| ts_convert_expr(c, "_c", opts)).collect();
             choice_expr(raw_expr, &alts, "choice")
         }
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "({raw_expr} === null ? null : {})",
+            ts_convert_expr(or_null(cs).unwrap(), raw_expr, opts)
+        ),
         TypeRef::Choice(_) => format!("{raw_expr} as unknown"),
     }
 }
@@ -3130,8 +3197,22 @@ fn ts_named_value(
 ) -> String {
     let type_name = to_pascal_case(name);
     let fallback = format!("{{}} as {type_name}");
+    // A variant of an enum that doesn't nest (`link = next / null`;
+    // dgtlrift/cddlc#224).
+    let flat = |e: &EnumDef| {
+        e.variants
+            .iter()
+            .find(|v| !matches!(v.ty, TypeRef::Named(_)))
+            .map(|v| ts_enum_variant_value(e, v, module, opts, depth + 1))
+    };
     if depth >= MAX_FIXTURE_DEPTH {
-        return fallback;
+        // Where the nesting stops: an enum's variant that doesn't nest, an
+        // empty array.
+        return match module.get(name) {
+            Some(TypeDef::Enum(e)) => flat(e).unwrap_or(fallback),
+            Some(TypeDef::Array(_)) => "[]".into(),
+            _ => fallback,
+        };
     }
     match module.get(name) {
         Some(TypeDef::Struct(s)) => {
@@ -3149,6 +3230,15 @@ fn ts_named_value(
                 .collect();
             format!("{{ {} }}", fields.join(", "))
         }
+        // Its first variant, or one that doesn't nest where a named one
+        // would stop the nesting: its value is two levels on.
+        Some(TypeDef::Enum(e)) if depth + 2 >= MAX_FIXTURE_DEPTH => flat(e)
+            .or_else(|| {
+                e.variants
+                    .first()
+                    .map(|v| ts_enum_variant_value(e, v, module, opts, depth + 1))
+            })
+            .unwrap_or(fallback),
         Some(TypeDef::Enum(e)) => e
             .variants
             .first()
