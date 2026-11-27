@@ -1099,7 +1099,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.dedent();
     }
     if !opts.is_json() {
-        if let Some(v) = payload(&|p| matches!(p, Primitive::Bstr | Primitive::Any)) {
+        if let Some(v) = payload(&|p| matches!(p, Primitive::Bstr)) {
             w.line("if isinstance(raw, bytes):");
             w.indent();
             w.line(&format!(
@@ -1128,9 +1128,20 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.line("pass");
         w.dedent();
     }
-    w.line(&format!(
-        "raise ValueError(f\"{at}: no variant matches {{raw!r}}\")"
-    ));
+    // An `any` variant takes what the others don't (dgtlrift/cddlc#178).
+    match e
+        .variants
+        .iter()
+        .find(|v| has_payload(v) && matches!(&v.ty, TypeRef::Primitive(Primitive::Any)))
+    {
+        Some(v) => w.line(&format!(
+            "return cls(kind={:?}, value=raw)",
+            to_pascal_case(&v.name)
+        )),
+        None => w.line(&format!(
+            "raise ValueError(f\"{at}: no variant matches {{raw!r}}\")"
+        )),
+    }
     w.dedent();
     w.blank();
     emit_encode_decode(w, &class_name);
@@ -1464,7 +1475,7 @@ fn py_literal(v: &LiteralValue) -> String {
 /// A Python expression converting the value `expr` to its raw form.
 fn py_to_raw(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
     match ty {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) if opts.is_json() => {
+        TypeRef::Primitive(Primitive::Bstr) if opts.is_json() => {
             format!("_b64e({expr})")
         }
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "None".into(),
@@ -1490,7 +1501,9 @@ fn py_from_raw(ty: &TypeRef, expr: &str, at: &str, opts: &CodegenOptions) -> Str
                 format!("_float({expr}, {at:?})")
             }
             Primitive::Tstr => format!("_str({expr}, {at:?})"),
-            Primitive::Bstr | Primitive::Any => format!("_bytes({expr}, {at:?})"),
+            Primitive::Bstr => format!("_bytes({expr}, {at:?})"),
+            // The value as cbor2 or json decoded it (dgtlrift/cddlc#178).
+            Primitive::Any => expr.to_owned(),
             Primitive::Null | Primitive::Undefined => format!("_null({expr}, {at:?})"),
         },
         TypeRef::Named(n) => format!("{}._from_raw({expr})", to_pascal_case(n)),
@@ -1542,7 +1555,9 @@ fn py_primitive(p: &Primitive) -> &'static str {
         Primitive::Uint | Primitive::Int => "int",
         Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => "float",
         Primitive::Tstr => "str",
-        Primitive::Bstr | Primitive::Any => "bytes",
+        Primitive::Bstr => "bytes",
+        // Any value cbor2 or json reads and writes (dgtlrift/cddlc#178).
+        Primitive::Any => "Any",
     }
 }
 
@@ -1654,7 +1669,8 @@ fn py_variant_value(
             Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float,
         ) => "1.5".to_owned(),
         TypeRef::Primitive(Primitive::Tstr) => "\"hello\"".to_owned(),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => "b\"\\x01\\x02\"".to_owned(),
+        TypeRef::Primitive(Primitive::Bstr) => "b\"\\x01\\x02\"".to_owned(),
+        TypeRef::Primitive(Primitive::Any) => "[1, \"a\"]".to_owned(),
         other => py_value(
             other,
             &Occurrence::Required,
@@ -2004,9 +2020,11 @@ fn py_value(
             Primitive::Float32 | Primitive::Float16 | Primitive::Float64 | Primitive::Float,
         ) => if explicit { "1.5" } else { "0.0" }.into(),
         TypeRef::Primitive(Primitive::Tstr) => if explicit { "\"hello\"" } else { "\"\"" }.into(),
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => {
+        TypeRef::Primitive(Primitive::Bstr) => {
             if explicit { "b\"\\x01\\x02\"" } else { "b\"\"" }.into()
         }
+        // An item that isn't a byte string (dgtlrift/cddlc#178), or `null`.
+        TypeRef::Primitive(Primitive::Any) => if explicit { "[1, \"a\"]" } else { "None" }.into(),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "None".into(),
         TypeRef::Tagged(_, inner) => py_value(
             inner,

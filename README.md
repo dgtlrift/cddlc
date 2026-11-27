@@ -609,6 +609,7 @@ and the test fails when one starts working, so the list stays current.
   (`json_any_t`). C++ holds a `std::string_view` of the item's encoding, or an `nlohmann::json`.
   C# holds the item's encoding in a `byte[]` (`ReadEncodedValue` / `WriteEncodedValue`), or a
   `JsonElement`. Go holds a `RawItem`, an alias of `cbor.RawMessage` or `json.RawMessage`.
+  Python holds the value cbor2 or `json` decodes it to, and gives it back to them to encode.
 
 ### Validator gaps (`cddlc validate`)
 

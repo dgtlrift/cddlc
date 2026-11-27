@@ -88,6 +88,14 @@ class DeviceId:
     value: str          # tstr .size 16, checked in __post_init__
 ```
 
+### `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178): the value cbor2
+(or `json`) decodes it to, as `typing.Any`, which encoding gives back to them.
+So an item comes back as the same value, though not always the same bytes:
+cbor2 writes every float as a float64, for one. A choice's `any` variant takes
+any item the others don't.
+
 ### Tags and floats
 
 - `#6.N(T)` is written as `cbor2.CBORTag(N, …)` and checked on decode. Every
