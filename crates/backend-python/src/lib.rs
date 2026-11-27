@@ -1473,6 +1473,16 @@ fn py_literal(v: &LiteralValue) -> String {
 // ── Raw conversions ───────────────────────────────────────────────────────────
 
 /// A Python expression converting the value `expr` to its raw form.
+/// The other alternative of a choice of one type and `null`.
+fn or_null(cs: &[TypeRef]) -> Option<&TypeRef> {
+    let is_null = |t: &TypeRef| matches!(t, TypeRef::Primitive(Primitive::Null));
+    match cs {
+        [a, b] if is_null(b) && !is_null(a) => Some(a),
+        [a, b] if is_null(a) && !is_null(b) => Some(b),
+        _ => None,
+    }
+}
+
 fn py_to_raw(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(Primitive::Bstr) if opts.is_json() => {
@@ -1487,6 +1497,12 @@ fn py_to_raw(ty: &TypeRef, expr: &str, opts: &CodegenOptions) -> String {
             format!("_tag({}, {})", tag.0, py_to_raw(inner, expr, opts))
         }
         TypeRef::Tagged(_, inner) => py_to_raw(inner, expr, opts),
+        // One type or `null` (`children: info-list / null`): the type's raw
+        // form unless it's None (dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if or_null(cs).is_some() => {
+            let t = or_null(cs).unwrap();
+            format!("(None if {expr} is None else {})", py_to_raw(t, expr, opts))
+        }
         TypeRef::Choice(_) => expr.to_owned(),
     }
 }
@@ -1514,6 +1530,13 @@ fn py_from_raw(ty: &TypeRef, expr: &str, at: &str, opts: &CodegenOptions) -> Str
             opts,
         ),
         TypeRef::Tagged(_, inner) => py_from_raw(inner, expr, at, opts),
+        TypeRef::Choice(cs) if or_null(cs).is_some() => {
+            let t = or_null(cs).unwrap();
+            format!(
+                "(None if {expr} is None else {})",
+                py_from_raw(t, expr, at, opts)
+            )
+        }
         TypeRef::Choice(_) => expr.to_owned(),
     }
 }
@@ -2045,6 +2068,14 @@ fn py_value(
                 // be there (dgtlrift/cddlc#245).
                 return match module.get(n) {
                     Some(TypeDef::Array(_) | TypeDef::Map(_)) => format!("{}()", to_pascal_case(n)),
+                    // An enum takes a variant that doesn't nest further, if it
+                    // has one (`link = next / null`; dgtlrift/cddlc#224).
+                    Some(TypeDef::Enum(e)) => e
+                        .variants
+                        .iter()
+                        .find(|v| !matches!(v.ty, TypeRef::Named(_)))
+                        .map(|v| py_variant_value(e, v, module, opts, depth))
+                        .unwrap_or_else(|| "None".into()),
                     _ => "None".into(),
                 };
             }
@@ -2063,9 +2094,13 @@ fn py_value(
                         depth + 1
                     )
                 ),
+                // Its first variant; where a named one would stop the nesting,
+                // one that doesn't nest, if it has one (dgtlrift/cddlc#224).
                 Some(TypeDef::Enum(e)) => e
                     .variants
-                    .first()
+                    .iter()
+                    .find(|v| depth < MAX_FIXTURE_DEPTH || !matches!(v.ty, TypeRef::Named(_)))
+                    .or(e.variants.first())
                     .map(|v| py_variant_value(e, v, module, opts, depth))
                     .unwrap_or_else(|| "None".into()),
                 Some(TypeDef::Array(_)) => format!("{}()", to_pascal_case(n)),
