@@ -73,6 +73,15 @@ are raised with `error()` and name the type and member
 - Members whose names are Lua keywords or the type's functions get a trailing
   underscore (`end_`, `encode_`).
 
+## `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178): the runtime's
+item for it, a table naming its kind (`{ k = "array", v = { ... } }`,
+`{ k = "map", v = { { key, item }, ... } }`, `{ k = "uint", v = 1 }`, ...),
+which encoding writes back byte for byte: a float keeps its width, a map its
+keys and their order, and `undefined` and tags stay as they were. A choice's
+`any` variant takes any item the others don't.
+
 ## Known gaps
 
 - **`float16`** is written at float32 width.

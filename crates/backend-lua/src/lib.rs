@@ -386,7 +386,9 @@ fn to_raw(ty: &TypeRef, x: &str) -> String {
             Primitive::Float64 | Primitive::Float => format!("R.f64({x})"),
             Primitive::Bool => format!("R.bool({x})"),
             Primitive::Tstr => format!("R.text({x})"),
-            Primitive::Bstr | Primitive::Any => format!("R.bytes({x})"),
+            Primitive::Bstr => format!("R.bytes({x})"),
+            // Already an item (dgtlrift/cddlc#178).
+            Primitive::Any => x.to_owned(),
             Primitive::Null | Primitive::Undefined => "R.null()".into(),
         },
         TypeRef::Named(n) => format!("M.{}.to_raw({x})", lua_type_name(n)),
@@ -401,8 +403,11 @@ fn to_raw(ty: &TypeRef, x: &str) -> String {
 fn from_raw(ty: &TypeRef, item: &str, at: &str) -> String {
     let at_lit = lua_str(at);
     match ty {
+        // The item as `decode` read it (dgtlrift/cddlc#178).
+        TypeRef::Primitive(Primitive::Any) => item.to_owned(),
         TypeRef::Primitive(p) => {
             let f = match p {
+                Primitive::Any => unreachable!(),
                 Primitive::Uint => "as_uint",
                 Primitive::Int => "as_int",
                 Primitive::Float16 | Primitive::Float32 | Primitive::Float64 | Primitive::Float => {
@@ -410,7 +415,7 @@ fn from_raw(ty: &TypeRef, item: &str, at: &str) -> String {
                 }
                 Primitive::Bool => "as_bool",
                 Primitive::Tstr => "as_text",
-                Primitive::Bstr | Primitive::Any => "as_bytes",
+                Primitive::Bstr => "as_bytes",
                 Primitive::Null | Primitive::Undefined => "as_null",
             };
             format!("R.{f}({item}, {at_lit})")
@@ -438,7 +443,8 @@ fn want(ty: &TypeRef, x: &str, at: &str) -> String {
                 }
                 Primitive::Bool => "want_boolean",
                 Primitive::Tstr => "want_text",
-                Primitive::Bstr | Primitive::Any => "want_string",
+                Primitive::Bstr => "want_string",
+                Primitive::Any => "want_item",
                 Primitive::Null | Primitive::Undefined => "want_null",
             };
             format!("R.{f}({x}, {at_lit})")
@@ -480,7 +486,7 @@ fn lua_literal(v: &LiteralValue) -> Option<String> {
 /// meets the constraint, or `None` when it does not apply.
 fn lua_check(c: &Constraint, p: &Primitive, x: &str) -> Option<String> {
     // `#` counts bytes: CDDL's .size on text is its UTF-8 length.
-    let len_ok = matches!(p, Primitive::Tstr | Primitive::Bstr | Primitive::Any);
+    let len_ok = matches!(p, Primitive::Tstr | Primitive::Bstr);
     let is_uint = matches!(p, Primitive::Uint);
     let numeric = matches!(p, Primitive::Uint | Primitive::Int) || is_float(p);
     // A uint above 2^63 is a negative Lua integer: compare unsigned.
@@ -1332,7 +1338,9 @@ fn emit_enum(w: &mut IndentWriter, cx: &Cx, e: &EnumDef) {
     let int = payload(&|p| matches!(p, Primitive::Int));
     let float = payload(&|p| is_float(p));
     let boolean = payload(&|p| matches!(p, Primitive::Bool));
-    let any_bytes = payload(&|p| matches!(p, Primitive::Bstr | Primitive::Any));
+    let any_bytes = payload(&|p| matches!(p, Primitive::Bstr));
+    // An `any` variant takes what the others don't (dgtlrift/cddlc#178).
+    let any_item = payload(&|p| matches!(p, Primitive::Any));
     let bytes = any_bytes.filter(|_| !cx.json());
     // JSON writes bytes as base64url text: read them as text, unless a tstr
     // variant takes any text (the two can't be told apart).
@@ -1444,9 +1452,12 @@ fn emit_enum(w: &mut IndentWriter, cx: &Cx, e: &EnumDef) {
         w.line(&format!("  if ok then return {} end", ctor(v, Some("x"))));
         w.line("end");
     }
-    w.line(&format!(
-        "R.fail({at}, \"no variant matches \" .. R.kind_name(item))"
-    ));
+    match any_item {
+        Some(v) => w.line(&format!("return {}", ctor(v, Some("item")))),
+        None => w.line(&format!(
+            "R.fail({at}, \"no variant matches \" .. R.kind_name(item))"
+        )),
+    }
     w.dedent();
     w.line("end");
     emit_encode_decode(w, cx, &t);
@@ -1770,10 +1781,7 @@ fn enum_specs(cx: &Cx, e: &EnumDef) -> Vec<(String, Vec<String>)> {
         if cx.json()
             && takes_text
             && has_payload(v)
-            && matches!(
-                base_primitive(&v.ty),
-                Some(Primitive::Bstr | Primitive::Any)
-            )
+            && matches!(base_primitive(&v.ty), Some(Primitive::Bstr))
         {
             continue;
         }
@@ -2008,7 +2016,7 @@ fn lua_value(
                 ) => return format!("string.rep(\"a\", {n})"),
                 (
                     Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. },
-                    Primitive::Bstr | Primitive::Any,
+                    Primitive::Bstr,
                 ) => return format!("string.rep(\"\\0\", {n})"),
                 (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) => {
                     return lua_int(*lo as i128)
@@ -2045,9 +2053,14 @@ fn lua_value(
                 (if explicit { "1.5" } else { "0.0" }).into()
             }
             Primitive::Tstr => (if explicit { "\"hello\"" } else { "\"\"" }).into(),
-            Primitive::Bstr | Primitive::Any => {
-                (if explicit { "\"\\1\\2\"" } else { "\"\"" }).into()
-            }
+            Primitive::Bstr => (if explicit { "\"\\1\\2\"" } else { "\"\"" }).into(),
+            // An item that isn't a byte string, `[1, "a"]` (dgtlrift/cddlc#178), or `null`.
+            Primitive::Any => (if explicit {
+                "{ k = \"array\", v = { { k = \"uint\", v = 1 }, { k = \"text\", v = \"a\" } } }"
+            } else {
+                "{ k = \"null\" }"
+            })
+            .into(),
             Primitive::Null | Primitive::Undefined => "M.null".into(),
         },
         TypeRef::Tagged(_, inner) => lua_value(
@@ -2097,7 +2110,7 @@ fn lua_invalid_value(constraints: &[Constraint], ty: &TypeRef) -> Option<String>
             (Constraint::SizeExact(n), Primitive::Tstr) => {
                 return Some(format!("string.rep(\"a\", {})", n + 1))
             }
-            (Constraint::SizeExact(n), Primitive::Bstr | Primitive::Any) => {
+            (Constraint::SizeExact(n), Primitive::Bstr) => {
                 return Some(format!("string.rep(\"\\0\", {})", n + 1))
             }
             (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) if *lo > i64::MIN => {

@@ -78,12 +78,12 @@ pub const SCHEMAS: &[(&str, &str)] = &[
 /// - A map's other entries with integer keys can't be JSON (JSON objects
 ///   have text keys), and Node, Java, Lua and Dart don't hold them yet
 ///   (dgtlrift/cddlc#181).
-/// - `any` as the encoded item: all but Lua and Dart so far (dgtlrift/cddlc#178).
+/// - `any` as the encoded item: all but Dart so far (dgtlrift/cddlc#178).
 const LIMITED_SCHEMAS: &[(&str, &[&str], bool)] = &[
     ("other-keys", &["rs", "h", "hpp", "cs", "py", "go"], true),
     (
         "any",
-        &["rs", "h", "hpp", "cs", "go", "py", "java", "ts"],
+        &["rs", "h", "hpp", "cs", "go", "py", "java", "ts", "lua"],
         false,
     ),
 ];
