@@ -607,6 +607,8 @@ and the test fails when one starts working, so the list stays current.
   item: an `AnyItem` whose bytes encoding writes back unchanged, or a `serde_json::Value` in JSON.
   C holds a pointer and length into the input (`cbor_any_t`), or the value's JSON text
   (`json_any_t`). C++ holds a `std::string_view` of the item's encoding, or an `nlohmann::json`.
+  C# holds the item's encoding in a `byte[]` (`ReadEncodedValue` / `WriteEncodedValue`), or a
+  `JsonElement`.
 
 ### Validator gaps (`cddlc validate`)
 
