@@ -2983,6 +2983,59 @@ fn go_map_value(m: &MapDef, module: &IrModule, explicit: bool, depth: usize) -> 
     format!("{}{{{key}: {val}}}", go_type_name(&m.name))
 }
 
+/// The smallest test value of `ty` that decodes back to itself, where the
+/// fixture's nesting stops (dgtlrift/cddlc#226): its required slices, maps
+/// and byte strings empty but not nil (decoding makes them so), an `any` the
+/// `null` item, and a struct's required members the same, down to a type
+/// already being filled. `None` when the zero value does.
+fn go_minimal(
+    ty: &TypeRef,
+    occ: &Occurrence,
+    module: &IrModule,
+    seen: &mut Vec<String>,
+) -> Option<String> {
+    if is_repeated(occ) {
+        return Some(format!("{}{{}}", go_field_type(ty, occ)));
+    }
+    if matches!(occ, Occurrence::Optional) {
+        return None;
+    }
+    match ty {
+        TypeRef::Primitive(Primitive::Bstr) => Some("[]byte{}".into()),
+        TypeRef::Primitive(Primitive::Any) => Some("nullItem()".into()),
+        TypeRef::Primitive(_) | TypeRef::Choice(_) => None,
+        TypeRef::Tagged(_, inner) => go_minimal(inner, occ, module, seen),
+        TypeRef::Named(n) => {
+            let tn = go_type_name(n);
+            match module.get(n) {
+                Some(TypeDef::Array(_) | TypeDef::Map(_)) => Some(format!("{tn}{{}}")),
+                Some(TypeDef::Alias(a)) => go_minimal(&a.ty, &Occurrence::Required, module, seen)
+                    .map(|v| format!("{tn}({v})")),
+                Some(TypeDef::Struct(s)) if !seen.contains(&n.to_string()) => {
+                    seen.push(n.to_string());
+                    let fields: Vec<String> = s
+                        .fields
+                        .iter()
+                        .filter_map(|f| {
+                            let v = go_minimal(&f.ty, &f.occurrence, module, seen)?;
+                            // A required pointer member points at it (dgtlrift/cddlc#221).
+                            let v = if is_ptr(&s.name, &f.name) {
+                                format!("ptr({v})")
+                            } else {
+                                v
+                            };
+                            Some(format!("{}: {v}", go_field_name(&f.name)))
+                        })
+                        .collect();
+                    seen.pop();
+                    Some(format!("{tn}{{{}}}", fields.join(", ")))
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
 fn go_struct_value(s: &StructDef, module: &IrModule, explicit: bool, depth: usize) -> String {
     let mut fields: Vec<String> = s
         .fields
@@ -3226,7 +3279,10 @@ fn go_value(
         TypeRef::Named(n) => {
             let tn = go_type_name(n);
             if depth > MAX_FIXTURE_DEPTH {
-                return format!("{tn}{{}}");
+                // The nesting stops here, with a value that decodes back to
+                // itself (dgtlrift/cddlc#226).
+                return go_minimal(ty, &Occurrence::Required, module, &mut Vec::new())
+                    .unwrap_or_else(|| format!("{tn}{{}}"));
             }
             match module.get(n) {
                 Some(TypeDef::Struct(s)) => go_struct_value(s, module, explicit, depth),
