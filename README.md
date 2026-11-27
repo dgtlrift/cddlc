@@ -610,6 +610,7 @@ and the test fails when one starts working, so the list stays current.
   C# holds the item's encoding in a `byte[]` (`ReadEncodedValue` / `WriteEncodedValue`), or a
   `JsonElement`. Go holds a `RawItem`, an alias of `cbor.RawMessage` or `json.RawMessage`.
   Python holds the value cbor2 or `json` decodes it to, and gives it back to them to encode.
+  Java holds the runtime's raw value (`Object`: `Map`, `List`, `Long`, `String`, `byte[]`, ...).
 
 ### Validator gaps (`cddlc validate`)
 

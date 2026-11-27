@@ -597,7 +597,9 @@ fn java_primitive(p: &Primitive, boxed: bool) -> &'static str {
         (Primitive::Float64 | Primitive::Float, false) => "double",
         (Primitive::Float64 | Primitive::Float, true) => "Double",
         (Primitive::Tstr, _) => "String",
-        (Primitive::Bstr | Primitive::Any, _) => "byte[]",
+        (Primitive::Bstr, _) => "byte[]",
+        // The runtime's raw value of the item (dgtlrift/cddlc#178).
+        (Primitive::Any, _) => "Object",
         (Primitive::Null | Primitive::Undefined, _) => "Cddl.Null",
     }
 }
@@ -641,7 +643,7 @@ fn base_primitive(ty: &TypeRef) -> Option<&Primitive> {
 }
 
 fn is_bytes(ty: &TypeRef) -> bool {
-    matches!(base_primitive(ty), Some(Primitive::Bstr | Primitive::Any))
+    matches!(base_primitive(ty), Some(Primitive::Bstr))
 }
 
 /// Whether a Java value of this type is a reference that must not be null.
@@ -649,11 +651,7 @@ fn is_reference(ty: &TypeRef) -> bool {
     match base_primitive(ty) {
         Some(p) => matches!(
             p,
-            Primitive::Tstr
-                | Primitive::Bstr
-                | Primitive::Any
-                | Primitive::Null
-                | Primitive::Undefined
+            Primitive::Tstr | Primitive::Bstr | Primitive::Null | Primitive::Undefined
         ),
         None => true,
     }
@@ -669,7 +667,9 @@ fn to_raw(ty: &TypeRef, expr: &str) -> String {
             Primitive::Float64 | Primitive::Float => format!("Cddl.f64({expr})"),
             Primitive::Bool => format!("Cddl.bool({expr})"),
             Primitive::Tstr => expr.to_owned(),
-            Primitive::Bstr | Primitive::Any => format!("Cddl.bytes({expr})"),
+            Primitive::Bstr => format!("Cddl.bytes({expr})"),
+            // Already the raw value (dgtlrift/cddlc#178).
+            Primitive::Any => expr.to_owned(),
             Primitive::Null | Primitive::Undefined => "null".into(),
         },
         TypeRef::Named(_) => format!("{expr}.toRaw()"),
@@ -685,15 +685,18 @@ fn to_raw(ty: &TypeRef, expr: &str) -> String {
 fn from_raw(ty: &TypeRef, raw: &str, at: &str, qual: Option<&str>) -> String {
     let at_lit = java_str(at);
     match ty {
+        // The raw value as the runtime read it (dgtlrift/cddlc#178).
+        TypeRef::Primitive(Primitive::Any) => raw.to_owned(),
         TypeRef::Primitive(p) => {
             let f = match p {
+                Primitive::Any => unreachable!(),
                 Primitive::Uint => "asUint",
                 Primitive::Int => "asInt",
                 Primitive::Float16 | Primitive::Float32 => "asFloat32",
                 Primitive::Float64 | Primitive::Float => "asFloat64",
                 Primitive::Bool => "asBool",
                 Primitive::Tstr => "asText",
-                Primitive::Bstr | Primitive::Any => "asBytes",
+                Primitive::Bstr => "asBytes",
                 Primitive::Null | Primitive::Undefined => "asNull",
             };
             format!("Cddl.{f}({raw}, {at_lit})")
@@ -776,7 +779,7 @@ fn java_literal(v: &LiteralValue, p: &Primitive) -> Option<String> {
 fn java_check(c: &Constraint, p: &Primitive, x: &str) -> Option<String> {
     let len = match p {
         Primitive::Tstr => Some(format!("Cddl.utf8Length({x})")),
-        Primitive::Bstr | Primitive::Any => Some(format!("{x}.length")),
+        Primitive::Bstr => Some(format!("{x}.length")),
         _ => None,
     };
     let is_uint = matches!(p, Primitive::Uint);
@@ -974,7 +977,7 @@ const BV: &str = "jakarta.validation.constraints";
 
 /// The Bean Validation annotations of a CDDL constraint on a value of `p`.
 fn constraint_annotations(c: &Constraint, p: &Primitive) -> Vec<String> {
-    let text_or_bytes = matches!(p, Primitive::Tstr | Primitive::Bstr | Primitive::Any);
+    let text_or_bytes = matches!(p, Primitive::Tstr | Primitive::Bstr);
     let int_like = matches!(p, Primitive::Uint | Primitive::Int);
     let fits = |n: i128| n >= i64::MIN as i128 && n <= i64::MAX as i128;
     let min_max = |lo: Option<i128>, hi: Option<i128>, inclusive: bool| -> Vec<String> {
@@ -2011,7 +2014,9 @@ fn emit_sealed_enum(w: &mut IndentWriter, cx: &Cx, e: &EnumDef) {
     let int = payload(&|p| matches!(p, Primitive::Int));
     let float = payload(&|p| is_float(p));
     let boolean = payload(&|p| matches!(p, Primitive::Bool));
-    let any_bytes = payload(&|p| matches!(p, Primitive::Bstr | Primitive::Any));
+    let any_bytes = payload(&|p| matches!(p, Primitive::Bstr));
+    // An `any` variant takes what the others don't (dgtlrift/cddlc#178).
+    let any_item = payload(&|p| matches!(p, Primitive::Any));
     let bytes = any_bytes.filter(|_| !cx.json());
     // JSON writes bytes as base64url text: read them as text, unless a tstr
     // variant takes any text (the two can't be told apart).
@@ -2131,7 +2136,10 @@ fn emit_sealed_enum(w: &mut IndentWriter, cx: &Cx, e: &EnumDef) {
         w.line("    // not this variant");
         w.line("}");
     }
-    w.line(&format!("throw Cddl.noVariant({at}, v);"));
+    match any_item {
+        Some(v) => w.line(&format!("return new {}(v);", rec(v))),
+        None => w.line(&format!("throw Cddl.noVariant({at}, v);")),
+    }
     w.dedent();
     w.line("}");
     emit_encode_decode(w, cx, &class, true);
@@ -2693,7 +2701,7 @@ fn java_value(
                 ) => return java_str(&"a".repeat(*n)),
                 (
                     Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. },
-                    Primitive::Bstr | Primitive::Any,
+                    Primitive::Bstr,
                 ) => return format!("new byte[{n}]"),
                 (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) => {
                     return long_lit(*lo as i128)
@@ -2731,10 +2739,17 @@ fn java_value(
             }
             Primitive::Float64 | Primitive::Float => (if explicit { "1.5" } else { "0.0" }).into(),
             Primitive::Tstr => (if explicit { "\"hello\"" } else { "\"\"" }).into(),
-            Primitive::Bstr | Primitive::Any => (if explicit {
+            Primitive::Bstr => (if explicit {
                 "new byte[] {1, 2}"
             } else {
                 "new byte[0]"
+            })
+            .into(),
+            // An item that isn't a byte string, `[1, "a"]` (dgtlrift/cddlc#178), or `null`.
+            Primitive::Any => (if explicit {
+                "java.util.List.of(1L, \"a\")"
+            } else {
+                "null"
             })
             .into(),
             Primitive::Null | Primitive::Undefined => "Cddl.Null.NULL".into(),
