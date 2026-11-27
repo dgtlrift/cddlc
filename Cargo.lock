@@ -262,6 +262,8 @@ dependencies = [
  "backend-rust",
  "cddlc-ir",
  "cddlc-parser",
+ "regex",
+ "regex-syntax",
  "serde_json",
  "smol_str",
 ]

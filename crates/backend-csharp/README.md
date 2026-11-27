@@ -120,11 +120,11 @@ Requires .NET 8 SDK or later.
 
 ## Known gaps and future enhancements
 
-- **Partial constraint validation**: `.size` and numeric range constraints emit
-  `ArgumentException` guards; `.regexp` constraints reach the IR but are not emitted in
-  the generated code.
-- **No XML doc comments**: `@doc` pragma text is not rendered as `/// <summary>` lines.
-- **No NuGet packaging**: no `.nuspec` or `PackageReference` publish configuration.
+- **`.regexp`** is checked with .NET's `Regex`, matching the whole text, unless a
+  `@regex-hook` names a function to call instead. .NET's grammar is close to the
+  XSD one CDDL names, but not the same.
+- **No NuGet packaging**: the library and its tests share one project, so it
+  doesn't pack on its own.
 - **`System.Formats.Cbor` requirement**: requires .NET 6+; no fallback for .NET Framework
   or older .NET Core targets.
 - **Mutable properties**: all properties use `{ get; set; }`; a `--immutable` option for

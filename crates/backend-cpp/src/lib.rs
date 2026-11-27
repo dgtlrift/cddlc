@@ -184,6 +184,9 @@ fn emit_header(module: &IrModule, opts: &CodegenOptions) -> String {
     w.line("#include <array>");
     w.line("#include <vector>");
     w.line("#include <cstring>");
+    if module_uses_regex(module) {
+        w.line("#include <regex>");
+    }
     w.line("#include <nanocbor/nanocbor.h>");
     w.blank();
 
@@ -2122,8 +2125,89 @@ fn cpp_constraint_check(c: &Constraint, val_expr: &str, p: &Primitive) -> Option
             }
             _ => None,
         },
+        // `.regexp` without a hook: the whole text matches, with std::regex
+        // compiled once (ECMAScript grammar).
+        Constraint::Regexp { pattern, hook: None } if matches!(p, Primitive::Tstr) => Some(format!(
+            "[](const auto& v) {{ static const std::regex re({}); return std::regex_match(v.begin(), v.end(), re); }}({val_expr})",
+            cpp_raw_str(pattern)
+        )),
         _ => constraint_to_cpp_check(c, val_expr),
     }
+}
+
+/// Throws if a decoded JSON member breaks one of its constraints: a member
+/// of a primitive type, as CBOR checks (`.size`, ranges, `.regexp`, ...).
+fn emit_cpp_json_checks(w: &mut IndentWriter, ctype: &str, f: &cddlc_ir::FieldDef) {
+    let TypeRef::Primitive(p) = &f.ty else {
+        return;
+    };
+    if f.occurrence.is_repeated() {
+        return;
+    }
+    let fname = to_snake_case(&f.name);
+    let optional = matches!(f.occurrence, Occurrence::Optional);
+    let val = if optional {
+        format!("(*out.{fname})")
+    } else {
+        format!("out.{fname}")
+    };
+    for c in &f.constraints {
+        // A byte-string literal compares as a `string_view`, which JSON's
+        // vector isn't.
+        if matches!(
+            c,
+            Constraint::Eq(LiteralValue::Bytes(_)) | Constraint::Ne(LiteralValue::Bytes(_))
+        ) {
+            continue;
+        }
+        let Some(check) = cpp_constraint_check(c, &val, p) else {
+            continue;
+        };
+        let guard = if optional {
+            format!("out.{fname} && ")
+        } else {
+            String::new()
+        };
+        w.line(&format!(
+            "if ({guard}!({check})) throw std::invalid_argument(\"{ctype}.{}: value breaks its constraint\");",
+            f.name
+        ));
+    }
+}
+
+/// A C++ literal of a numeric or text [`cddlc_codegen::SampleValue`].
+fn cpp_sample_lit(v: &cddlc_codegen::SampleValue) -> String {
+    match v {
+        cddlc_codegen::SampleValue::Uint(n) => format!("{n}ULL"),
+        cddlc_codegen::SampleValue::Int(n) if *n == i64::MIN => "INT64_MIN".into(),
+        cddlc_codegen::SampleValue::Int(n) => format!("{n}LL"),
+        cddlc_codegen::SampleValue::Float(x) => format!("{x:?}"),
+        cddlc_codegen::SampleValue::Text(t) => format!("std::string({t:?})"),
+    }
+}
+
+/// A C++ raw string literal of `s`, with a delimiter `s` doesn't contain.
+fn cpp_raw_str(s: &str) -> String {
+    let mut d = String::from("re");
+    while s.contains(&format!("){d}\"")) {
+        d.push('_');
+    }
+    format!("R\"{d}({s}){d}\"")
+}
+
+/// Whether a member or alias has a `.regexp` with no hook, which std::regex
+/// checks (it needs `<regex>`).
+fn module_uses_regex(module: &IrModule) -> bool {
+    let has = |cs: &[Constraint]| {
+        cs.iter()
+            .any(|c| matches!(c, Constraint::Regexp { hook: None, .. }))
+    };
+    module.types.values().any(|d| match d {
+        TypeDef::Struct(s) => s.fields.iter().any(|f| has(&f.constraints)),
+        TypeDef::Alias(a) => has(&a.constraints),
+        TypeDef::Enum(e) => e.variants.iter().any(|v| has(&v.constraints)),
+        _ => false,
+    })
 }
 
 fn cpp_uint_max_for_bytes(n: usize) -> Option<String> {
@@ -2447,6 +2531,23 @@ fn emit_cpp_type_test(
                 }) {
                     w.line(&format!("original.{fname} = {lit};"));
                     continue;
+                }
+                // A value its range, `.size` or `.regexp` allows.
+                if let TypeRef::Primitive(p) = effective_ty {
+                    if let Some(v) = cddlc_codegen::constrained_sample(p, &f.constraints) {
+                        match v {
+                            cddlc_codegen::SampleValue::Text(t) => {
+                                w.line(&format!("static const char _{fname}_str[] = {t:?};"));
+                                w.line(&format!(
+                                    "original.{fname} = std::string_view(_{fname}_str);"
+                                ));
+                            }
+                            other => {
+                                w.line(&format!("original.{fname} = {};", cpp_sample_lit(&other)))
+                            }
+                        }
+                        continue;
+                    }
                 }
                 // `.bits`: the mask itself is a value it allows (dgtlrift/cddlc#107).
                 if let Some(bits) = f.constraints.iter().find_map(|c| match c {
@@ -2976,6 +3077,9 @@ fn emit_source_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
     }
     w.line(&format!("#include \"{name}.hpp\""));
     w.line("#include <cstring>");
+    if module_uses_regex(module) {
+        w.line("#include <regex>");
+    }
     w.blank();
     w.line(&format!("namespace {ns} {{"));
     w.blank();
@@ -3408,6 +3512,8 @@ fn emit_cpp_json_impl(
                         ));
                     }
                 }
+                // Its constraints, as CBOR checks them on decode.
+                emit_cpp_json_checks(w, &ctype, f);
             }
             // Keys no member has are the map's other entries.
             if let Some(r) = &s.rest {
@@ -3627,6 +3733,32 @@ fn emit_tests_json_cpp(module: &IrModule, opts: &CodegenOptions) -> String {
                             to_snake_case(&f.name),
                             cpp_filled_json(n, module)
                         ));
+                    }
+                }
+                // A required member with a range, `.size` or `.regexp` holds a
+                // value it allows: JSON checks them on decode.
+                for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
+                    // A member pinned to one value holds it.
+                    if let Some(lit) = f.constraints.iter().find_map(|c| match c {
+                        Constraint::Eq(LiteralValue::Bool(b)) => Some(b.to_string()),
+                        Constraint::Eq(LiteralValue::Uint(n)) => Some(format!("{n}ULL")),
+                        Constraint::Eq(LiteralValue::Int(n)) => Some(format!("{n}LL")),
+                        Constraint::Eq(LiteralValue::Text(t)) => {
+                            Some(format!("std::string({t:?})"))
+                        }
+                        _ => None,
+                    }) {
+                        w.line(&format!("original.{} = {lit};", to_snake_case(&f.name)));
+                        continue;
+                    }
+                    if let TypeRef::Primitive(p) = &f.ty {
+                        if let Some(v) = cddlc_codegen::constrained_sample(p, &f.constraints) {
+                            w.line(&format!(
+                                "original.{} = {};",
+                                to_snake_case(&f.name),
+                                cpp_sample_lit(&v)
+                            ));
+                        }
                     }
                 }
                 // A repeated member gets as many (default) items as it needs
