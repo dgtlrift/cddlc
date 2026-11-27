@@ -109,6 +109,16 @@ public record Timestamp(long value) { … }        // timestamp = #6.1(uint)
 | `nil` | `Cddl.Null.NULL` |
 | `#6.N(T)` | `T`, the tag written and checked (JSON has no tags) |
 
+## `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178): an `Object`
+holding the runtime's raw value of it (`Map<String, Object>`, `List<Object>`,
+`Long` or `BigInteger`, `Double`, `String`, `Boolean`, `byte[]`,
+`Cddl.Tagged`, or `null`), which encoding writes back. The same value comes
+back, though not always the same bytes: a float is written as a float64, and
+CBOR map keys are read as text (dgtlrift/cddlc#181). A choice's `any` variant
+takes any item the others don't.
+
 ## Jakarta EE
 
 `--java-flavor ee` adds, on top of the same types and checks:
