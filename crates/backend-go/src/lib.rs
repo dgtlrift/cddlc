@@ -969,11 +969,25 @@ fn go_primitive(p: &Primitive) -> &'static str {
     }
 }
 
+/// The other alternative of a choice of one type and `null`.
+fn or_null(cs: &[TypeRef]) -> Option<&TypeRef> {
+    let is_null = |t: &TypeRef| matches!(t, TypeRef::Primitive(Primitive::Null));
+    match cs {
+        [a, b] if is_null(b) && !is_null(a) => Some(a),
+        [a, b] if is_null(a) && !is_null(b) => Some(b),
+        _ => None,
+    }
+}
+
 pub fn go_type(ty: &TypeRef) -> String {
     match ty {
         TypeRef::Primitive(p) => go_primitive(p).to_owned(),
         TypeRef::Named(n) => go_type_name(n),
         TypeRef::Tagged(_, inner) => go_type(inner),
+        // One type or `null`: a pointer to it, nil when null (dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if or_null(cs).is_some() => {
+            format!("*{}", go_type(or_null(cs).unwrap()))
+        }
         TypeRef::Choice(_) => "any".into(),
     }
 }
@@ -1112,6 +1126,11 @@ fn go_field_type(ty: &TypeRef, occ: &Occurrence) -> String {
 /// A Go expression of type `([]byte, error)` encoding `expr`.
 fn enc_expr(ty: &TypeRef, expr: &str) -> String {
     match ty {
+        // nil is null; otherwise the value it points at (dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "func() ([]byte, error) {{ if {expr} == nil {{ return encNull() }}; return {} }}()",
+            enc_expr(or_null(cs).unwrap(), &format!("*{expr}"))
+        ),
         TypeRef::Primitive(Primitive::Bstr) => format!("encBytes({expr})"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "encNull()".into(),
         TypeRef::Primitive(_) | TypeRef::Named(_) | TypeRef::Choice(_) => {
@@ -1178,6 +1197,19 @@ fn emit_decode(w: &mut IndentWriter, ty: &TypeRef, src: &str, dst: &str, at: &st
         }
         // A choice of primitives: each alternative's decoder, in order, so a
         // value comes back as its alternative's type (an `int` as int64).
+        // null is nil; otherwise a new value of the type (dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if or_null(cs).is_some() => {
+            let t = or_null(cs).unwrap();
+            w.line(&format!("if kindOf({src}) == kindNull {{"));
+            w.line(&format!("    {dst} = nil"));
+            w.line("} else {");
+            w.indent();
+            w.line(&format!("var x {}", go_type(t)));
+            emit_decode(w, t, src, "x", at);
+            w.line(&format!("{dst} = &x"));
+            w.dedent();
+            w.line("}");
+        }
         TypeRef::Choice(alts) if alts.iter().all(|a| prim_decoder(a).is_some()) => {
             let decs: Vec<String> = alts
                 .iter()
@@ -3064,6 +3096,12 @@ fn go_minimal(
             let tn = go_type_name(n);
             match module.get(n) {
                 Some(TypeDef::Array(_) | TypeDef::Map(_)) => Some(format!("{tn}{{}}")),
+                // A variant that doesn't nest (dgtlrift/cddlc#224).
+                Some(TypeDef::Enum(e)) => e
+                    .variants
+                    .iter()
+                    .find(|v| !matches!(v.ty, TypeRef::Named(_)))
+                    .map(|v| go_variant_value(e, v, module, MAX_FIXTURE_DEPTH)),
                 Some(TypeDef::Alias(a)) => go_minimal(&a.ty, &Occurrence::Required, module, seen)
                     .map(|v| format!("{tn}({v})")),
                 Some(TypeDef::Struct(s)) if !seen.contains(&n.to_string()) => {
@@ -3333,6 +3371,18 @@ fn go_value(
             explicit,
             depth,
         ),
+        // A pointer to the type's value (dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if or_null(cs).is_some() => format!(
+            "ptr({})",
+            go_value(
+                or_null(cs).unwrap(),
+                &Occurrence::Required,
+                &[],
+                module,
+                explicit,
+                depth
+            )
+        ),
         // A choice's first alternative (nil would be null, not a valid value).
         TypeRef::Choice(alts) => match alts.first() {
             Some(first) => go_value(first, &Occurrence::Required, &[], module, explicit, depth),
@@ -3359,9 +3409,14 @@ fn go_value(
                         depth + 1
                     )
                 ),
+                // Its first variant; where a named one would stop the
+                // nesting, one that doesn't nest, if it has one
+                // (`link = next / null`; dgtlrift/cddlc#224).
                 Some(TypeDef::Enum(e)) => e
                     .variants
-                    .first()
+                    .iter()
+                    .find(|v| depth + 1 < MAX_FIXTURE_DEPTH || !matches!(v.ty, TypeRef::Named(_)))
+                    .or(e.variants.first())
                     .map(|v| go_variant_value(e, v, module, depth))
                     .unwrap_or_else(|| format!("{tn}{{}}")),
                 Some(TypeDef::Array(_)) => format!("{tn}{{}}"),
