@@ -80,7 +80,8 @@ fn go_key(key: &FieldKey, opts: &CodegenOptions) -> String {
 /// Exported names the generated package's runtime defines (`type Null
 /// struct{}`, the CDDL nil). A rule whose type would take one gets a trailing
 /// `_` instead, which no rule's name can produce (dgtlrift/cddlc#149).
-const RESERVED_TYPES: &[&str] = &["Null"];
+// `RawItem` is the runtime's type for `any` (dgtlrift/cddlc#178).
+const RESERVED_TYPES: &[&str] = &["Null", "RawItem"];
 
 /// The Go type name of a rule.
 pub fn go_type_name(name: &str) -> String {
@@ -785,6 +786,35 @@ fn emit_source(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
             w.line(line)
         }
     }
+    if cddlc_codegen::module_uses_any(module) {
+        let lib = if opts.is_json() { "json" } else { "cbor" };
+        let null = if opts.is_json() {
+            "RawItem(\"null\")"
+        } else {
+            "RawItem{0xf6}"
+        };
+        let any_helper = format!(
+            "// RawItem is a data item of any type (CDDL `any`), held as its encoding:\n\
+             // decoding keeps the item's bytes, and encoding writes them back unchanged\n\
+             // (dgtlrift/cddlc#178). Empty is `null`.\n\
+             type RawItem = {lib}.RawMessage\n\
+             \n\
+             // decItem is r's own copy: r points into the input.\n\
+             func decItem(r []byte, at string) (RawItem, error) {{\n\
+             \tif len(r) == 0 {{\n\
+             \t\treturn {null}, nil\n\
+             \t}}\n\
+             \treturn append(RawItem(nil), r...), nil\n\
+             }}"
+        );
+        for line in [""].into_iter().chain(any_helper.lines()) {
+            if line.is_empty() {
+                w.blank()
+            } else {
+                w.line(line)
+            }
+        }
+    }
     if rests {
         for line in [""].into_iter().chain(SORTED_KEYS_HELPER.lines()) {
             if line.is_empty() {
@@ -933,7 +963,9 @@ fn go_primitive(p: &Primitive) -> &'static str {
         Primitive::Float16 | Primitive::Float32 => "float32",
         Primitive::Float64 | Primitive::Float => "float64",
         Primitive::Tstr => "string",
-        Primitive::Bstr | Primitive::Any => "[]byte",
+        Primitive::Bstr => "[]byte",
+        // The item's encoding (dgtlrift/cddlc#178).
+        Primitive::Any => "RawItem",
     }
 }
 
@@ -1080,7 +1112,7 @@ fn go_field_type(ty: &TypeRef, occ: &Occurrence) -> String {
 /// A Go expression of type `([]byte, error)` encoding `expr`.
 fn enc_expr(ty: &TypeRef, expr: &str) -> String {
     match ty {
-        TypeRef::Primitive(Primitive::Bstr | Primitive::Any) => format!("encBytes({expr})"),
+        TypeRef::Primitive(Primitive::Bstr) => format!("encBytes({expr})"),
         TypeRef::Primitive(Primitive::Null | Primitive::Undefined) => "encNull()".into(),
         TypeRef::Primitive(_) | TypeRef::Named(_) | TypeRef::Choice(_) => {
             format!("marshal({expr})")
@@ -1129,7 +1161,8 @@ fn emit_decode(w: &mut IndentWriter, ty: &TypeRef, src: &str, dst: &str, at: &st
                 Primitive::Float16 | Primitive::Float32 => "decFloat32",
                 Primitive::Float64 | Primitive::Float => "decFloat64",
                 Primitive::Tstr => "decText",
-                Primitive::Bstr | Primitive::Any => "decBytes",
+                Primitive::Bstr => "decBytes",
+                Primitive::Any => "decItem",
                 Primitive::Null | Primitive::Undefined => "decNull",
             };
             w.line("{");
@@ -1211,7 +1244,7 @@ fn go_literal(v: &LiteralValue) -> Option<String> {
 fn go_check(c: &Constraint, p: &Primitive, x: &str) -> Option<String> {
     let int_like = matches!(p, Primitive::Uint | Primitive::Int);
     let is_uint = matches!(p, Primitive::Uint);
-    let len_ok = matches!(p, Primitive::Tstr | Primitive::Bstr | Primitive::Any);
+    let len_ok = matches!(p, Primitive::Tstr | Primitive::Bstr);
     match c {
         Constraint::SizeExact(n) if len_ok => Some(format!("len({x}) == {n}")),
         Constraint::SizeRange { min, max } if len_ok => {
@@ -2217,7 +2250,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
     let int = payload(&|p| matches!(p, Primitive::Int));
     let float = payload(&|p| is_float(p));
     let boolean = payload(&|p| matches!(p, Primitive::Bool));
-    let any_bytes = payload(&|p| matches!(p, Primitive::Bstr | Primitive::Any));
+    let any_bytes = payload(&|p| matches!(p, Primitive::Bstr));
+    // An `any` variant takes what the others don't (dgtlrift/cddlc#178).
+    let any_item = payload(&|p| matches!(p, Primitive::Any));
     let bytes = any_bytes.filter(|_| !opts.is_json());
     // JSON writes bytes as base64url text: read them in the text branch, unless a
     // tstr variant takes any text (the two can't be told apart).
@@ -2383,9 +2418,16 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, opts: &CodegenOptions) {
         w.dedent();
         w.line("}");
     }
-    w.line(&format!(
-        "return mismatch({at}, \"one of its variants\", r)"
-    ));
+    match any_item {
+        Some(v) => {
+            w.line(&format!("x, _ := decItem(r, {at})"));
+            w.line(&set(v, Some("x")));
+            w.line("return nil");
+        }
+        None => w.line(&format!(
+            "return mismatch({at}, \"one of its variants\", r)"
+        )),
+    }
     w.dedent();
     w.line("}");
     w.blank();
@@ -2773,6 +2815,19 @@ fn emit_tests(module: &IrModule, pkg: &str, opts: &CodegenOptions) -> String {
     w.line("\t\"testing\"");
     w.line(")");
     w.blank();
+    if cddlc_codegen::module_uses_any(module) {
+        // An `any` member's test items, in this format (dgtlrift/cddlc#178):
+        // `[1, "a"]`, an item that isn't a byte string, and `null`.
+        let (sample, null) = if opts.is_json() {
+            ("RawItem(`[1,\"a\"]`)", "RawItem(\"null\")")
+        } else {
+            ("RawItem{0x82, 0x01, 0x61, 0x61}", "RawItem{0xf6}")
+        };
+        w.line(&format!("func sampleItem() RawItem {{ return {sample} }}"));
+        w.blank();
+        w.line(&format!("func nullItem() RawItem {{ return {null} }}"));
+        w.blank();
+    }
     for line in TEST_HELPERS.lines() {
         if line.is_empty() {
             w.blank()
@@ -2856,7 +2911,7 @@ fn emit_enum_tests(w: &mut IndentWriter, e: &EnumDef, module: &IrModule, opts: &
         if opts.is_json()
             && takes_text
             && has_payload(v)
-            && matches!(&v.ty, TypeRef::Primitive(Primitive::Bstr | Primitive::Any))
+            && matches!(&v.ty, TypeRef::Primitive(Primitive::Bstr))
         {
             continue;
         }
@@ -3213,7 +3268,7 @@ fn go_value(
                 ) => return go_str(&"a".repeat(*n)),
                 (
                     Constraint::SizeExact(n) | Constraint::SizeRange { min: Some(n), .. },
-                    Primitive::Bstr | Primitive::Any,
+                    Primitive::Bstr,
                 ) => return format!("make([]byte, {n})"),
                 (Constraint::ValueRangeInt { min: Some(lo), .. }, Primitive::Int) => {
                     return format!("int64({lo})")
@@ -3255,10 +3310,17 @@ fn go_value(
             })
             .into(),
             Primitive::Tstr => (if explicit { "\"hello\"" } else { "\"\"" }).into(),
-            Primitive::Bstr | Primitive::Any => (if explicit {
+            Primitive::Bstr => (if explicit {
                 "[]byte{0x01, 0x02}"
             } else {
                 "[]byte{}"
+            })
+            .into(),
+            // The test file's items, for its format (dgtlrift/cddlc#178).
+            Primitive::Any => (if explicit {
+                "sampleItem()"
+            } else {
+                "nullItem()"
             })
             .into(),
             Primitive::Null | Primitive::Undefined => "Null{}".into(),

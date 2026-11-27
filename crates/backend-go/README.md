@@ -103,6 +103,15 @@ elsewhere, so neither adds one. `Validate` (and so encoding) fails on a nil
 required pointer, decoding allocates the value, and `NewExprBinop(x)` takes the
 value and stores its address.
 
+### `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178): a `RawItem`, an
+alias of `cbor.RawMessage` (`json.RawMessage` in JSON) holding the item's
+encoding. Decoding keeps a copy of the item's bytes, encoding writes them back
+unchanged, and `cbor.Unmarshal` (or `json.Unmarshal`) decodes them further.
+An empty `RawItem` is `null`. A choice's `any` variant takes any item the
+others don't.
+
 ### Arrays and aliases
 
 ```go
