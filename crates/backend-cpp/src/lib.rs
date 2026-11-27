@@ -354,7 +354,7 @@ fn emit_struct_hpp(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
             cpp_field_type(&f.ty, &f.occurrence, opts)
         };
         let fname = cddlc_codegen::cpp_ident(&f.name);
-        w.line(&format!("{ty_str} {fname}{};", cpp_pinned_init(f)));
+        w.line(&format!("{ty_str} {fname}{};", cpp_pinned_init(f, false)));
         // A fixed-capacity repeated member says how many items it holds
         // (dgtlrift/cddlc#134).
         if f.occurrence.is_repeated() && !is_heap(opts) {
@@ -649,9 +649,12 @@ fn emit_alias_hpp(w: &mut IndentWriter, a: &AliasDef, opts: &CodegenOptions) {
                 let s = "a".repeat(n);
                 format!("value{{std::string_view({:?}, {n})}}", s)
             }
-            (TypeRef::Primitive(Primitive::Bstr | Primitive::Any), Some(_n)) => {
-                // bstr: leave as-is; static buffer needed, keep empty default
-                "value{}".into()
+            // An `any` is the `null` item by default (an empty one isn't one).
+            (TypeRef::Primitive(Primitive::Any), _) => format!("value{CPP_NULL_ITEM}"),
+            // A sized byte string: that many zero bytes, from a string
+            // literal, which outlives the view (`bytes .size 16`, RFC 9164).
+            (TypeRef::Primitive(Primitive::Bstr), Some(n)) => {
+                format!("value{{std::string_view(\"{}\", {n})}}", "\\x00".repeat(n))
             }
             _ => "value{}".into(),
         };
@@ -947,12 +950,39 @@ fn cpp_filled_at(name: &str, module: &IrModule, depth: usize, json: bool) -> Str
     let t = to_pascal_case(name);
     match module.get(name) {
         Some(TypeDef::Enum(e)) if !json => {
-            return e
+            if let Some(v) = e
                 .variants
                 .iter()
                 .find(|v| cpp_variant_payload(v, &CodegenOptions::default()).is_none())
-                .map(|v| format!("{t}::make_{}()", to_pascal_case(&v.name)))
-                .unwrap_or_else(|| format!("{t}{{}}"));
+            {
+                return format!("{t}::make_{}()", to_pascal_case(&v.name));
+            }
+            // A variant holding a primitive needs no nesting (`expr = int /
+            // binop` is `Int`).
+            if let Some(v) = e
+                .variants
+                .iter()
+                .find(|v| matches!(v.ty, TypeRef::Primitive(_)))
+            {
+                return format!("{t}::make_{}({{}})", to_pascal_case(&v.name));
+            }
+            // Every variant holds a named value: the first, filled, in its
+            // `Box` when it's one (RFC 8927's mapping values).
+            if depth < 4 {
+                if let Some((v, n)) = e.variants.iter().find_map(|v| match &v.ty {
+                    TypeRef::Named(n) => Some((v, n)),
+                    _ => None,
+                }) {
+                    let inner = cpp_filled_at(n, module, depth + 1, json);
+                    let arg = if is_boxed(&e.name, &v.name) {
+                        format!("Box<{}>({inner})", to_pascal_case(n))
+                    } else {
+                        inner
+                    };
+                    return format!("{t}::make_{}({arg})", to_pascal_case(&v.name));
+                }
+            }
+            return format!("{t}{{}}");
         }
         Some(TypeDef::Struct(_)) if depth < 4 => {}
         _ => return format!("{t}{{}}"),
@@ -2218,12 +2248,20 @@ fn cpp_sample_lit(v: &cddlc_codegen::SampleValue) -> String {
     }
 }
 
+/// The CBOR `null` item, as an `any`'s initializer.
+const CPP_NULL_ITEM: &str = "{\"\\xf6\", 1}";
+
 /// A member's initializer: a required member pinned to one value
 /// (`type: "accessibility"`) holds it by default, so a default value of its
 /// type decodes back; any other is value-initialized (`{}`).
-fn cpp_pinned_init(f: &cddlc_ir::FieldDef) -> String {
+fn cpp_pinned_init(f: &cddlc_ir::FieldDef, json: bool) -> String {
     if !f.occurrence.is_required() || !matches!(f.ty, TypeRef::Primitive(_)) {
         return "{}".into();
+    }
+    // An `any` is the `null` item by default: an empty one isn't an item
+    // (JSON's `nlohmann::json` is null already).
+    if !json && matches!(f.ty, TypeRef::Primitive(Primitive::Any)) {
+        return CPP_NULL_ITEM.into();
     }
     f.constraints
         .iter()
@@ -2668,10 +2706,12 @@ fn emit_cpp_type_test(
         TypeDef::Map(m) if matches!(m.key_ty, TypeRef::Primitive(Primitive::Tstr)) => {
             w.line(&format!("{type_name} original{{}};"));
             // An `any` value is an item: `null`, as an empty one writes nothing.
-            let val = if matches!(m.val_ty, TypeRef::Primitive(Primitive::Any)) {
-                "std::string_view(\"\\xf6\", 1)"
-            } else {
-                "{}"
+            let val = match &m.val_ty {
+                TypeRef::Primitive(Primitive::Any) => "std::string_view(\"\\xf6\", 1)".to_owned(),
+                // A named value fills its required boxed members
+                // (dgtlrift/cddlc#156; RFC 8927's `mapping`).
+                TypeRef::Named(n) => cpp_filled(n, module),
+                _ => "{}".to_owned(),
             };
             if is_heap(_opts) {
                 w.line(&format!(
@@ -2962,7 +3002,7 @@ fn emit_cpp_json_type_decl(
                 } else {
                     cpp_json_field_type_with_occ(&f.ty, &f.occurrence, opts)
                 };
-                w.line(&format!("{ty} {fname}{};", cpp_pinned_init(f)));
+                w.line(&format!("{ty} {fname}{};", cpp_pinned_init(f, true)));
             }
             // The map's other entries (dgtlrift/cddlc#82).
             if let Some(r) = &s.rest {

@@ -35,6 +35,15 @@ impl Backend for CSharpBackend {
         let renamed =
             cddlc_codegen::rename_types(module, &cddlc_codegen::csharp_reserved_renames(module));
         let module = &renamed;
+        // The named types whose value may be JSON null.
+        NULLABLE_TYPES.with(|n| {
+            *n.borrow_mut() = module
+                .types
+                .keys()
+                .filter(|k| accepts_null(k, module))
+                .map(|k| k.to_string())
+                .collect()
+        });
         // The variants that hold their enum again (dgtlrift/cddlc#224).
         RECURSIVE_VARIANTS.with(|r| {
             *r.borrow_mut() = module
@@ -56,6 +65,7 @@ impl Backend for CSharpBackend {
         let fmt_tag = if opts.is_json() { "json" } else { "cbor" };
         let crate_dir = format!("{name}-{fmt_tag}");
         let ns = to_pascal_case(name);
+        CS_NS.with(|n| *n.borrow_mut() = ns.clone());
 
         Ok(CodegenOutput {
             files: vec![
@@ -1286,6 +1296,12 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
     w.line("{");
     w.indent();
 
+    // A tagged enum's variants write its tag first, as decoding reads it
+    // (`#6.54(ipv6-address / ...)`, RFC 9164).
+    let tag_write = e
+        .tagged
+        .map(|t| format!("writer.WriteTag((CborTag){}); ", t.0))
+        .unwrap_or_default();
     // Sealed subclasses: a literal variant is a singleton that writes its
     // literal; any other holds a value of its type.
     for v in &e.variants {
@@ -1300,7 +1316,7 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
                     unreachable!()
                 };
                 w.line(&format!(
-                    "public override void Encode(CborWriter writer) => {};",
+                    "public override void Encode(CborWriter writer) {{ {tag_write}{}; }}",
                     cs_encode_call(p, &lit, opts)
                 ));
             }
@@ -1311,6 +1327,9 @@ fn emit_enum(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOptions)
                 w.line("public override void Encode(CborWriter writer)");
                 w.line("{");
                 w.indent();
+                if !tag_write.is_empty() {
+                    w.line(tag_write.trim_end());
+                }
                 emit_cs_encode_typeref(w, &v.ty, "Value", opts);
                 w.dedent();
                 w.line("}");
@@ -1388,6 +1407,40 @@ fn qualified(expr: String, ty: &TypeRef, ns: &str) -> String {
         return format!("new global::{ns}.{t}({rest}");
     }
     expr
+}
+
+// The generated namespace, set for each `generate`.
+thread_local! {
+    static CS_NS: std::cell::RefCell<String> = Default::default();
+}
+
+// The named types a JSON null is a value of (`sign_info_req = null`,
+// RFC 9594), set for each `generate`.
+thread_local! {
+    static NULLABLE_TYPES: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+}
+
+/// Whether `name`'s values include null: an alias of `null` (through
+/// aliases), or an enum with a `nil` variant.
+fn accepts_null(name: &str, module: &IrModule) -> bool {
+    let mut n = name;
+    for _ in 0..16 {
+        match module.get(n) {
+            Some(TypeDef::Alias(a)) => match &a.ty {
+                TypeRef::Primitive(Primitive::Null) => return true,
+                TypeRef::Named(next) => n = next.as_str(),
+                _ => return false,
+            },
+            Some(TypeDef::Enum(e)) => {
+                return e
+                    .variants
+                    .iter()
+                    .any(|v| matches!(v.ty, TypeRef::Primitive(Primitive::Null)))
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 // The (enum, variant) pairs whose variant holds the enum again, set for each
@@ -1513,7 +1566,7 @@ fn emit_enum_json(w: &mut IndentWriter, e: &EnumDef, ns: &str, opts: &CodegenOpt
             )),
             // A named variant isn't JSON null, which System.Text.Json reads as
             // a null object rather than failing (dgtlrift/cddlc#224).
-            None if matches!(v.ty, TypeRef::Named(_)) => w.line(&format!(
+            None if matches!(&v.ty, TypeRef::Named(n) if !NULLABLE_TYPES.with(|t| t.borrow().contains(n.as_str()))) => w.line(&format!(
                 "j => j.ValueKind == JsonValueKind.Null ? throw new JsonException(\"null\") : new {vname}({}){sep}",
                 qualified(cs_json_from_element(&v.ty, "j", opts), &v.ty, ns)
             )),
@@ -2606,7 +2659,13 @@ fn cs_decode_expr(ty: &TypeRef, opts: &CodegenOptions) -> String {
 fn cs_decode_expr_from(ty: &TypeRef, reader: &str, opts: &CodegenOptions) -> String {
     match ty {
         TypeRef::Primitive(p) => cs_decode_call(p, reader),
-        TypeRef::Named(n) => format!("{}.Decode({reader})", to_pascal_case(n)),
+        // Qualified: a member may have the type's name (`Bundle`'s
+        // `ExtensionBlock`, RFC 9171), and would hide it inside the class.
+        TypeRef::Named(n) => format!(
+            "global::{}.{}.Decode({reader})",
+            CS_NS.with(|ns| ns.borrow().clone()),
+            to_pascal_case(n)
+        ),
         TypeRef::Tagged(tag, inner) => {
             let r = format!("{reader}1");
             format!(
