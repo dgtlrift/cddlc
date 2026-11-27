@@ -331,6 +331,11 @@ fn emit_struct_decl(w: &mut IndentWriter, s: &StructDef, module: &IrModule, opts
         if matches!(f.occurrence, Occurrence::Optional) {
             w.line(&format!("bool {fname}_present;"));
         }
+        // A named type or `null`, held by value: whether it's null
+        // (dgtlrift/cddlc#224).
+        if named_or_null(&f.ty).is_some() && !indirect(&s.name, &f.ty, module) {
+            w.line(&format!("bool {fname}_null;"));
+        }
     }
     // The map's other entries, up to their capacity (dgtlrift/cddlc#82).
     if let Some(r) = &s.rest {
@@ -589,7 +594,9 @@ fn named_of(ty: &TypeRef) -> Option<&str> {
     match ty {
         TypeRef::Named(n) => Some(n.as_str()),
         TypeRef::Tagged(_, inner) => named_of(inner),
-        TypeRef::Choice(cs) if prim_choice_c(cs).is_none() => cs.first().and_then(named_of),
+        // A choice's first named alternative (`null / x` is held as `x`;
+        // dgtlrift/cddlc#224).
+        TypeRef::Choice(cs) if prim_choice_c(cs).is_none() => cs.iter().find_map(named_of),
         _ => None,
     }
 }
@@ -616,6 +623,50 @@ fn ptr_type(ty: &TypeRef, module: &IrModule) -> String {
         .map(|n| resolve_named(n, module))
         .unwrap_or("void");
     format!("{}_t", to_snake_case(n))
+}
+
+/// Fills the test target `var`, a value of `ty`, that a pointer member points
+/// at (dgtlrift/cddlc#224): an enum takes a variant that doesn't nest, and a
+/// struct's required pointer members point at targets of their own, filled
+/// the same way, to a few levels.
+fn emit_c_fill_target(
+    w: &mut IndentWriter,
+    var: &str,
+    ty: &TypeRef,
+    module: &IrModule,
+    depth: usize,
+) {
+    let Some(n) = named_of(ty).map(|n| resolve_named(n, module)) else {
+        return;
+    };
+    match module.get(n) {
+        Some(TypeDef::Enum(e)) => {
+            if let Some(v) = e.variants.iter().find(|v| named_of(&v.ty).is_none()) {
+                let vconst = format!(
+                    "{}_{}",
+                    to_screaming_snake(&e.name),
+                    to_screaming_snake(&v.name)
+                );
+                w.line(&format!("{var}.tag = {vconst};"));
+            }
+        }
+        Some(TypeDef::Struct(s)) if depth < 4 => {
+            for f in s.fields.iter().filter(|f| f.occurrence.is_required()) {
+                if !indirect(&s.name, &f.ty, module) || named_or_null(&f.ty).is_some() {
+                    continue;
+                }
+                let target = format!(
+                    "{}_{}",
+                    var.replace(['.', '>', '-'], "_"),
+                    to_snake_case(&f.name)
+                );
+                w.line(&format!("static {} {target};", ptr_type(&f.ty, module)));
+                emit_c_fill_target(w, &target, &f.ty, module, depth + 1);
+                w.line(&format!("{var}.{} = &{target};", to_snake_case(&f.name)));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The types something points at: declared ahead, so a pointer to one comes
@@ -888,6 +939,65 @@ fn emit_release_fn(w: &mut IndentWriter, def: &TypeDef, module: &IrModule, pfx: 
     w.blank();
 }
 
+/// The other alternative of a choice of one type and `null`.
+fn or_null(cs: &[TypeRef]) -> Option<&TypeRef> {
+    let is_null = |t: &TypeRef| matches!(t, TypeRef::Primitive(Primitive::Null));
+    match cs {
+        [a, b] if is_null(b) && !is_null(a) => Some(a),
+        [a, b] if is_null(a) && !is_null(b) => Some(b),
+        _ => None,
+    }
+}
+
+/// A member's named type, when its type is a choice of a named type and
+/// `null` (`children: info-list / null`; dgtlrift/cddlc#224): a pointer
+/// member is NULL when null; any other holds a `<member>_null` flag.
+fn named_or_null(ty: &TypeRef) -> Option<&TypeRef> {
+    match ty {
+        TypeRef::Choice(cs) => or_null(cs).filter(|t| matches!(t, TypeRef::Named(_))),
+        _ => None,
+    }
+}
+
+/// Decodes a required member whose type is a named type or `null`.
+#[allow(clippy::too_many_arguments)]
+fn emit_c_decode_or_null(
+    w: &mut IndentWriter,
+    s: &StructDef,
+    f: &cddlc_ir::FieldDef,
+    t: &TypeRef,
+    module: &IrModule,
+    pfx: &str,
+    pfx_upper: &str,
+    dec: &str,
+    opts: &CodegenOptions,
+) {
+    let fname = to_snake_case(&f.name);
+    let null = if indirect(&s.name, &f.ty, module) {
+        format!("out->{fname} = NULL;")
+    } else {
+        format!("out->{fname}_null = true;")
+    };
+    w.line(&format!(
+        "if (nanocbor_get_null({dec}) >= 0) {{ {null} }} else {{"
+    ));
+    w.indent();
+    let dest = c_decode_dest(w, s, f, module, pfx, pfx_upper);
+    emit_c_decode_field(
+        w,
+        t,
+        &dest,
+        &f.constraints,
+        &fname,
+        pfx,
+        pfx_upper,
+        dec,
+        opts,
+    );
+    w.dedent();
+    w.line("}");
+}
+
 /// Where a member decodes to: the member, or for a pointer member, memory
 /// from the caller's `alloc`, which it then points at (dgtlrift/cddlc#156).
 fn c_decode_dest(
@@ -1023,8 +1133,12 @@ fn emit_encode_fn(
                 } else {
                     format!("val->{fname}")
                 };
-                // A required pointer member must point at a value.
-                if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
+                // A required pointer member must point at a value, unless
+                // it may be null (dgtlrift/cddlc#224).
+                if indirect(&s.name, &f.ty, module)
+                    && f.occurrence.is_required()
+                    && named_or_null(&f.ty).is_none()
+                {
                     w.line(&format!(
                         "if (!val->{fname}) return -1; /* '{}' is required */",
                         f.name
@@ -1058,7 +1172,26 @@ fn emit_encode_fn(
                     if !record {
                         w.line(&c_key_write(&f.key));
                     }
-                    emit_c_encode_field(w, &f.ty, &fexpr, &f.occurrence, mod_name, opts);
+                    match named_or_null(&f.ty) {
+                        // null, or the named type (dgtlrift/cddlc#224).
+                        Some(t) => {
+                            let is_null = if indirect(&s.name, &f.ty, module) {
+                                format!("!val->{fname}")
+                            } else {
+                                format!("val->{fname}_null")
+                            };
+                            w.line(&format!(
+                                "if ({is_null}) {{ nanocbor_fmt_null(enc); }} else {{"
+                            ));
+                            w.indent();
+                            emit_c_encode_field(w, t, &fexpr, &f.occurrence, mod_name, opts);
+                            w.dedent();
+                            w.line("}");
+                        }
+                        None => {
+                            emit_c_encode_field(w, &f.ty, &fexpr, &f.occurrence, mod_name, opts)
+                        }
+                    }
                 }
             }
             if let Some(r) = &s.rest {
@@ -1134,7 +1267,8 @@ fn emit_encode_fn(
                         // A pointer alternative is encoded through it
                         // (dgtlrift/cddlc#156).
                         if indirect(&e.name, &v.ty, module) {
-                            w.line(&format!("{np}_{tn}_encode(enc, val->value.{vname});"));
+                            w.line(&format!("if (!val->value.{vname}) return -1;"));
+                            w.line(&format!("if ({np}_{tn}_encode(enc, val->value.{vname}) < 0) return -1;"));
                         } else {
                             w.line(&format!("{np}_{tn}_encode(enc, &val->value.{vname});"));
                         }
@@ -1433,18 +1567,24 @@ fn emit_decode_fn(
                         w.line("return -1;");
                         w.dedent();
                         w.line("}");
-                        let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
-                        emit_c_decode_field(
-                            w,
-                            &f.ty,
-                            &dest,
-                            &f.constraints,
-                            &fname,
-                            &pfx,
-                            &pfx_upper,
-                            "&arr",
-                            opts,
-                        );
+                        if let Some(t) = named_or_null(&f.ty) {
+                            emit_c_decode_or_null(
+                                w, s, f, t, module, &pfx, &pfx_upper, "&arr", opts,
+                            );
+                        } else {
+                            let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
+                            emit_c_decode_field(
+                                w,
+                                &f.ty,
+                                &dest,
+                                &f.constraints,
+                                &fname,
+                                &pfx,
+                                &pfx_upper,
+                                "&arr",
+                                opts,
+                            );
+                        }
                     }
                 }
                 w.line("if (!nanocbor_at_end(&arr)) return -1; /* too many items */");
@@ -1515,18 +1655,25 @@ fn emit_decode_fn(
                 };
                 w.line(&format!("if ({cond}) {{"));
                 w.indent();
-                let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
-                emit_c_decode_field(
-                    w,
-                    &f.ty,
-                    &dest,
-                    &f.constraints,
-                    &fname,
-                    &pfx,
-                    &pfx_upper,
-                    "&map",
-                    opts,
-                );
+                match named_or_null(&f.ty) {
+                    Some(t) if f.occurrence.is_required() => {
+                        emit_c_decode_or_null(w, s, f, t, module, &pfx, &pfx_upper, "&map", opts)
+                    }
+                    _ => {
+                        let dest = c_decode_dest(w, s, f, module, &pfx, &pfx_upper);
+                        emit_c_decode_field(
+                            w,
+                            &f.ty,
+                            &dest,
+                            &f.constraints,
+                            &fname,
+                            &pfx,
+                            &pfx_upper,
+                            "&map",
+                            opts,
+                        );
+                    }
+                }
                 if matches!(f.occurrence, Occurrence::Optional) {
                     w.line(&format!("out->{fname}_present = true;"));
                 }
@@ -2262,6 +2409,7 @@ fn emit_c_struct_test(
                 "static {} _{fname}_target;",
                 ptr_type(&f.ty, module)
             ));
+            emit_c_fill_target(w, &format!("_{fname}_target"), &f.ty, module, 0);
             w.line(&format!("original.{fname} = &_{fname}_target;"));
             continue;
         }
@@ -2543,6 +2691,7 @@ fn emit_c_enum_test(
         // (dgtlrift/cddlc#156).
         if indirect(&e.name, &v.ty, module) {
             w.line(&format!("static {} _target;", ptr_type(&v.ty, module)));
+            emit_c_fill_target(w, "_target", &v.ty, module, 0);
             w.line(&format!(
                 "original.value.{} = &_target;",
                 to_snake_case(&v.name)
@@ -2798,6 +2947,11 @@ fn emit_struct_decl_json(
         }
         if matches!(f.occurrence, Occurrence::Optional) {
             w.line(&format!("bool {fname}_present;"));
+        }
+        // A named type or `null`, held by value: whether it's null
+        // (dgtlrift/cddlc#224).
+        if named_or_null(&f.ty).is_some() && !indirect(&s.name, &f.ty, module) {
+            w.line(&format!("bool {fname}_null;"));
         }
     }
     // The map's other entries (dgtlrift/cddlc#82).
@@ -3229,10 +3383,13 @@ fn emit_json_struct_impl(
         let fname = to_snake_case(&f.name);
         let key_text = cddlc_codegen::field_key_json(&f.key);
         let key = key_text.as_str();
-        let access = json_access(&s.name, f, module);
-        let val_expr = json_value_expr(&f.ty, &access, mod_name);
-        // A required pointer member must point at a value (dgtlrift/cddlc#156).
-        if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
+        let val_expr = json_member_value(&s.name, f, module, mod_name);
+        // A required pointer member must point at a value (dgtlrift/cddlc#156),
+        // unless it may be null (dgtlrift/cddlc#224).
+        if indirect(&s.name, &f.ty, module)
+            && f.occurrence.is_required()
+            && named_or_null(&f.ty).is_none()
+        {
             w.line(&format!(
                 "if (!obj->{fname}) {{ cJSON_Delete(j); return NULL; }}"
             ));
@@ -3391,9 +3548,13 @@ fn emit_json_record_impl(
     w.line("if (!j) return NULL;");
     for f in &s.fields {
         let fname = to_snake_case(&f.name);
-        let val_expr = json_value_expr(&f.ty, &json_access(&s.name, f, module), mod_name);
-        // A required pointer member must point at a value (dgtlrift/cddlc#156).
-        if indirect(&s.name, &f.ty, module) && f.occurrence.is_required() {
+        let val_expr = json_member_value(&s.name, f, module, mod_name);
+        // A required pointer member must point at a value (dgtlrift/cddlc#156),
+        // unless it may be null (dgtlrift/cddlc#224).
+        if indirect(&s.name, &f.ty, module)
+            && f.occurrence.is_required()
+            && named_or_null(&f.ty).is_none()
+        {
             w.line(&format!(
                 "if (!obj->{fname}) {{ cJSON_Delete(j); return NULL; }}"
             ));
@@ -3567,6 +3728,32 @@ fn emit_json_record_repeated(
 
 /// A member as `to_json` reads it: through its pointer for a pointer member
 /// (dgtlrift/cddlc#156).
+/// A member's JSON value: a named type or `null` is null when its pointer is
+/// NULL or its flag says so (dgtlrift/cddlc#224).
+fn json_member_value(
+    owner: &str,
+    f: &cddlc_ir::FieldDef,
+    module: &IrModule,
+    mod_name: &str,
+) -> String {
+    let access = json_access(owner, f, module);
+    match named_or_null(&f.ty) {
+        Some(t) => {
+            let fname = to_snake_case(&f.name);
+            let is_null = if indirect(owner, &f.ty, module) {
+                format!("!obj->{fname}")
+            } else {
+                format!("obj->{fname}_null")
+            };
+            format!(
+                "({is_null} ? cJSON_CreateNull() : {})",
+                json_value_expr(t, &access, mod_name)
+            )
+        }
+        None => json_value_expr(&f.ty, &access, mod_name),
+    }
+}
+
 fn json_access(owner: &str, f: &cddlc_ir::FieldDef, module: &IrModule) -> String {
     let fname = to_snake_case(&f.name);
     if indirect(owner, &f.ty, module) {
@@ -3589,6 +3776,31 @@ fn json_decode_member(
     opts: &CodegenOptions,
 ) {
     let fname = to_snake_case(&f.name);
+    // A named type or `null`: JSON null is NULL, or sets its flag
+    // (dgtlrift/cddlc#224).
+    if let Some(t) = named_or_null(&f.ty) {
+        let null = if indirect(owner, &f.ty, module) {
+            format!("out->{fname} = NULL;")
+        } else {
+            format!("out->{fname}_null = true;")
+        };
+        w.line(&format!("if (cJSON_IsNull({src})) {{ {null} }} else {{"));
+        w.indent();
+        if indirect(owner, &f.ty, module) {
+            let n = named_of(t).unwrap_or_default();
+            w.line(&format!("out->{fname} = calloc(1, sizeof *out->{fname});"));
+            w.line(&format!("if (!out->{fname}) return false;"));
+            w.line(&format!(
+                "if (!{mod_name}_{}_from_json({src}, out->{fname})) return false;",
+                to_snake_case(n)
+            ));
+        } else {
+            json_decode_field(w, t, &fname, src, mod_name, opts);
+        }
+        w.dedent();
+        w.line("}");
+        return;
+    }
     if !indirect(owner, &f.ty, module) {
         json_decode_field(w, &f.ty, &fname, src, mod_name, opts);
         return;
@@ -4205,6 +4417,7 @@ fn emit_json_type_test(
                     "static {} _{fname}_target;",
                     ptr_type(&f.ty, module)
                 ));
+                emit_c_fill_target(w, &format!("_{fname}_target"), &f.ty, module, 0);
                 w.line(&format!("original.{fname} = &_{fname}_target;"));
             }
             // A repeated member gets as many (zeroed) items as it needs
@@ -4245,6 +4458,7 @@ fn emit_json_type_test(
                 .filter(|v| indirect(&e.name, &v.ty, module))
             {
                 w.line(&format!("static {} _target;", ptr_type(&v.ty, module)));
+                emit_c_fill_target(w, "_target", &v.ty, module, 0);
                 w.line(&format!(
                     "original.value.{} = &_target;",
                     to_snake_case(&v.name)
