@@ -605,6 +605,8 @@ and the test fails when one starts working, so the list stays current.
 - **`any`** is held as a byte string in most backends, so a value that's any other data item
   (COSE's header values, `values = any`) can't be decoded yet (#178). Rust holds the encoded
   item: an `AnyItem` whose bytes encoding writes back unchanged, or a `serde_json::Value` in JSON.
+  C holds a pointer and length into the input (`cbor_any_t`), or the value's JSON text
+  (`json_any_t`).
 
 ### Validator gaps (`cddlc validate`)
 

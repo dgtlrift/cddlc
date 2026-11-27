@@ -76,6 +76,20 @@ rec_tree_release(&t, &cb, NULL);
 A repeated member, or a map's other entries, that holds its own type again isn't supported yet:
 C holds those as arrays in place.
 
+## `any`
+
+A member of type `any` is any data item (dgtlrift/cddlc#178):
+
+- **CBOR:** a `cbor_any_t`, a pointer and length into the decode buffer that
+  cover the whole item's encoding (`nanocbor_get_subcbor`). Encoding writes
+  those bytes back unchanged, and a `nanocbor_value_t` over them decodes the
+  item further. Like text and bytes, it points into the input, so the buffer
+  must outlive the value.
+- **JSON:** a `json_any_t`, the value's text (cJSON's, unformatted; up to 512
+  bytes, or decoding fails). Encoding parses it back; empty is `null`.
+
+A choice's `any` alternative takes any item the others don't.
+
 ## What is generated per IR type
 
 ### Structs
