@@ -937,6 +937,23 @@ pub fn reserved_renames(
     case: fn(&str) -> String,
 ) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
     let mut out = std::collections::HashMap::new();
+    // A socket (`$eid`) beside a rule of its name (`eid`): both would be
+    // `Eid`, so the socket is `<name>-socket` (RFC 9171's `eid` and `$eid`).
+    for name in module.types.keys() {
+        let bare = name.trim_start_matches('$');
+        if bare.len() < name.len()
+            && module
+                .types
+                .keys()
+                .any(|k| k.as_str() != name.as_str() && case(k) == case(bare))
+        {
+            let mut to: smol_str::SmolStr = format!("{bare}-socket").into();
+            while module.types.contains_key(&to) {
+                to = format!("{to}-type").into();
+            }
+            out.insert(name.clone(), to);
+        }
+    }
     for name in module.types.keys() {
         if reserved.contains(&case(name).as_str()) {
             let mut to: smol_str::SmolStr = format!("{}-{name}", module.name).into();
@@ -1038,6 +1055,24 @@ const RESERVED_CSHARP_TYPES: &[&str] = &[
     "ToJson",
     "Value",
 ];
+
+/// Names a C++ rule's type can't take: the runtime's, in the same namespace
+/// (WebDriver BiDi's `ErrorCode`).
+#[rustfmt::skip]
+const RESERVED_CPP_TYPES: &[&str] = &[
+    "Box",
+    "Callbacks",
+    "ErrorCode",
+    "FieldError",
+];
+
+/// The rules to rename so their C++ types don't clash with one in
+/// [`RESERVED_CPP_TYPES`]: each to `<module>-<rule>`.
+pub fn cpp_reserved_renames(
+    module: &cddlc_ir::IrModule,
+) -> std::collections::HashMap<smol_str::SmolStr, smol_str::SmolStr> {
+    reserved_renames(module, RESERVED_CPP_TYPES, crate::to_pascal_case)
+}
 
 /// The rules to rename so their C# classes don't clash with one in
 /// [`RESERVED_CSHARP_TYPES`]: each to `<module>-<rule>`.
@@ -1258,4 +1293,127 @@ pub fn inline_decl_order(module: &cddlc_ir::IrModule) -> Vec<smol_str::SmolStr> 
         visit(n, module, &mut done, &mut busy, &mut out);
     }
     out
+}
+
+/// C++'s keywords and alternative tokens, which a member or function can't be
+/// named.
+const CPP_KEYWORDS: &[&str] = &[
+    "alignas",
+    "alignof",
+    "and",
+    "and_eq",
+    "asm",
+    "auto",
+    "bitand",
+    "bitor",
+    "bool",
+    "break",
+    "case",
+    "catch",
+    "char",
+    "char8_t",
+    "char16_t",
+    "char32_t",
+    "class",
+    "compl",
+    "concept",
+    "const",
+    "consteval",
+    "constexpr",
+    "constinit",
+    "const_cast",
+    "continue",
+    "co_await",
+    "co_return",
+    "co_yield",
+    "decltype",
+    "default",
+    "delete",
+    "do",
+    "double",
+    "dynamic_cast",
+    "else",
+    "enum",
+    "explicit",
+    "export",
+    "extern",
+    "false",
+    "float",
+    "for",
+    "friend",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "mutable",
+    "namespace",
+    "new",
+    "noexcept",
+    "not",
+    "not_eq",
+    "nullptr",
+    "operator",
+    "or",
+    "or_eq",
+    "private",
+    "protected",
+    "public",
+    "register",
+    "reinterpret_cast",
+    "requires",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "static_assert",
+    "static_cast",
+    "struct",
+    "switch",
+    "template",
+    "this",
+    "thread_local",
+    "throw",
+    "true",
+    "try",
+    "typedef",
+    "typeid",
+    "typename",
+    "union",
+    "unsigned",
+    "using",
+    "virtual",
+    "void",
+    "volatile",
+    "wchar_t",
+    "while",
+    "xor",
+    "xor_eq",
+];
+
+/// A C++ identifier for a CDDL name: snake_case, with a trailing `_` when
+/// that's a keyword (`protected` → `protected_`, `this` → `this_`).
+pub fn cpp_ident(name: &str) -> String {
+    let s = to_snake_case(name);
+    if CPP_KEYWORDS.contains(&s.as_str()) {
+        format!("{s}_")
+    } else {
+        s
+    }
+}
+
+/// A choice variant's class name: its PascalCase name, with a `_` when an
+/// enum's own member has it (`action: "default" / "cancel"`, WebDriver BiDi,
+/// would be a class `Default` beside the static `Default`).
+pub fn csharp_variant_name(name: &str) -> String {
+    let p = crate::to_pascal_case(name);
+    if matches!(
+        p.as_str(),
+        "Default" | "Encode" | "Decode" | "ToJson" | "FromJson" | "Instance" | "Value"
+    ) {
+        format!("{p}_")
+    } else {
+        p
+    }
 }
