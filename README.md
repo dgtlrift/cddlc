@@ -376,7 +376,7 @@ how). A choice's `any` alternative takes any item the others don't.
 | CBOR tags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Optional fields | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Roundtrip tests | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Inline constraint validation | ✓ | ✓ | ✓ | partial | partial | partial | — | ✓ | ✓ | ✓ |
+| Inline constraint validation | ✓ | ✓ | ✓ | ✓ | partial | partial | — | ✓ | ✓ | ✓ |
 | dCBOR deterministic encoding | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | `#![no_std]` support | ✓ | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | Interop test harness | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
@@ -394,7 +394,7 @@ when a member is already called `extra`), holding the other entries: a map from 
 value. Decoding puts every key that no named member has there; encoding writes them after the
 named members. Their keys must differ from the named members' keys: the Python, TypeScript,
 Go, Java, Lua and C# encoders (and C++ JSON) reject one that doesn't; the others write it
-as is. In C# JSON the values are `JsonElement`s (the serializer's extension data).
+as is.
 
 The other entries' keys can also be integers, or a choice of integers and text, as in COSE's
 header maps (`header_map = { Generic_Headers, * label => values }`, `label = int / tstr`,

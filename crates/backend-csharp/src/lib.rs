@@ -239,7 +239,14 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
     if !record && opts.is_json() && s.rest.is_none() {
         w.line("[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]");
     }
-    w.line(&format!("public sealed class {type_name}"));
+    // JSON's other entries convert around the serializer (dgtlrift/cddlc#82).
+    if opts.is_json() && s.rest.is_some() {
+        w.line(&format!(
+            "public sealed class {type_name} : IJsonOnSerializing, IJsonOnDeserialized"
+        ));
+    } else {
+        w.line(&format!("public sealed class {type_name}"));
+    }
     w.line("{");
     w.indent();
 
@@ -291,16 +298,56 @@ fn emit_struct(w: &mut IndentWriter, s: &StructDef, opts: &CodegenOptions) {
         };
         w.line(&format!("public {ty} {pname} {{ get; set; }}{init}"));
     }
-    // The map's other entries (dgtlrift/cddlc#82). In JSON they are the
-    // serializer's extension data, so their values are JSON elements.
+    // The map's other entries (dgtlrift/cddlc#82), typed as in CBOR. In JSON
+    // the serializer's extension data carries them as JSON elements, which a
+    // non-public property converts to and from the values' type.
     if let Some(r) = &s.rest {
         w.line("/// <summary>The map's other entries.</summary>");
         let pname = to_pascal_case(&r.name);
         if opts.is_json() {
-            w.line("[JsonExtensionData]");
+            let vt = cs_typeref(&r.val_ty, opts);
+            w.line("[JsonIgnore]");
             w.line(&format!(
-                "public Dictionary<string, JsonElement> {pname} {{ get; set; }} = new();"
+                "public Dictionary<string, {vt}> {pname} {{ get; set; }} = new();"
             ));
+            w.line("[JsonExtensionData]");
+            w.line("[JsonInclude]");
+            w.line(&format!(
+                "internal Dictionary<string, JsonElement>? {pname}Json {{ get; set; }}"
+            ));
+            w.line("void IJsonOnSerializing.OnSerializing()");
+            w.line("{");
+            w.indent();
+            // A named member's key isn't one of the other entries: it would be
+            // written twice.
+            let named: Vec<String> = s
+                .fields
+                .iter()
+                .map(|f| format!("{:?}", cddlc_codegen::field_key_json(&f.key)))
+                .collect();
+            if !named.is_empty() {
+                w.line(&format!("foreach (var k in {pname}.Keys)"));
+                w.line(&format!(
+                    "    if (k is {}) throw new JsonException($\"{type_name}: other entry '{{k}}' is a named member's key\");",
+                    named.join(" or ")
+                ));
+            }
+            w.line(&format!(
+                "{pname}Json = {pname}.ToDictionary(kv => kv.Key, kv => JsonDocument.Parse({}).RootElement.Clone());",
+                cs_json_to_bytes(&r.val_ty, "kv.Value", opts)
+            ));
+            w.dedent();
+            w.line("}");
+            w.line("void IJsonOnDeserialized.OnDeserialized()");
+            w.line("{");
+            w.indent();
+            w.line(&format!(
+                "{pname} = ({pname}Json ?? new()).ToDictionary(kv => kv.Key, kv => {});",
+                cs_json_from_element(&r.val_ty, "kv.Value", opts)
+            ));
+            w.line(&format!("{pname}Json = null;"));
+            w.dedent();
+            w.line("}");
         } else {
             w.line(&format!(
                 "public Dictionary<{}, {}> {pname} {{ get; set; }} = new();",
